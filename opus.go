@@ -35,6 +35,6 @@ func main() {
 			panic(err)
 		}
 
-		fmt.Printf("Mode(%d) isStereo(%t) framesCount(%d)\n", config.mode(), isStereo, len(frames))
+		fmt.Printf("Mode(%s) bandwidth(%s) frameDuration(%s) isStereo(%t) framesCount(%d)\n", config.mode(), config.bandwidth(), config.frameDuration(), isStereo, len(frames))
 	}
 }

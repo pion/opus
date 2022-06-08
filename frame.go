@@ -8,6 +8,7 @@ func parsePacket(in []byte) (c configuration, isStereo bool, frames [][]byte, er
 
 	tocHeader := tableOfContentsHeader(in[0])
 	c = tocHeader.configuration()
+	isStereo = tocHeader.isStereo()
 
 	return
 }
