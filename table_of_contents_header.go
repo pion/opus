@@ -1,4 +1,4 @@
-package main
+package opus
 
 type (
 	// The table-of-contents (TOC) header that signals which of the
@@ -14,7 +14,7 @@ type (
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-3.1
 	tableOfContentsHeader byte
 
-	// The configuration numbers in each range (e.g., 0...3 for NB SILK-
+	// Configuration numbers in each range (e.g., 0...3 for NB SILK-
 	// only) correspond to the various choices of frame size, in the same
 	// order.  For example, configuration 0 has a 10 ms frame size and
 	// configuration 3 has a 60 ms frame size.
@@ -42,7 +42,7 @@ type (
 	// +-----------------------+-----------+-----------+-------------------+
 	//
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-3.1
-	configuration byte
+	Configuration byte
 
 	// As described, the LP (SILK) layer and MDCT (CELT) layer can be
 	// combined in three possible operating modes:
@@ -71,7 +71,7 @@ type (
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-2.1.4
 	frameDuration byte
 
-	// The Opus codec scales from 6 kbit/s narrowband mono speech to
+	// The Bandwidth the Opus codec scales from 6 kbit/s narrowband mono speech to
 	// 510 kbit/s fullband stereo music, with algorithmic delays ranging
 	// from 5 ms to 65.2 ms.  At any given time, either the LP layer, the
 	// MDCT layer, or both, may be active.  It can seamlessly switch between
@@ -79,7 +79,6 @@ type (
 	// flexibility to adapt to varying content and network conditions
 	// without renegotiating the current session.  The codec allows input
 	// and output of various audio bandwidths, defined as follows:
-
 	// +----------------------+-----------------+-------------------------+
 	// | Abbreviation         | Audio Bandwidth | Sample Rate (Effective) |
 	// +----------------------+-----------------+-------------------------+
@@ -95,19 +94,40 @@ type (
 	// +----------------------+-----------------+-------------------------+
 	//
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-2
-	bandwidth byte
+	Bandwidth byte
+
+	// The remaining two bits of the TOC byte, labeled "c", code the number
+	// of frames per packet (codes 0 to 3) as follows:
+
+	// o  0: 1 frame in the packet
+
+	// o  1: 2 frames in the packet, each with equal compressed size
+
+	// o  2: 2 frames in the packet, with different compressed sizes
+
+	// o  3: an arbitrary number of frames in the packet
+	//
+	// https://datatracker.ietf.org/doc/html/rfc6716#section-3.1
+	frameCode byte
 )
 
-func (t tableOfContentsHeader) configuration() configuration {
-	return configuration(t >> 3)
+func (t tableOfContentsHeader) configuration() Configuration {
+	return Configuration(t >> 3)
 }
 
 func (t tableOfContentsHeader) isStereo() bool {
 	return (t & 0b00000100) != 0
 }
 
-func (t tableOfContentsHeader) numberOfFrames() byte {
-	return 0
+const (
+	frameCodeOneFrame           frameCode = 0
+	frameCodeTwoEqualFrames               = 1
+	frameCodeTwoDifferentFrames           = 2
+	frameCodeArbitraryFrames              = 3
+)
+
+func (t tableOfContentsHeader) frameCode() frameCode {
+	return frameCode(t & 0b00000011)
 }
 
 const (
@@ -128,7 +148,7 @@ func (c configurationMode) String() string {
 	return "Invalid"
 }
 
-func (c configuration) mode() configurationMode {
+func (c Configuration) mode() configurationMode {
 	switch {
 	case c >= 0 && c <= 11:
 		return configurationModeSilkOnly
@@ -169,7 +189,7 @@ func (f frameDuration) String() string {
 	return "Invalid"
 }
 
-func (c configuration) frameDuration() frameDuration {
+func (c Configuration) frameDuration() frameDuration {
 	switch c {
 	case 16, 20, 24, 28:
 		return frameDuration2500us
@@ -188,51 +208,75 @@ func (c configuration) frameDuration() frameDuration {
 	return 0
 }
 
+// Bandwidth constants
 const (
-	bandwidthNarrowband bandwidth = iota + 1
-	bandwidthMediumband
-	bandwidthWideband
-	bandwidthSuperwideband
-	bandwidthFullband
+	BandwidthNarrowband Bandwidth = iota + 1
+	BandwidthMediumband
+	BandwidthWideband
+	BandwidthSuperwideband
+	BandwidthFullband
 )
 
-func (c configuration) bandwidth() bandwidth {
+func (c Configuration) bandwidth() Bandwidth {
 	switch {
 	case c <= 3:
-		return bandwidthNarrowband
+		return BandwidthNarrowband
 	case c <= 7:
-		return bandwidthMediumband
+		return BandwidthMediumband
 	case c <= 11:
-		return bandwidthWideband
+		return BandwidthWideband
 	case c <= 13:
-		return bandwidthSuperwideband
+		return BandwidthSuperwideband
 	case c <= 15:
-		return bandwidthFullband
+		return BandwidthFullband
 	case c <= 19:
-		return bandwidthNarrowband
+		return BandwidthNarrowband
 	case c <= 23:
-		return bandwidthWideband
+		return BandwidthWideband
 	case c <= 27:
-		return bandwidthSuperwideband
+		return BandwidthSuperwideband
 	case c <= 31:
-		return bandwidthFullband
+		return BandwidthFullband
 	}
 
 	return 0
 }
 
-func (b bandwidth) String() string {
+func (b Bandwidth) String() string {
 	switch b {
-	case bandwidthNarrowband:
+	case BandwidthNarrowband:
 		return "Narrowband"
-	case bandwidthMediumband:
+	case BandwidthMediumband:
 		return "Mediumband"
-	case bandwidthWideband:
+	case BandwidthWideband:
 		return "Wideband"
-	case bandwidthSuperwideband:
+	case BandwidthSuperwideband:
 		return "Superwideband"
-	case bandwidthFullband:
+	case BandwidthFullband:
 		return "Fullband"
 	}
 	return "Invalid"
+}
+
+// The TOC byte is followed by a byte encoding the number of frames in
+// the packet in bits 2 to 7 (marked "M" in Figure 5), with bit 1 indicating
+// whether or not Opus padding is inserted (marked "p" in Figure 5), and bit 0
+// indicating VBR (marked "v" in Figure 5).  M MUST NOT be zero, and the audio
+// duration contained within a packet MUST NOT exceed 120 ms [R5].  This
+// limits the maximum frame count for any frame size to 48 (for 2.5 ms
+// frames), with lower limits for longer frame sizes.  Figure 5
+// illustrates the layout of the frame count byte.
+//
+//                          0
+//                          0 1 2 3 4 5 6 7
+//                         +-+-+-+-+-+-+-+-+
+//                         |v|p|     M     |
+//                         +-+-+-+-+-+-+-+-+
+//
+//                  Figure 5: The frame count byte
+func parseFrameCountByte(in byte) (isVBR bool, hasPadding bool, frameCount byte) {
+	isVBR = (in & 0b10000000) == 1
+	hasPadding = (in & 0b01000000) == 1
+	frameCount = byte(in & 0b00111111)
+	return
 }
