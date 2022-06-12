@@ -258,6 +258,23 @@ func (b Bandwidth) String() string {
 	return "Invalid"
 }
 
+// SampleRate returns the effective SampleRate for a given bandwidth
+func (b Bandwidth) SampleRate() int {
+	switch b {
+	case BandwidthNarrowband:
+		return 8000
+	case BandwidthMediumband:
+		return 12000
+	case BandwidthWideband:
+		return 16000
+	case BandwidthSuperwideband:
+		return 24000
+	case BandwidthFullband:
+		return 48000
+	}
+	return 0
+}
+
 // The TOC byte is followed by a byte encoding the number of frames in
 // the packet in bits 2 to 7 (marked "M" in Figure 5), with bit 1 indicating
 // whether or not Opus padding is inserted (marked "p" in Figure 5), and bit 0
