@@ -22,7 +22,7 @@ func (d *Decoder) Decode(in []byte) (bandwidth Bandwidth, isStereo bool, frames 
 		return 0, false, nil, fmt.Errorf("%w: %d", errUnsupportedFrameCode, tocHeader.frameCode())
 	}
 
-	if cfg.mode() != configurationModeCELTOnly {
+	if cfg.mode() != configurationModeSilkOnly {
 		return 0, false, nil, fmt.Errorf("%w: %d", errUnsupportedConfigurationMode, cfg.mode())
 	}
 

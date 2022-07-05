@@ -19,7 +19,7 @@ func main() {
 		panic(err)
 	}
 
-	file, err := os.Open(homeDir + "/opus/output.ogg")
+	file, err := os.Open(homeDir + "/opus/silk.ogg")
 	if err != nil {
 		panic(err)
 	}
