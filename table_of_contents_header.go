@@ -189,6 +189,25 @@ func (f frameDuration) String() string {
 	return "Invalid"
 }
 
+func (f frameDuration) nanoseconds() int {
+	switch f {
+	case frameDuration2500us:
+		return 2500
+	case frameDuration5ms:
+		return 5000000
+	case frameDuration10ms:
+		return 10000000
+	case frameDuration20ms:
+		return 20000000
+	case frameDuration40ms:
+		return 40000000
+	case frameDuration60ms:
+		return 60000000
+	}
+
+	return 0
+}
+
 func (c Configuration) frameDuration() frameDuration {
 	switch c {
 	case 16, 20, 24, 28:

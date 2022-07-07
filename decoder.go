@@ -1,9 +1,19 @@
 package opus
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/pion/opus/internal/silk"
+)
 
 // Decoder decodes the Opus bitstream into PCM
 type Decoder struct {
+	silkDecoder silk.Decoder
+}
+
+// NewDecoder creates a new Opus Decoder
+func NewDecoder() *Decoder {
+	return &Decoder{}
 }
 
 // Decode decodes the Opus bitstream into PCM
@@ -15,9 +25,10 @@ func (d *Decoder) Decode(in []byte) (bandwidth Bandwidth, isStereo bool, frames 
 	tocHeader := tableOfContentsHeader(in[0])
 	cfg := tocHeader.configuration()
 
+	var encodedFrames [][]byte
 	switch tocHeader.frameCode() {
 	case frameCodeOneFrame:
-		frames = append(frames, in[1:])
+		encodedFrames = append(encodedFrames, in[1:])
 	default:
 		return 0, false, nil, fmt.Errorf("%w: %d", errUnsupportedFrameCode, tocHeader.frameCode())
 	}
@@ -26,5 +37,14 @@ func (d *Decoder) Decode(in []byte) (bandwidth Bandwidth, isStereo bool, frames 
 		return 0, false, nil, fmt.Errorf("%w: %d", errUnsupportedConfigurationMode, cfg.mode())
 	}
 
-	return cfg.bandwidth(), tocHeader.isStereo(), nil, nil
+	for _, encodedFrame := range encodedFrames {
+		_, decoded, err := d.silkDecoder.Decode(encodedFrame, tocHeader.isStereo(), cfg.frameDuration().nanoseconds())
+		if err != nil {
+			return 0, false, nil, err
+		}
+
+		frames = append(frames, decoded)
+	}
+
+	return cfg.bandwidth(), tocHeader.isStereo(), frames, nil
 }
