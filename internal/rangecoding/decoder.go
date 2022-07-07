@@ -97,6 +97,57 @@ func (r *Decoder) Init(data []byte) {
 	r.normalize()
 }
 
+// DecodeSymbolWithICDF decodes a single symbol
+// with a table-based context of up to 8 bits.
+//
+// https://datatracker.ietf.org/doc/html/rfc6716#section-4.1.3.3
+func (r *Decoder) DecodeSymbolWithICDF(cumulativeDistributionTable []uint) uint32 {
+	var k, scale, total, symbol, low, high uint32
+
+	total = uint32(cumulativeDistributionTable[0])
+	cumulativeDistributionTable = cumulativeDistributionTable[1:]
+
+	scale = r.rangeSize / total
+	symbol = r.highAndCodedDifference/scale + 1
+	symbol = total - uint32(min(uint(symbol), uint(total)))
+
+	for k = 0; uint32(cumulativeDistributionTable[k]) <= symbol; k++ {
+	}
+
+	high = uint32(cumulativeDistributionTable[k])
+	if k != 0 {
+		low = uint32(cumulativeDistributionTable[k-1])
+	} else {
+		low = 0
+	}
+
+	r.update(scale, low, high, total)
+	return k
+}
+
+// DecodeSymbolLogP decodes a single binary symbol.
+// The context is described by a single parameter, logp, which
+// is the absolute value of the base-2 logarithm of the probability of a
+// "1".
+//
+// https://datatracker.ietf.org/doc/html/rfc6716#section-4.1.3.2
+func (r *Decoder) DecodeSymbolLogP(logp uint) uint32 {
+	k := uint32(0)
+	scale := r.rangeSize >> logp
+
+	if r.highAndCodedDifference >= scale {
+		r.highAndCodedDifference -= scale
+		r.rangeSize -= scale
+		k = 0
+	} else {
+		r.rangeSize = scale
+		k = 1
+	}
+	r.normalize()
+
+	return k
+}
+
 func (r *Decoder) getBit() uint32 {
 	index := r.bitsRead / 8
 	offset := r.bitsRead % 8
@@ -146,25 +197,6 @@ func (r *Decoder) normalize() {
 	}
 }
 
-// TODO
-func (r *Decoder) p2model(bits uint) uint32 {
-	k := uint32(0)
-	scale := r.rangeSize >> bits
-
-	if r.highAndCodedDifference >= scale {
-		r.highAndCodedDifference -= scale
-		r.rangeSize -= scale
-		k = 0
-	} else {
-		r.rangeSize = scale
-		k = 1
-	}
-	r.normalize()
-
-	return k
-}
-
-// TODO
 func (r *Decoder) update(scale, low, high, total uint32) {
 	r.highAndCodedDifference -= scale * (total - high)
 	if low != 0 {
@@ -174,31 +206,6 @@ func (r *Decoder) update(scale, low, high, total uint32) {
 	}
 
 	r.normalize()
-}
-
-// TODO
-func (r *Decoder) DecodeSymbolWithICDF(cumulativeDistributionTable []uint) uint32 {
-	var k, scale, total, symbol, low, high uint32
-
-	total = uint32(cumulativeDistributionTable[0])
-	cumulativeDistributionTable = cumulativeDistributionTable[1:]
-
-	scale = r.rangeSize / total
-	symbol = r.highAndCodedDifference/scale + 1
-	symbol = total - uint32(min(uint(symbol), uint(total)))
-
-	for k = 0; uint32(cumulativeDistributionTable[k]) <= symbol; k++ {
-	}
-
-	high = uint32(cumulativeDistributionTable[k])
-	if k != 0 {
-		low = uint32(cumulativeDistributionTable[k-1])
-	} else {
-		low = 0
-	}
-
-	r.update(scale, low, high, total)
-	return k
 }
 
 func min(a, b uint) uint {

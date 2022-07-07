@@ -97,10 +97,10 @@ func TestDecoder(t *testing.T) {
 	d := &Decoder{}
 	d.Init([]byte{0x0b, 0xe4, 0xc1, 0x36, 0xec, 0xc5, 0x80})
 
-	if result := d.p2model(0x1); result != 0 {
+	if result := d.DecodeSymbolLogP(0x1); result != 0 {
 		t.Fatal("")
 	}
-	if result := d.p2model(0x1); result != 0 {
+	if result := d.DecodeSymbolLogP(0x1); result != 0 {
 		t.Fatal("")
 	}
 	if result := d.DecodeSymbolWithICDF(silkModelFrameTypeInactive); result != 1 {
