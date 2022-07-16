@@ -148,6 +148,8 @@ func (c configurationMode) String() string {
 	return "Invalid"
 }
 
+// See Configuration for mapping of mode to configuration numbers
+// https://datatracker.ietf.org/doc/html/rfc6716#section-3.1
 func (c Configuration) mode() configurationMode {
 	switch {
 	case c >= 0 && c <= 11:
@@ -208,6 +210,8 @@ func (f frameDuration) nanoseconds() int {
 	return 0
 }
 
+// See Configuration for mapping of frameDuration to configuration numbers
+// https://datatracker.ietf.org/doc/html/rfc6716#section-3.1
 func (c Configuration) frameDuration() frameDuration {
 	switch c {
 	case 16, 20, 24, 28:
@@ -236,6 +240,8 @@ const (
 	BandwidthFullband
 )
 
+// See Configuration for mapping of bandwidth to configuration numbers
+// https://datatracker.ietf.org/doc/html/rfc6716#section-3.1
 func (c Configuration) bandwidth() Bandwidth {
 	switch {
 	case c <= 3:
