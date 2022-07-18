@@ -13,7 +13,12 @@ type Decoder struct {
 
 	// Have we decoded a frame yet?
 	haveDecoded bool
-	logGain     uint32 // TODO, should have dedicated frame state
+
+	// TODO, should have dedicated frame state
+	logGain       uint32
+	subframeState [3]struct {
+		gain float64
+	}
 }
 
 // NewDecoder creates a new Silk Decoder
@@ -85,13 +90,13 @@ func (d *Decoder) decodeSubframeQuantizations(signalType frameSignalType) {
 		gainIndex      uint32
 	)
 
-	for i := 0; i < 4; i++ {
+	for subframeIndex := 0; subframeIndex < 4; subframeIndex++ {
 
 		//The subframe gains are either coded independently, or relative to the
 		// gain from the most recent coded subframe in the same channel.
 		//
 		// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.4
-		if i == 0 {
+		if subframeIndex == 0 {
 			// In an independently coded subframe gain, the 3 most significant bits
 			// of the quantization gain are decoded using a PDF selected from
 			// Table 11 based on the decoded signal type
@@ -112,7 +117,7 @@ func (d *Decoder) decodeSubframeQuantizations(signalType frameSignalType) {
 			// current gain is limited as follows:
 			//     log_gain = max(gain_index, previous_log_gain - 16)
 			if d.haveDecoded {
-				logGain = max(gainIndex, d.logGain-16)
+				logGain = maxUint32(gainIndex, d.logGain-16)
 			} else {
 				logGain = gainIndex
 			}
@@ -126,10 +131,33 @@ func (d *Decoder) decodeSubframeQuantizations(signalType frameSignalType) {
 			// The following formula translates this index into a quantization gain
 			// for the current subframe using the gain from the previous subframe:
 			//      log_gain = clamp(0, max(2*delta_gain_index - 16, previous_log_gain + delta_gain_index - 4), 63)
-			fmt.Println(deltaGainIndex)
+			logGain = uint32(clamp(0, maxInt32(2*int32(deltaGainIndex)-16, int32(d.logGain+deltaGainIndex)-4), 63))
 		}
 
 		d.logGain = logGain
+
+		// silk_gains_dequant() (gain_quant.c) dequantizes log_gain for the k'th
+		// subframe and converts it into a linear Q16 scale factor via
+		//
+		//       gain_Q16[k] = silk_log2lin((0x1D1C71*log_gain>>16) + 2090)
+		//
+		inLogQ7 := (0x1D1C71 * int32(logGain) >> 16) + 2090
+		i := inLogQ7 >> 7
+		f := inLogQ7 & 127
+
+		// The function silk_log2lin() (log2lin.c) computes an approximation of
+		// 2**(inLog_Q7/128.0), where inLog_Q7 is its Q7 input.  Let i =
+		// inLog_Q7>>7 be the integer part of inLogQ7 and f = inLog_Q7&127 be
+		// the fractional part.  Then,
+		//
+		//             (1<<i) + ((-174*f*(128-f)>>16)+f)*((1<<i)>>7)
+		//
+		// yields the approximate exponential.  The final Q16 gain values lies
+		// between 81920 and 1686110208, inclusive (representing scale factors
+		// of 1.25 to 25728, respectively).
+
+		gainQ16 := (1 << i) + ((-174*f*(128-f)>>16)+f)*((1<<i)>>7)
+		d.subframeState[subframeIndex].gain = float64(gainQ16) / 65536
 	}
 }
 
