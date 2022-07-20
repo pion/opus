@@ -1,8 +1,6 @@
 package silk
 
 import (
-	"fmt"
-
 	"github.com/pion/opus/internal/rangecoding"
 )
 
@@ -16,7 +14,7 @@ type Decoder struct {
 
 	// TODO, should have dedicated frame state
 	logGain       uint32
-	subframeState [3]struct {
+	subframeState [4]struct {
 		gain float64
 	}
 }
@@ -162,6 +160,37 @@ func (d *Decoder) decodeSubframeQuantizations(signalType frameSignalType) {
 }
 
 // Decode decodes many SILK subframes
+//   An overview of the decoder is given in Figure 14.
+//
+//        +---------+    +------------+
+//     -->| Range   |--->| Decode     |---------------------------+
+//      1 | Decoder | 2  | Parameters |----------+       5        |
+//        +---------+    +------------+     4    |                |
+//                            3 |                |                |
+//                             \/               \/               \/
+//                       +------------+   +------------+   +------------+
+//                       | Generate   |-->| LTP        |-->| LPC        |
+//                       | Excitation |   | Synthesis  |   | Synthesis  |
+//                       +------------+   +------------+   +------------+
+//                                               ^                |
+//                                               |                |
+//                           +-------------------+----------------+
+//                           |                                      6
+//                           |   +------------+   +-------------+
+//                           +-->| Stereo     |-->| Sample Rate |-->
+//                               | Unmixing   | 7 | Conversion  | 8
+//                               +------------+   +-------------+
+//
+//     1: Range encoded bitstream
+//     2: Coded parameters
+//     3: Pulses, LSBs, and signs
+//     4: Pitch lags, Long-Term Prediction (LTP) coefficients
+//     5: Linear Predictive Coding (LPC) coefficients and gains
+//     6: Decoded signal (mono or mid-side stereo)
+//     7: Unmixed signal (mono or left-right stereo)
+//     8: Resampled signal
+
+// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.1
 func (d *Decoder) Decode(in []byte, isStereo bool, nanoseconds int) (decoded []byte, err error) {
 	if nanoseconds != nanoseconds20Ms {
 		return nil, errUnsupportedSilkFrameDuration
@@ -181,11 +210,8 @@ func (d *Decoder) Decode(in []byte, isStereo bool, nanoseconds int) (decoded []b
 		return nil, errUnsupportedSilkLowBitrateRedundancy
 	}
 
-	signalType, quantizationOffsetType := d.determineFrameType(voiceActivityDetected)
+	signalType, _ := d.determineFrameType(voiceActivityDetected)
 
 	d.decodeSubframeQuantizations(signalType)
-
-	fmt.Println(quantizationOffsetType)
-	panic("")
 	return
 }
