@@ -6,7 +6,7 @@ import (
 
 func TestDecodeSubframeQuantizations(t *testing.T) {
 	d := &Decoder{}
-	if _, err := d.Decode([]byte{0x0B, 0xE4, 0xC1, 0x36, 0xEC, 0xC5, 0x80}, false, nanoseconds20Ms); err != nil {
+	if _, err := d.Decode([]byte{0x0B, 0xE4, 0xC1, 0x36, 0xEC, 0xC5, 0x80}, false, nanoseconds20Ms, BandwidthNarrowband); err != nil {
 		t.Fatal(err)
 	}
 

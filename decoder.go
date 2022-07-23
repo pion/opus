@@ -38,7 +38,7 @@ func (d *Decoder) Decode(in []byte) (bandwidth Bandwidth, isStereo bool, frames 
 	}
 
 	for _, encodedFrame := range encodedFrames {
-		decoded, err := d.silkDecoder.Decode(encodedFrame, tocHeader.isStereo(), cfg.frameDuration().nanoseconds())
+		decoded, err := d.silkDecoder.Decode(encodedFrame, tocHeader.isStereo(), cfg.frameDuration().nanoseconds(), silk.Bandwidth(cfg.bandwidth()))
 		if err != nil {
 			return 0, false, nil, err
 		}

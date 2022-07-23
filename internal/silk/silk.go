@@ -1,6 +1,9 @@
 package silk
 
 type (
+	// Bandwidth for Silk can be NB (narrowband) MB (medium-band) or WB (wideband)
+	Bandwidth byte
+
 	frameSignalType             byte
 	frameQuantizationOffsetType byte
 )
@@ -14,6 +17,13 @@ const (
 
 	frameQuantizationOffsetTypeLow frameQuantizationOffsetType = iota + 1
 	frameQuantizationOffsetTypeHigh
+)
+
+// Bandwidth constants
+const (
+	BandwidthNarrowband Bandwidth = iota + 1
+	BandwidthMediumband
+	BandwidthWideband
 )
 
 func maxUint32(a, b uint32) uint32 {

@@ -159,6 +159,69 @@ func (d *Decoder) decodeSubframeQuantizations(signalType frameSignalType) {
 	}
 }
 
+// A set of normalized Line Spectral Frequency (LSF) coefficients follow
+// the quantization gains in the bitstream and represent the Linear
+// Predictive Coding (LPC) coefficients for the current SILK frame.
+//
+// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5
+func (d *Decoder) decodeNormalizedLineSpectralFrequency(voiceActivityDetected bool, bandwidth Bandwidth) {
+	// The first VQ stage uses a 32-element codebook, coded with one of the
+	// PDFs in Table 14, depending on the audio bandwidth and the signal
+	// type of the current SILK frame.  This yields a single index, I1, for
+	// the entire frame, which
+	//
+	// 1.  Indexes an element in a coarse codebook,
+	// 2.  Selects the PDFs for the second stage of the VQ, and
+	// 3.  Selects the prediction weights used to remove intra-frame
+	//     redundancy from the second stage.
+	//
+	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.1
+	var I1 uint32
+	switch {
+	case !voiceActivityDetected && (bandwidth == BandwidthNarrowband || bandwidth == BandwidthMediumband):
+		I1 = d.rangeDecoder.DecodeSymbolWithICDF(icdfNormalizedLSFStageOneIndexNarrowbandOrMediumbandUnvoiced)
+	case voiceActivityDetected && (bandwidth == BandwidthNarrowband || bandwidth == BandwidthMediumband):
+		I1 = d.rangeDecoder.DecodeSymbolWithICDF(icdfNormalizedLSFStageOneIndexNarrowbandOrMediumbandVoiced)
+	case !voiceActivityDetected && (bandwidth == BandwidthWideband):
+		I1 = d.rangeDecoder.DecodeSymbolWithICDF(icdfNormalizedLSFStageOneIndexWidebandUnvoiced)
+	case voiceActivityDetected && (bandwidth == BandwidthWideband):
+		I1 = d.rangeDecoder.DecodeSymbolWithICDF(icdfNormalizedLSFStageOneIndexWidebandVoiced)
+	}
+
+	// Decoding the second stage residual proceeds as follows.  For each
+	// coefficient, the decoder reads a symbol using the PDF corresponding
+	// to I1 from either Table 17 or Table 18, and subtracts 4 from the
+	// result to give an index in the range -4 to 4, inclusive.  If the
+	// index is either -4 or 4, it reads a second symbol using the PDF in
+	// Table 19, and adds the value of this second symbol to the index,
+	// using the same sign.  This gives the index, I2[k], a total range of
+	// -10 to 10, inclusive.
+	//
+	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.1
+	var codebook [][]uint
+	if bandwidth == BandwidthWideband {
+		codebook = codebookNormalizedLSFStageTwoIndexWideband
+	} else {
+		codebook = codebookNormalizedLSFStageTwoIndexNarrowbandOrMediumband
+	}
+
+	I2 := make([]int8, len(codebook[0]))
+
+	// Decoding the second stage residual proceeds as follows.  For each
+	// coefficient, the decoder reads a symbol using the PDF corresponding
+	// to I1 from either Table 17 or Table 18
+	//
+	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.1
+	for i := 0; i < len(I2); i++ {
+		I2[i] = int8(d.rangeDecoder.DecodeSymbolWithICDF(icdfNormalizedLSFStageTwoIndex[codebook[I1][i]])) - 4
+		if I2[i] == -4 {
+			I2[i] -= int8(d.rangeDecoder.DecodeSymbolWithICDF(icdfNormalizedLSFStageTwoIndexExtension))
+		} else if I2[i] == 4 {
+			I2[i] += int8(d.rangeDecoder.DecodeSymbolWithICDF(icdfNormalizedLSFStageTwoIndexExtension))
+		}
+	}
+}
+
 // Decode decodes many SILK subframes
 //   An overview of the decoder is given in Figure 14.
 //
@@ -189,9 +252,9 @@ func (d *Decoder) decodeSubframeQuantizations(signalType frameSignalType) {
 //     6: Decoded signal (mono or mid-side stereo)
 //     7: Unmixed signal (mono or left-right stereo)
 //     8: Resampled signal
-
+//
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.1
-func (d *Decoder) Decode(in []byte, isStereo bool, nanoseconds int) (decoded []byte, err error) {
+func (d *Decoder) Decode(in []byte, isStereo bool, nanoseconds int, bandwidth Bandwidth) (decoded []byte, err error) {
 	if nanoseconds != nanoseconds20Ms {
 		return nil, errUnsupportedSilkFrameDuration
 	} else if isStereo {
@@ -211,7 +274,8 @@ func (d *Decoder) Decode(in []byte, isStereo bool, nanoseconds int) (decoded []b
 	}
 
 	signalType, _ := d.determineFrameType(voiceActivityDetected)
-
 	d.decodeSubframeQuantizations(signalType)
+	d.decodeNormalizedLineSpectralFrequency(voiceActivityDetected, bandwidth)
+
 	return
 }
