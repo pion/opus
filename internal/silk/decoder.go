@@ -190,13 +190,7 @@ func (d *Decoder) decodeNormalizedLineSpectralFrequency(voiceActivityDetected bo
 
 	// Decoding the second stage residual proceeds as follows.  For each
 	// coefficient, the decoder reads a symbol using the PDF corresponding
-	// to I1 from either Table 17 or Table 18, and subtracts 4 from the
-	// result to give an index in the range -4 to 4, inclusive.  If the
-	// index is either -4 or 4, it reads a second symbol using the PDF in
-	// Table 19, and adds the value of this second symbol to the index,
-	// using the same sign.  This gives the index, I2[k], a total range of
-	// -10 to 10, inclusive.
-	//
+	// to I1 from either Table 17 or Table 18,
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.1
 	var codebook [][]uint
 	if bandwidth == BandwidthWideband {
@@ -206,14 +200,20 @@ func (d *Decoder) decodeNormalizedLineSpectralFrequency(voiceActivityDetected bo
 	}
 
 	I2 := make([]int8, len(codebook[0]))
-
-	// Decoding the second stage residual proceeds as follows.  For each
-	// coefficient, the decoder reads a symbol using the PDF corresponding
-	// to I1 from either Table 17 or Table 18
-	//
-	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.1
 	for i := 0; i < len(I2); i++ {
+		// the decoder reads a symbol using the PDF corresponding
+		// to I1 from either Table 17 or Table 18 and subtracts 4 from the
+		// result to give an index in the range -4 to 4, inclusive.
+		//
+		// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.1
 		I2[i] = int8(d.rangeDecoder.DecodeSymbolWithICDF(icdfNormalizedLSFStageTwoIndex[codebook[I1][i]])) - 4
+
+		// If the index is either -4 or 4, it reads a second symbol using the PDF in
+		// Table 19, and adds the value of this second symbol to the index,
+		// using the same sign.  This gives the index, I2[k], a total range of
+		// -10 to 10, inclusive.
+		//
+		// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.1
 		if I2[i] == -4 {
 			I2[i] -= int8(d.rangeDecoder.DecodeSymbolWithICDF(icdfNormalizedLSFStageTwoIndexExtension))
 		} else if I2[i] == 4 {
