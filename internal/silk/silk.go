@@ -49,3 +49,19 @@ func clamp(low, in, high int32) int32 {
 
 	return in
 }
+
+// The sign of x, i.e.,
+//            ( -1,  x < 0
+//  sign(x) = <  0,  x == 0
+//            (  1,  x > 0
+// https://datatracker.ietf.org/doc/html/rfc6716#section-1.1.4
+func sign(x int) int {
+	switch {
+	case x < 0:
+		return -1
+	case x == 0:
+		return 0
+	default:
+		return 1
+	}
+}

@@ -220,6 +220,64 @@ func (d *Decoder) decodeNormalizedLineSpectralFrequency(voiceActivityDetected bo
 			I2[i] += int8(d.rangeDecoder.DecodeSymbolWithICDF(icdfNormalizedLSFStageTwoIndexExtension))
 		}
 	}
+
+	// The decoded indices from both stages are translated back into
+	// normalized LSF coefficients. The stage-2 indices represent residuals
+	// after both the first stage of the VQ and a separate backwards-prediction
+	// step. The backwards prediction process in the encoder subtracts a prediction
+	// from each residual formed by a multiple of the coefficient that follows it.
+	// The decoder must undo this process.
+	//
+	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.2
+
+	// qstep is the Q16 quantization step size, which is 11796 for NB and MB and 9830
+	// for WB (representing step sizes of approximately 0.18 and 0.15, respectively).
+	var qstep int
+	if bandwidth == BandwidthWideband {
+		qstep = 9830
+	} else {
+		qstep = 11796
+	}
+
+	// stage-2 residual
+	resQ10 := make([]int16, len(I2))
+
+	// Let d_LPC be the order of the codebook, i.e., 10 for NB and MB, and 16 for WB
+	dLPC := len(I2)
+
+	// for 0 <= k < d_LPC-1
+	for k := dLPC - 2; k >= 0; k-- {
+		// The stage-2 residual for each coefficient is computed via
+		//
+		//     res_Q10[k] = (k+1 < d_LPC ? (res_Q10[k+1]*pred_Q8[k])>>8 : 0) + ((((I2[k]<<10) - sign(I2[k])*102)*qstep)>>16) ,
+		//
+
+		// The following computes
+		//
+		// (k+1 < d_LPC ? (res_Q10[k+1]*pred_Q8[k])>>8 : 0)
+		//
+		firstOperand := int(0)
+		if k+1 < dLPC {
+			// Each coefficient selects its prediction weight from one of the two lists based on the stage-1 index, I1.
+			// let pred_Q8[k] be the weight for the k'th coefficient selected by this process for 0 <= k < d_LPC-1
+			predQ8 := int(0)
+			if bandwidth == BandwidthWideband {
+				predQ8 = int(predictionWeightForWidebandNormalizedLSF[predictionWeightSelectionForWidebandNormalizedLSF[I1][k]][k])
+			} else {
+				predQ8 = int(predictionWeightForNarrowbandAndMediumbandNormalizedLSF[predictionWeightSelectionForNarrowbandAndMediumbandNormalizedLSF[I1][k]][k])
+			}
+
+			firstOperand = (int(resQ10[k+1]) * predQ8) >> 8
+		}
+
+		// The following computes
+		//
+		// (((I2[k]<<10) - sign(I2[k])*102)*qstep)>>16
+		//
+		secondOperand := (((int(I2[k]) << 10) - sign(int(I2[k]))*102) * qstep) >> 16
+
+		resQ10[k] = int16(firstOperand + secondOperand)
+	}
 }
 
 // Decode decodes many SILK subframes
