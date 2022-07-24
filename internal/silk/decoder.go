@@ -163,8 +163,8 @@ func (d *Decoder) decodeSubframeQuantizations(signalType frameSignalType) {
 // the quantization gains in the bitstream and represent the Linear
 // Predictive Coding (LPC) coefficients for the current SILK frame.
 //
-// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5
-func (d *Decoder) decodeNormalizedLineSpectralFrequency(voiceActivityDetected bool, bandwidth Bandwidth) {
+// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.1
+func (d *Decoder) decodeNormalizedLineSpectralFrequencyStageOne(voiceActivityDetected bool, bandwidth Bandwidth) (I1 uint32) {
 	// The first VQ stage uses a 32-element codebook, coded with one of the
 	// PDFs in Table 14, depending on the audio bandwidth and the signal
 	// type of the current SILK frame.  This yields a single index, I1, for
@@ -176,7 +176,6 @@ func (d *Decoder) decodeNormalizedLineSpectralFrequency(voiceActivityDetected bo
 	//     redundancy from the second stage.
 	//
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.1
-	var I1 uint32
 	switch {
 	case !voiceActivityDetected && (bandwidth == BandwidthNarrowband || bandwidth == BandwidthMediumband):
 		I1 = d.rangeDecoder.DecodeSymbolWithICDF(icdfNormalizedLSFStageOneIndexNarrowbandOrMediumbandUnvoiced)
@@ -188,10 +187,19 @@ func (d *Decoder) decodeNormalizedLineSpectralFrequency(voiceActivityDetected bo
 		I1 = d.rangeDecoder.DecodeSymbolWithICDF(icdfNormalizedLSFStageOneIndexWidebandVoiced)
 	}
 
+	return
+}
+
+// A set of normalized Line Spectral Frequency (LSF) coefficients follow
+// the quantization gains in the bitstream and represent the Linear
+// Predictive Coding (LPC) coefficients for the current SILK frame.
+//
+// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.2
+func (d *Decoder) decodeNormalizedLineSpectralFrequencyStageTwo(voiceActivityDetected bool, bandwidth Bandwidth, I1 uint32) (resQ10 []int16) {
 	// Decoding the second stage residual proceeds as follows.  For each
 	// coefficient, the decoder reads a symbol using the PDF corresponding
 	// to I1 from either Table 17 or Table 18,
-	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.1
+	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.2
 	var codebook [][]uint
 	if bandwidth == BandwidthWideband {
 		codebook = codebookNormalizedLSFStageTwoIndexWideband
@@ -205,7 +213,7 @@ func (d *Decoder) decodeNormalizedLineSpectralFrequency(voiceActivityDetected bo
 		// to I1 from either Table 17 or Table 18 and subtracts 4 from the
 		// result to give an index in the range -4 to 4, inclusive.
 		//
-		// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.1
+		// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.2
 		I2[i] = int8(d.rangeDecoder.DecodeSymbolWithICDF(icdfNormalizedLSFStageTwoIndex[codebook[I1][i]])) - 4
 
 		// If the index is either -4 or 4, it reads a second symbol using the PDF in
@@ -213,7 +221,7 @@ func (d *Decoder) decodeNormalizedLineSpectralFrequency(voiceActivityDetected bo
 		// using the same sign.  This gives the index, I2[k], a total range of
 		// -10 to 10, inclusive.
 		//
-		// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.1
+		// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.2
 		if I2[i] == -4 {
 			I2[i] -= int8(d.rangeDecoder.DecodeSymbolWithICDF(icdfNormalizedLSFStageTwoIndexExtension))
 		} else if I2[i] == 4 {
@@ -240,7 +248,7 @@ func (d *Decoder) decodeNormalizedLineSpectralFrequency(voiceActivityDetected bo
 	}
 
 	// stage-2 residual
-	resQ10 := make([]int16, len(I2))
+	resQ10 = make([]int16, len(I2))
 
 	// Let d_LPC be the order of the codebook, i.e., 10 for NB and MB, and 16 for WB
 	dLPC := len(I2)
@@ -278,6 +286,8 @@ func (d *Decoder) decodeNormalizedLineSpectralFrequency(voiceActivityDetected bo
 
 		resQ10[k] = int16(firstOperand + secondOperand)
 	}
+
+	return
 }
 
 // Decode decodes many SILK subframes
@@ -332,8 +342,15 @@ func (d *Decoder) Decode(in []byte, isStereo bool, nanoseconds int, bandwidth Ba
 	}
 
 	signalType, _ := d.determineFrameType(voiceActivityDetected)
+
+	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.4
 	d.decodeSubframeQuantizations(signalType)
-	d.decodeNormalizedLineSpectralFrequency(voiceActivityDetected, bandwidth)
+
+	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.1
+	I1 := d.decodeNormalizedLineSpectralFrequencyStageOne(voiceActivityDetected, bandwidth)
+
+	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.1
+	d.decodeNormalizedLineSpectralFrequencyStageTwo(voiceActivityDetected, bandwidth, I1)
 
 	return
 }
