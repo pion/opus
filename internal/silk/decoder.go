@@ -195,7 +195,7 @@ func (d *Decoder) decodeNormalizedLineSpectralFrequencyStageOne(voiceActivityDet
 // Predictive Coding (LPC) coefficients for the current SILK frame.
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.2
-func (d *Decoder) decodeNormalizedLineSpectralFrequencyStageTwo(voiceActivityDetected bool, bandwidth Bandwidth, I1 uint32) (resQ10 []int16) {
+func (d *Decoder) decodeNormalizedLineSpectralFrequencyStageTwo(bandwidth Bandwidth, I1 uint32) (resQ10 []int16) {
 	// Decoding the second stage residual proceeds as follows.  For each
 	// coefficient, the decoder reads a symbol using the PDF corresponding
 	// to I1 from either Table 17 or Table 18,
@@ -290,6 +290,86 @@ func (d *Decoder) decodeNormalizedLineSpectralFrequencyStageTwo(voiceActivityDet
 	return
 }
 
+// Once the stage-1 index I1 and the stage-2 residual res_Q10[] have
+// been decoded, the final normalized LSF coefficients can be
+// reconstructed.
+//
+// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.3
+func (d *Decoder) reconstructNormalizedLineSpectralFrequencyCoefficients(bandwidth Bandwidth, resQ10 []int16, I1 uint32) (nlsfQ15 []int16) {
+	// Let d_LPC be the order of the codebook, i.e., 10 for NB and MB, and 16 for WB
+	dLPC := len(resQ10)
+
+	nlsfQ15 = make([]int16, len(resQ10))
+	w2Q18 := make([]uint, len(resQ10))
+	wQ9 := make([]int16, len(resQ10))
+
+	cb1Q8 := codebookNormalizedLSFStageOneNarrowbandOrMediumband
+	if bandwidth == BandwidthWideband {
+		cb1Q8 = codebookNormalizedLSFStageOneWideband
+	}
+
+	// Let cb1_Q8[k] be the k'th entry of the stage-1 codebook vector from Table 23 or Table 24.
+	// Then, for 0 <= k < d_LPC, the following expression computes the
+	// square of the weight as a Q18 value:
+	//
+	//          w2_Q18[k] = (1024/(cb1_Q8[k] - cb1_Q8[k-1])
+	//                       + 1024/(cb1_Q8[k+1] - cb1_Q8[k])) << 16
+	//
+	// where cb1_Q8[-1] = 0 and cb1_Q8[d_LPC] = 256, and the division is
+	// integer division.  This is reduced to an unsquared, Q9 value using
+	// the following square-root approximation:
+	//
+	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.3
+	for k := 0; k < dLPC; k++ {
+		var kMinusOne, kPlusOne uint
+		if k != 0 {
+			kMinusOne = cb1Q8[I1][k-1]
+		}
+
+		if k+1 == dLPC {
+			kPlusOne = 256
+		} else {
+			kPlusOne = cb1Q8[I1][k+1]
+		}
+
+		w2Q18[k] = (1024/(cb1Q8[I1][k]-kMinusOne) +
+			1024/(kPlusOne-cb1Q8[I1][k])) << 16
+
+		// This is reduced to an unsquared, Q9 value using
+		// the following square-root approximation:
+		//
+		//     i = ilog(w2_Q18[k])
+		//     f = (w2_Q18[k]>>(i-8)) & 127
+		//     y = ((i&1) ? 32768 : 46214) >> ((32-i)>>1)
+		//     w_Q9[k] = y + ((213*f*y)>>16)
+		//
+		// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.3
+		i := ilog(int(w2Q18[k]))
+		f := int((w2Q18[k] >> (i - 8)) & 127)
+
+		y := 46214
+		if (i & 1) != 0 {
+			y = 32768
+		}
+
+		y = y >> ((32 - i) >> 1)
+		wQ9[k] = int16(y + ((213 * f * y) >> 16))
+
+		// Given the stage-1 codebook entry cb1_Q8[], the stage-2 residual
+		// res_Q10[], and their corresponding weights, w_Q9[], the reconstructed
+		// normalized LSF coefficients are
+		//
+		//    NLSF_Q15[k] = clamp(0,
+		//               (cb1_Q8[k]<<7) + (res_Q10[k]<<14)/w_Q9[k], 32767)
+		//
+		// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.3
+		nlsfQ15[k] = int16(clamp(0,
+			int32((int(cb1Q8[I1][k])<<7)+(int(resQ10[k])<<14)/int(wQ9[k])), 32767))
+	}
+
+	return
+}
+
 // Decode decodes many SILK subframes
 //   An overview of the decoder is given in Figure 14.
 //
@@ -349,8 +429,11 @@ func (d *Decoder) Decode(in []byte, isStereo bool, nanoseconds int, bandwidth Ba
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.1
 	I1 := d.decodeNormalizedLineSpectralFrequencyStageOne(voiceActivityDetected, bandwidth)
 
-	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.1
-	d.decodeNormalizedLineSpectralFrequencyStageTwo(voiceActivityDetected, bandwidth, I1)
+	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.2
+	resQ10 := d.decodeNormalizedLineSpectralFrequencyStageTwo(bandwidth, I1)
+
+	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.3
+	d.reconstructNormalizedLineSpectralFrequencyCoefficients(bandwidth, resQ10, I1)
 
 	return
 }
