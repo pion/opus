@@ -1,5 +1,7 @@
 package silk
 
+import "math"
+
 type (
 	// Bandwidth for Silk can be NB (narrowband) MB (medium-band) or WB (wideband)
 	Bandwidth byte
@@ -64,4 +66,17 @@ func sign(x int) int {
 	default:
 		return 1
 	}
+}
+
+//  The minimum number of bits required to store a positive integer n in
+//  binary, or 0 for a non-positive integer n.
+//
+//                             ( 0,                 n <= 0
+//                   ilog(n) = <
+//                             ( floor(log2(n))+1,  n > 0
+func ilog(n int) int {
+	if n <= 0 {
+		return 0
+	}
+	return int(math.Floor(math.Log2(float64(n)))) + 1
 }
