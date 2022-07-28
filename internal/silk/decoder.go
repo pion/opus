@@ -323,14 +323,12 @@ func (d *Decoder) normalizeLineSpectralFrequencyCoefficients(bandwidth Bandwidth
 	//
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.3
 	for k := 0; k < dLPC; k++ {
-		var kMinusOne, kPlusOne uint
+		kMinusOne, kPlusOne := uint(0), uint(256)
 		if k != 0 {
 			kMinusOne = cb1Q8[I1][k-1]
 		}
 
-		if k+1 == dLPC {
-			kPlusOne = 256
-		} else {
+		if k+1 != dLPC {
 			kPlusOne = cb1Q8[I1][k+1]
 		}
 
