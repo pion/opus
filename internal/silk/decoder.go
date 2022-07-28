@@ -1,6 +1,8 @@
 package silk
 
 import (
+	"fmt"
+
 	"github.com/pion/opus/internal/rangecoding"
 )
 
@@ -37,7 +39,7 @@ func (d *Decoder) determineFrameType(voiceActivityDetected bool) (signalType fra
 		frameTypeSymbol = d.rangeDecoder.DecodeSymbolWithICDF(icdfFrameTypeVADInactive)
 	}
 
-	//   +------------+-------------+--------------------------+
+	// +------------+-------------+--------------------------+
 	// | Frame Type | Signal Type | Quantization Offset Type |
 	// +------------+-------------+--------------------------+
 	// | 0          | Inactive    |                      Low |
@@ -164,7 +166,7 @@ func (d *Decoder) decodeSubframeQuantizations(signalType frameSignalType) {
 // Predictive Coding (LPC) coefficients for the current SILK frame.
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.1
-func (d *Decoder) decodeNormalizedLineSpectralFrequencyStageOne(voiceActivityDetected bool, bandwidth Bandwidth) (I1 uint32) {
+func (d *Decoder) normalizeLineSpectralFrequencyStageOne(voiceActivityDetected bool, bandwidth Bandwidth) (I1 uint32) {
 	// The first VQ stage uses a 32-element codebook, coded with one of the
 	// PDFs in Table 14, depending on the audio bandwidth and the signal
 	// type of the current SILK frame.  This yields a single index, I1, for
@@ -195,7 +197,7 @@ func (d *Decoder) decodeNormalizedLineSpectralFrequencyStageOne(voiceActivityDet
 // Predictive Coding (LPC) coefficients for the current SILK frame.
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.2
-func (d *Decoder) decodeNormalizedLineSpectralFrequencyStageTwo(bandwidth Bandwidth, I1 uint32) (resQ10 []int16) {
+func (d *Decoder) normalizeLineSpectralFrequencyStageTwo(bandwidth Bandwidth, I1 uint32) (resQ10 []int16) {
 	// Decoding the second stage residual proceeds as follows.  For each
 	// coefficient, the decoder reads a symbol using the PDF corresponding
 	// to I1 from either Table 17 or Table 18,
@@ -295,7 +297,7 @@ func (d *Decoder) decodeNormalizedLineSpectralFrequencyStageTwo(bandwidth Bandwi
 // reconstructed.
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.3
-func (d *Decoder) reconstructNormalizedLineSpectralFrequencyCoefficients(bandwidth Bandwidth, resQ10 []int16, I1 uint32) (nlsfQ15 []int16) {
+func (d *Decoder) normalizeLineSpectralFrequencyCoefficients(bandwidth Bandwidth, resQ10 []int16, I1 uint32) (nlsfQ15 []int16) {
 	// Let d_LPC be the order of the codebook, i.e., 10 for NB and MB, and 16 for WB
 	dLPC := len(resQ10)
 
@@ -370,6 +372,72 @@ func (d *Decoder) reconstructNormalizedLineSpectralFrequencyCoefficients(bandwid
 	return
 }
 
+// The normalized LSF stabilization procedure ensures that
+// consecutive values of the normalized LSF coefficients, NLSF_Q15[],
+// are spaced some minimum distance apart (predetermined to be the 0.01
+// percentile of a large training set).
+//
+// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.4
+func (d *Decoder) normalizeLSFStabilization() {
+	// TODO
+}
+
+// For 20 ms SILK frames, the first half of the frame (i.e., the first
+// two subframes) may use normalized LSF coefficients that are
+// interpolated between the decoded LSFs for the most recent coded frame
+// (in the same channel) and the current frame
+//
+// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.5
+func (d *Decoder) normalizeLSFInterpolation() error {
+	// Let n2_Q15[k] be the normalized LSF coefficients decoded by the
+	// procedure in Section 4.2.7.5, n0_Q15[k] be the LSF coefficients
+	// decoded for the prior frame, and w_Q2 be the interpolation factor.
+	// Then, the normalized LSF coefficients used for the first half of a
+	// 20 ms frame, n1_Q15[k], are
+	//
+	//      n1_Q15[k] = n0_Q15[k] + (w_Q2*(n2_Q15[k] - n0_Q15[k]) >> 2)
+	if wQ2 := d.rangeDecoder.DecodeSymbolWithICDF(icdfNormalizedLSFInterpolationIndex); wQ2 != 4 {
+		return errUnsupportedLSFInterpolation
+	}
+
+	return nil
+}
+
+func (d *Decoder) convertNormalizedLSFsToLPCCoefficients(I1 uint32, nlsfQ1 []int16, bandwidth Bandwidth) {
+	cQ17 := make([]int32, len(nlsfQ1))
+	cosQ12 := q12CosineTableForLSFConverion
+
+	ordering := lsfOrderingForPolynomialEvaluationNarrowbandAndMediumband
+	if bandwidth == BandwidthWideband {
+		ordering = lsfOrderingForPolynomialEvaluationWideband
+	}
+
+	// The top 7 bits of each normalized LSF coefficient index a value in
+	// the table, and the next 8 bits interpolate between it and the next
+	// value.  Let i = (n[k] >> 8) be the integer index and f = (n[k] & 255)
+	// be the fractional part of a given coefficient.  Then, the re-ordered,
+	// approximated cosine, c_Q17[ordering[k]], is
+	//
+	//     c_Q17[ordering[k]] = (cos_Q12[i]*256
+	//                           + (cos_Q12[i+1]-cos_Q12[i])*f + 4) >> 3
+	//
+	// where ordering[k] is the k'th entry of the column of Table 27
+	// corresponding to the current audio bandwidth and cos_Q12[i] is the
+	// i'th entry of Table 28.
+	//
+	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.6
+	for k := range nlsfQ1 {
+		i := int32(nlsfQ1[k] >> 8)
+		f := int32(nlsfQ1[k] & 255)
+
+		cQ17[ordering[k]] = (cosQ12[i]*256 +
+			(cosQ12[i+1]-cosQ12[i])*f + 4) >> 3
+	}
+
+	fmt.Println(cQ17)
+	panic("")
+}
+
 // Decode decodes many SILK subframes
 //   An overview of the decoder is given in Figure 14.
 //
@@ -427,13 +495,24 @@ func (d *Decoder) Decode(in []byte, isStereo bool, nanoseconds int, bandwidth Ba
 	d.decodeSubframeQuantizations(signalType)
 
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.1
-	I1 := d.decodeNormalizedLineSpectralFrequencyStageOne(voiceActivityDetected, bandwidth)
+	I1 := d.normalizeLineSpectralFrequencyStageOne(voiceActivityDetected, bandwidth)
 
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.2
-	resQ10 := d.decodeNormalizedLineSpectralFrequencyStageTwo(bandwidth, I1)
+	resQ10 := d.normalizeLineSpectralFrequencyStageTwo(bandwidth, I1)
 
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.3
-	d.reconstructNormalizedLineSpectralFrequencyCoefficients(bandwidth, resQ10, I1)
+	nlsfQ1 := d.normalizeLineSpectralFrequencyCoefficients(bandwidth, resQ10, I1)
+
+	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.4
+	d.normalizeLSFStabilization()
+
+	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.5
+	if err := d.normalizeLSFInterpolation(); err != nil {
+		return nil, err
+	}
+
+	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.6
+	d.convertNormalizedLSFsToLPCCoefficients(I1, nlsfQ1, bandwidth)
 
 	return
 }
