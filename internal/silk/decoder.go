@@ -432,6 +432,32 @@ func (d *Decoder) convertNormalizedLSFsToLPCCoefficients(I1 uint32, nlsfQ1 []int
 			(cosQ12[i+1]-cosQ12[i])*f + 4) >> 3
 	}
 
+	// Given the list of cosine values, silk_NLSF2A_find_poly() (NLSF2A.c)
+	// computes the coefficients of P and Q, described here via a simple
+	// recurrence.  Let p_Q16[k][j] and q_Q16[k][j] be the coefficients of
+	// the products of the first (k+1) root pairs for P and Q, with j
+	// indexing the coefficient number.  Only the first (k+2) coefficients
+	// are needed, as the products are symmetric.  Let
+	//
+	//      p_Q16[0][0] = q_Q16[0][0] = 1<<16
+	//      p_Q16[0][1] = -c_Q17[0]
+	//      q_Q16[0][1] = -c_Q17[1]
+	//      d2 = d_LPC/2
+	//
+	// As boundary conditions, assume p_Q16[k][j] = q_Q16[k][j] = 0 for all j < 0.
+	// Also, assume (because of the symmetry)
+	//
+	//      p_Q16[k][k+2] = p_Q16[k][k]
+	//      q_Q16[k][k+2] = q_Q16[k][k]
+	//
+	// Then, for 0 < k < d2 and 0 <= j <= k+1,
+
+	//      p_Q16[k][j] = p_Q16[k-1][j] + p_Q16[k-1][j-2]
+	//                    - ((c_Q17[2*k]*p_Q16[k-1][j-1] + 32768)>>16)
+
+	//      q_Q16[k][j] = q_Q16[k-1][j] + q_Q16[k-1][j-2]
+	//                    - ((c_Q17[2*k+1]*q_Q16[k-1][j-1] + 32768)>>16)
+
 	fmt.Println(cQ17)
 	panic("")
 }
