@@ -208,6 +208,14 @@ func (r *Decoder) update(scale, low, high, total uint32) {
 	r.normalize()
 }
 
+// SetInternalValues is used when using the RangeDecoder when testing
+func (r *Decoder) SetInternalValues(data []byte, bitsRead uint, rangeSize uint32, highAndCodedDifference uint32) {
+	r.data = data
+	r.bitsRead = bitsRead
+	r.rangeSize = rangeSize
+	r.highAndCodedDifference = highAndCodedDifference
+}
+
 func min(a, b uint) uint {
 	if a < b {
 		return a

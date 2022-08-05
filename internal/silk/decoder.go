@@ -26,6 +26,17 @@ func NewDecoder() *Decoder {
 	return &Decoder{}
 }
 
+// The LP layer begins with two to eight header bits These consist of one
+// Voice Activity Detection (VAD) bit per frame (up to 3), followed by a
+// single flag indicating the presence of LBRR frames.
+//
+// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.3
+func (d *Decoder) decodeHeaderBits() (voiceActivityDetected, lowBitRateRedundancy bool) {
+	voiceActivityDetected = d.rangeDecoder.DecodeSymbolLogP(1) == 1
+	lowBitRateRedundancy = d.rangeDecoder.DecodeSymbolLogP(1) == 1
+	return
+}
+
 // Each SILK frame contains a single "frame type" symbol that jointly
 // codes the signal type and quantization offset type of the
 // corresponding frame.
@@ -503,12 +514,7 @@ func (d *Decoder) Decode(in []byte, isStereo bool, nanoseconds int, bandwidth Ba
 
 	d.rangeDecoder.Init(in)
 
-	//The LP layer begins with two to eight header bits These consist of one
-	// Voice Activity Detection (VAD) bit per frame (up to 3), followed by a
-	// single flag indicating the presence of LBRR frames.
-	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.3
-	voiceActivityDetected := d.rangeDecoder.DecodeSymbolLogP(1) == 1
-	lowBitRateRedundancy := d.rangeDecoder.DecodeSymbolLogP(1) == 1
+	voiceActivityDetected, lowBitRateRedundancy := d.decodeHeaderBits()
 	if lowBitRateRedundancy {
 		return nil, errUnsupportedSilkLowBitrateRedundancy
 	}
