@@ -11,6 +11,7 @@ type (
 )
 
 const (
+	nanoseconds10Ms = 10000000
 	nanoseconds20Ms = 20000000
 
 	frameSignalTypeInactive frameSignalType = iota + 1

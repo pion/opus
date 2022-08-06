@@ -473,6 +473,114 @@ func (d *Decoder) convertNormalizedLSFsToLPCCoefficients(I1 uint32, nlsfQ1 []int
 	panic("")
 }
 
+// As described in Section 4.2.7.8.6, SILK uses a Linear Congruential
+// Generator (LCG) to inject pseudorandom noise into the quantized
+// excitation.  To ensure synchronization of this process between the
+// encoder and decoder, each SILK frame stores a 2-bit seed after the
+// LTP parameters (if any).
+//
+// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.7
+func (d *Decoder) decodeLinearCongruentialGeneratorSeed() uint32 {
+	return d.rangeDecoder.DecodeSymbolWithICDF(icdfLinearCongruentialGeneratorSeed)
+}
+
+// SILK codes the excitation using a modified version of the Pyramid
+// Vector Quantizer (PVQ) codebook [PVQ].  The PVQ codebook is designed
+// for Laplace-distributed values and consists of all sums of K signed,
+// unit pulses in a vector of dimension N, where two pulses at the same
+// position are required to have the same sign.
+//
+// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8
+func (d *Decoder) decodeExcitation(nanoseconds int, bandwidth Bandwidth, voiceActivityDetected bool, lcgSeed uint32) {
+	// SILK fixes the dimension of the codebook to N = 16.  The excitation
+	// is made up of a number of "shell blocks", each 16 samples in size.
+	// Table 44 lists the number of shell blocks required for a SILK frame
+	// for each possible audio bandwidth and frame size.
+	//
+	// +-----------------+------------+------------------------+
+	// | Audio Bandwidth | Frame Size | Number of Shell Blocks |
+	// +-----------------+------------+------------------------+
+	// | NB              | 10 ms      |                      5 |
+	// |                 |            |                        |
+	// | MB              | 10 ms      |                      8 |
+	// |                 |            |                        |
+	// | WB              | 10 ms      |                     10 |
+	// |                 |            |                        |
+	// | NB              | 20 ms      |                     10 |
+	// |                 |            |                        |
+	// | MB              | 20 ms      |                     15 |
+	// |                 |            |                        |
+	// | WB              | 20 ms      |                     20 |
+	// +-----------------+------------+------------------------+
+	//
+	//  Table 44: Number of Shell Blocks Per SILK Frame
+	shellblocks := int(0)
+
+	switch {
+	case bandwidth == BandwidthNarrowband && nanoseconds == nanoseconds10Ms:
+		shellblocks = 5
+	case bandwidth == BandwidthMediumband && nanoseconds == nanoseconds10Ms:
+		shellblocks = 8
+	case bandwidth == BandwidthWideband && nanoseconds == nanoseconds10Ms:
+		fallthrough
+	case bandwidth == BandwidthNarrowband && nanoseconds == nanoseconds20Ms:
+		shellblocks = 10
+	case bandwidth == BandwidthMediumband && nanoseconds == nanoseconds20Ms:
+		shellblocks = 15
+	case bandwidth == BandwidthWideband && nanoseconds == nanoseconds20Ms:
+		shellblocks = 20
+	}
+
+	// The first symbol in the excitation is a "rate level", which is an
+	// index from 0 to 8, inclusive, coded using the PDF in Table 45
+	//
+	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8.1
+	var rateLevel uint32
+	if voiceActivityDetected {
+		rateLevel = d.rangeDecoder.DecodeSymbolWithICDF(icdfRateLevelVoiced)
+	} else {
+		rateLevel = d.rangeDecoder.DecodeSymbolWithICDF(icdfRateLevelUnvoiced)
+	}
+
+	// The total number of pulses in each of the shell blocks follows the
+	// rate level.  The pulse counts for all of the shell blocks are coded
+	// consecutively, before the content of any of the blocks.
+	//
+	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8.2
+	pulsecounts := make([]uint8, shellblocks)
+	lsbcounts := make([]uint8, shellblocks)
+	for i := 0; i < shellblocks; i++ {
+		pulsecounts[i] = uint8(d.rangeDecoder.DecodeSymbolWithICDF(icdfPulseCount[rateLevel]))
+
+		// The special value 17 indicates that this block
+		// has one or more additional LSBs to decode for each coefficient.
+		if pulsecounts[i] == 17 {
+			// If the decoder encounters this value, it decodes another value for the
+			// actual pulse count of the block, but uses the PDF corresponding to
+			// the special rate level 9 instead of the normal rate level.
+			// This Process repeats until the decoder reads a value less than 17, and it
+			// Then sets the number of extra LSBs used to the number of 17's decoded
+			// For that block.
+			lsbcount := uint8(0)
+			for ; pulsecounts[i] == 17 && lsbcount < 10; lsbcount++ {
+				pulsecounts[i] = uint8(d.rangeDecoder.DecodeSymbolWithICDF(icdfPulseCount[9]))
+			}
+			lsbcounts[i] = lsbcount
+
+			// If it reads the value 17 ten times, then the next
+			// Iteration uses the special rate level 10 instead of 9.  The
+			// Probability of decoding a 17 when using the PDF for rate level 10 is
+			// Zero, ensuring that the number of LSBs for a block will not exceed
+			// 10.  The cumulative distribution for rate level 10 is just a shifted
+			// Version of that for 9 and thus does not require any additional
+			// Storage.
+			if lsbcount == 10 {
+				pulsecounts[i] = uint8(d.rangeDecoder.DecodeSymbolWithICDF(icdfPulseCount[10]))
+			}
+		}
+	}
+}
+
 // Decode decodes many SILK subframes
 //   An overview of the decoder is given in Figure 14.
 //
