@@ -100,7 +100,7 @@ func TestNormalizeLineSpectralFrequencyCoefficients(t *testing.T) {
 
 func TestExcitation(t *testing.T) {
 	silkFrame := []byte{0x84, 0x2e, 0x67, 0xd3, 0x85, 0x65, 0x54, 0xe3, 0x9d, 0x90, 0x0a, 0xfa, 0x98, 0xea, 0xfd, 0x98, 0x94, 0x41, 0xf9, 0x6d, 0x1d, 0xa0}
-	d := &Decoder{rangeDecoder: createRangeDecoder(silkFrame, 73, 851775140, 846837397)}
+	d := &Decoder{rangeDecoder: createRangeDecoder(silkFrame, 71, 851775140, 846837397)}
 
 	lcgSeed := d.decodeLinearCongruentialGeneratorSeed()
 	d.decodeExcitation(nanoseconds20Ms, BandwidthWideband, false, lcgSeed)
