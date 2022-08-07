@@ -579,6 +579,17 @@ func (d *Decoder) decodeExcitation(nanoseconds int, bandwidth Bandwidth, voiceAc
 			}
 		}
 	}
+
+	// The locations of the pulses in each shell block follow the pulse
+	// counts. As with the pulse counts, these locations are coded for all the shell blocks
+	// before any of the remaining information for each block.  Unlike many
+	// other codecs, SILK places no restriction on the distribution of
+	// pulses within a shell block.  All of the pulses may be placed in a
+	// single location, or each one in a unique location, or anything in
+	// between.
+	//
+	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8.3
+
 }
 
 // Decode decodes many SILK subframes
