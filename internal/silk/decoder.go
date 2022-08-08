@@ -590,6 +590,57 @@ func (d *Decoder) decodeExcitation(nanoseconds int, bandwidth Bandwidth, voiceAc
 	//
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8.3
 
+	excitation := make([]uint8, shellblocks*pulsecountLargestPartitionSize)
+	for i := range pulsecounts {
+		// This process skips partitions without any pulses, i.e., where
+		// the initial pulse count from Section 4.2.7.8.2 was zero, or where the
+		// split in the prior level indicated that all of the pulses fell on the
+		// other side.  These partitions have nothing to code, so they require
+		// no PDF.
+		if pulsecounts[i] == 0 {
+			continue
+		}
+
+		excitationIndex := 16 * i
+		samplePartition16 := make([]uint8, 2)
+		samplePartition8 := make([]uint8, 2)
+		samplePartition4 := make([]uint8, 2)
+
+		// The location of pulses is coded by recursively partitioning each
+		// block into halves, and coding how many pulses fall on the left side
+		// of the split.  All remaining pulses must fall on the right side of
+		// the split.
+		d.partitionPulseCount(icdfPulseCountSplit16SamplePartitions, pulsecounts[i], samplePartition16)
+		for j := 0; j < 2; j++ {
+			d.partitionPulseCount(icdfPulseCountSplit8SamplePartitions, samplePartition16[j], samplePartition8)
+			for k := 0; k < 2; k++ {
+				d.partitionPulseCount(icdfPulseCountSplit4SamplePartitions, samplePartition8[k], samplePartition4)
+				for l := 0; l < 2; l++ {
+					d.partitionPulseCount(icdfPulseCountSplit2SamplePartitions, samplePartition4[l], excitation[excitationIndex:])
+					excitationIndex += 2
+				}
+			}
+		}
+	}
+}
+
+// The PDF to use is chosen by the size of the current partition (16, 8, 4, or 2) and the
+// number of pulses in the partition (1 to 16, inclusive)
+//
+// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8.3
+func (d *Decoder) partitionPulseCount(icdf [][]uint, block uint8, halves []uint8) {
+	// This process skips partitions without any pulses, i.e., where
+	// the initial pulse count from Section 4.2.7.8.2 was zero, or where the
+	// split in the prior level indicated that all of the pulses fell on the
+	// other side.  These partitions have nothing to code, so they require
+	// no PDF.
+	if block == 0 {
+		halves[0] = 0
+		halves[1] = 0
+	} else {
+		halves[0] = uint8(d.rangeDecoder.DecodeSymbolWithICDF(icdf[block-1]))
+		halves[1] = block - halves[0]
+	}
 }
 
 // Decode decodes many SILK subframes
