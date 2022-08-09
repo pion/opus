@@ -493,4 +493,148 @@ var (
 		{256, 1, 3, 8, 18, 35, 60, 92, 128, 164, 196, 221, 238, 248, 253, 255, 256},
 		{256, 1, 3, 7, 14, 27, 48, 76, 110, 146, 180, 208, 229, 242, 249, 253, 255, 256},
 	}
+
+	// +----------------+
+	// | PDF            |
+	// +----------------+
+	// | {136, 120}/256 |
+	// +----------------+
+	//
+	// Table 51: PDF for Excitation LSBs
+	icdfExcitationLSB = []uint{256, 136, 256}
+
+	// +-------------+-----------------------+-------------+---------------+
+	// | Signal Type | Quantization Offset   | Pulse Count | PDF           |
+	// |             | Type                  |             |               |
+	// +-------------+-----------------------+-------------+---------------+
+	// | Inactive    | Low                   | 0           | {2, 254}/256  |
+	// |             |                       |             |               |
+	// | Inactive    | Low                   | 1           | {207, 49}/256 |
+	// |             |                       |             |               |
+	// | Inactive    | Low                   | 2           | {189, 67}/256 |
+	// |             |                       |             |               |
+	// | Inactive    | Low                   | 3           | {179, 77}/256 |
+	// |             |                       |             |               |
+	// | Inactive    | Low                   | 4           | {174, 82}/256 |
+	// |             |                       |             |               |
+	// | Inactive    | Low                   | 5           | {163, 93}/256 |
+	// |             |                       |             |               |
+	// | Inactive    | Low                   | 6 or more   | {157, 99}/256 |
+	// |             |                       |             |               |
+	// | Inactive    | High                  | 0           | {58, 198}/256 |
+	// |             |                       |             |               |
+	// | Inactive    | High                  | 1           | {245, 11}/256 |
+	// |             |                       |             |               |
+	// | Inactive    | High                  | 2           | {238, 18}/256 |
+	// |             |                       |             |               |
+	// | Inactive    | High                  | 3           | {232, 24}/256 |
+	// |             |                       |             |               |
+	// | Inactive    | High                  | 4           | {225, 31}/256 |
+	// |             |                       |             |               |
+	// | Inactive    | High                  | 5           | {220, 36}/256 |
+	// |             |                       |             |               |
+	// | Inactive    | High                  | 6 or more   | {211, 45}/256 |
+	// |             |                       |             |               |
+	// | Unvoiced    | Low                   | 0           | {1, 255}/256  |
+	// |             |                       |             |               |
+	// | Unvoiced    | Low                   | 1           | {210, 46}/256 |
+	// |             |                       |             |               |
+	// | Unvoiced    | Low                   | 2           | {190, 66}/256 |
+	// |             |                       |             |               |
+	// | Unvoiced    | Low                   | 3           | {178, 78}/256 |
+	// |             |                       |             |               |
+	// | Unvoiced    | Low                   | 4           | {169, 87}/256 |
+	// |             |                       |             |               |
+	// | Unvoiced    | Low                   | 5           | {162, 94}/256 |
+	// |             |                       |             |               |
+	// | Unvoiced    | Low                   | 6 or more   | {152,104}/256 |
+	// |             |                       |             |               |
+	// | Unvoiced    | High                  | 0           | {48, 208}/256 |
+	// |             |                       |             |               |
+	// | Unvoiced    | High                  | 1           | {242, 14}/256 |
+	// |             |                       |             |               |
+	// | Unvoiced    | High                  | 2           | {235, 21}/256 |
+	// |             |                       |             |               |
+	// | Unvoiced    | High                  | 3           | {224, 32}/256 |
+	// |             |                       |             |               |
+	// | Unvoiced    | High                  | 4           | {214, 42}/256 |
+	// |             |                       |             |               |
+	// | Unvoiced    | High                  | 5           | {205, 51}/256 |
+	// |             |                       |             |               |
+	// | Unvoiced    | High                  | 6 or more   | {190, 66}/256 |
+	// |             |                       |             |               |
+	// | Voiced      | Low                   | 0           | {1, 255}/256  |
+	// |             |                       |             |               |
+	// | Voiced      | Low                   | 1           | {162, 94}/256 |
+	// |             |                       |             |               |
+	// | Voiced      | Low                   | 2           | {152,         |
+	// |             |                       |             | 104}/256      |
+	// |             |                       |             |               |
+	// | Voiced      | Low                   | 3           | {147,         |
+	// |             |                       |             | 109}/256      |
+	// |             |                       |             |               |
+	// | Voiced      | Low                   | 4           | {144, 112}/256|
+	// |             |                       |             |               |
+	// | Voiced      | Low                   | 5           | {141, 115}/256|
+	// |             |                       |             |               |
+	// | Voiced      | Low                   | 6 or more   | {138, 118}/256|
+	// |             |                       |             |               |
+	// | Voiced      | High                  | 0           | {8, 248}/256  |
+	// |             |                       |             |               |
+	// | Voiced      | High                  | 1           | {203, 53}/256 |
+	// |             |                       |             |               |
+	// | Voiced      | High                  | 2           | {187, 69}/256 |
+	// |             |                       |             |               |
+	// | Voiced      | High                  | 3           | {176, 80}/256 |
+	// |             |                       |             |               |
+	// | Voiced      | High                  | 4           | {168, 88}/256 |
+	// |             |                       |             |               |
+	// | Voiced      | High                  | 5           | {161, 95}/256 |
+	// |             |                       |             |               |
+	// | Voiced      | High                  | 6 or more   | {154,102}/256 |
+	// +-------------+-----------------------+-------------+---------------+
+	//
+	// Table 52: PDFs for Excitation Signs
+	icdfExcitationSignInactiveSignalLowQuantization0Pulse      = []uint{256, 2, 256}
+	icdfExcitationSignInactiveSignalLowQuantization1Pulse      = []uint{256, 207, 256}
+	icdfExcitationSignInactiveSignalLowQuantization2Pulse      = []uint{256, 189, 256}
+	icdfExcitationSignInactiveSignalLowQuantization3Pulse      = []uint{256, 179, 256}
+	icdfExcitationSignInactiveSignalLowQuantization4Pulse      = []uint{256, 174, 256}
+	icdfExcitationSignInactiveSignalLowQuantization5Pulse      = []uint{256, 163, 256}
+	icdfExcitationSignInactiveSignalLowQuantization6PlusPulse  = []uint{256, 157, 256}
+	icdfExcitationSignInactiveSignalHighQuantization0Pulse     = []uint{256, 58, 256}
+	icdfExcitationSignInactiveSignalHighQuantization1Pulse     = []uint{256, 245, 256}
+	icdfExcitationSignInactiveSignalHighQuantization2Pulse     = []uint{256, 238, 256}
+	icdfExcitationSignInactiveSignalHighQuantization3Pulse     = []uint{256, 232, 256}
+	icdfExcitationSignInactiveSignalHighQuantization4Pulse     = []uint{256, 225, 256}
+	icdfExcitationSignInactiveSignalHighQuantization5Pulse     = []uint{256, 220, 256}
+	icdfExcitationSignInactiveSignalHighQuantization6PlusPulse = []uint{256, 211, 256}
+	icdfExcitationSignUnvoicedSignalLowQuantization0Pulse      = []uint{256, 1, 256}
+	icdfExcitationSignUnvoicedSignalLowQuantization1Pulse      = []uint{256, 210, 256}
+	icdfExcitationSignUnvoicedSignalLowQuantization2Pulse      = []uint{256, 190, 256}
+	icdfExcitationSignUnvoicedSignalLowQuantization3Pulse      = []uint{256, 178, 256}
+	icdfExcitationSignUnvoicedSignalLowQuantization4Pulse      = []uint{256, 169, 256}
+	icdfExcitationSignUnvoicedSignalLowQuantization5Pulse      = []uint{256, 162, 256}
+	icdfExcitationSignUnvoicedSignalLowQuantization6PlusPulse  = []uint{256, 152, 256}
+	icdfExcitationSignUnvoicedSignalHighQuantization0Pulse     = []uint{256, 48, 256}
+	icdfExcitationSignUnvoicedSignalHighQuantization1Pulse     = []uint{256, 242, 256}
+	icdfExcitationSignUnvoicedSignalHighQuantization2Pulse     = []uint{256, 235, 256}
+	icdfExcitationSignUnvoicedSignalHighQuantization3Pulse     = []uint{256, 224, 256}
+	icdfExcitationSignUnvoicedSignalHighQuantization4Pulse     = []uint{256, 214, 256}
+	icdfExcitationSignUnvoicedSignalHighQuantization5Pulse     = []uint{256, 205, 256}
+	icdfExcitationSignUnvoicedSignalHighQuantization6PlusPulse = []uint{256, 190, 256}
+	icdfExcitationSignVoicedSignalLowQuantization0Pulse        = []uint{256, 1, 256}
+	icdfExcitationSignVoicedSignalLowQuantization1Pulse        = []uint{256, 162, 256}
+	icdfExcitationSignVoicedSignalLowQuantization2Pulse        = []uint{256, 152, 256}
+	icdfExcitationSignVoicedSignalLowQuantization3Pulse        = []uint{256, 147, 256}
+	icdfExcitationSignVoicedSignalLowQuantization4Pulse        = []uint{256, 144, 256}
+	icdfExcitationSignVoicedSignalLowQuantization5Pulse        = []uint{256, 141, 256}
+	icdfExcitationSignVoicedSignalLowQuantization6PlusPulse    = []uint{256, 138, 256}
+	icdfExcitationSignVoicedSignalHighQuantization0Pulse       = []uint{256, 8, 256}
+	icdfExcitationSignVoicedSignalHighQuantization1Pulse       = []uint{256, 203, 256}
+	icdfExcitationSignVoicedSignalHighQuantization2Pulse       = []uint{256, 187, 256}
+	icdfExcitationSignVoicedSignalHighQuantization3Pulse       = []uint{256, 176, 256}
+	icdfExcitationSignVoicedSignalHighQuantization4Pulse       = []uint{256, 168, 256}
+	icdfExcitationSignVoicedSignalHighQuantization5Pulse       = []uint{256, 161, 256}
+	icdfExcitationSignVoicedSignalHighQuantization6PlusPulse   = []uint{256, 154, 256}
 )

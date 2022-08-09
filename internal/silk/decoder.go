@@ -491,7 +491,7 @@ func (d *Decoder) decodeLinearCongruentialGeneratorSeed() uint32 {
 // position are required to have the same sign.
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8
-func (d *Decoder) decodeExcitation(nanoseconds int, bandwidth Bandwidth, voiceActivityDetected bool, lcgSeed uint32) {
+func (d *Decoder) decodeExcitation(nanoseconds int, bandwidth Bandwidth, voiceActivityDetected bool, lcgSeed uint32, signalType frameSignalType, quantizationOffsetType frameQuantizationOffsetType) {
 	// SILK fixes the dimension of the codebook to N = 16.  The excitation
 	// is made up of a number of "shell blocks", each 16 samples in size.
 	// Table 44 lists the number of shell blocks required for a SILK frame
@@ -590,7 +590,7 @@ func (d *Decoder) decodeExcitation(nanoseconds int, bandwidth Bandwidth, voiceAc
 	//
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8.3
 
-	excitation := make([]uint8, shellblocks*pulsecountLargestPartitionSize)
+	excitation := make([]int32, shellblocks*pulsecountLargestPartitionSize)
 	for i := range pulsecounts {
 		// This process skips partitions without any pulses, i.e., where
 		// the initial pulse count from Section 4.2.7.8.2 was zero, or where the
@@ -601,10 +601,11 @@ func (d *Decoder) decodeExcitation(nanoseconds int, bandwidth Bandwidth, voiceAc
 			continue
 		}
 
-		excitationIndex := 16 * i
+		excitationIndex := pulsecountLargestPartitionSize * i
 		samplePartition16 := make([]uint8, 2)
 		samplePartition8 := make([]uint8, 2)
 		samplePartition4 := make([]uint8, 2)
+		samplePartition2 := make([]uint8, 2)
 
 		// The location of pulses is coded by recursively partitioning each
 		// block into halves, and coding how many pulses fall on the left side
@@ -616,10 +617,169 @@ func (d *Decoder) decodeExcitation(nanoseconds int, bandwidth Bandwidth, voiceAc
 			for k := 0; k < 2; k++ {
 				d.partitionPulseCount(icdfPulseCountSplit4SamplePartitions, samplePartition8[k], samplePartition4)
 				for l := 0; l < 2; l++ {
-					d.partitionPulseCount(icdfPulseCountSplit2SamplePartitions, samplePartition4[l], excitation[excitationIndex:])
-					excitationIndex += 2
+					d.partitionPulseCount(icdfPulseCountSplit2SamplePartitions, samplePartition4[l], samplePartition2)
+					excitation[excitationIndex] = int32(samplePartition2[0])
+					excitationIndex++
+
+					excitation[excitationIndex] = int32(samplePartition2[1])
+					excitationIndex++
 				}
 			}
+		}
+	}
+
+	// After the decoder reads the pulse locations for all blocks, it reads
+	// the LSBs (if any) for each block in turn.  Inside each block, it
+	// reads all the LSBs for each coefficient in turn, even those where no
+	// pulses were allocated, before proceeding to the next one.
+	//
+	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8.4
+	for i := 0; i < len(excitation); i++ {
+		for bit := uint8(0); bit < lsbcounts[i/pulsecountLargestPartitionSize]; bit++ {
+			excitation[i] = (excitation[i] << 1) | int32(d.rangeDecoder.DecodeSymbolWithICDF(icdfExcitationLSB))
+		}
+	}
+
+	// After decoding the pulse locations and the LSBs, the decoder knows
+	// the magnitude of each coefficient in the excitation.
+	//
+	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8.5
+	for i := 0; i < len(excitation); i++ {
+		// It then decodes a sign for all coefficients
+		// with a non-zero magnitude
+		//
+		// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8.5
+		if excitation[i] == 0 {
+			continue
+		}
+
+		var icdf []uint
+		pulsecount := pulsecounts[i/pulsecountLargestPartitionSize]
+
+		// using one of the PDFs from Table 52.
+		//
+		// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8.5
+		switch signalType {
+		case frameSignalTypeInactive:
+			switch quantizationOffsetType {
+			case frameQuantizationOffsetTypeLow:
+				switch pulsecount {
+				case 0:
+					icdf = icdfExcitationSignInactiveSignalLowQuantization0Pulse
+				case 1:
+					icdf = icdfExcitationSignInactiveSignalLowQuantization1Pulse
+				case 2:
+					icdf = icdfExcitationSignInactiveSignalLowQuantization2Pulse
+				case 3:
+					icdf = icdfExcitationSignInactiveSignalLowQuantization3Pulse
+				case 4:
+					icdf = icdfExcitationSignInactiveSignalLowQuantization4Pulse
+				case 5:
+					icdf = icdfExcitationSignInactiveSignalLowQuantization5Pulse
+				default:
+					icdf = icdfExcitationSignInactiveSignalLowQuantization6PlusPulse
+				}
+			case frameQuantizationOffsetTypeHigh:
+				switch pulsecount {
+				case 0:
+					icdf = icdfExcitationSignInactiveSignalHighQuantization0Pulse
+				case 1:
+					icdf = icdfExcitationSignInactiveSignalHighQuantization1Pulse
+				case 2:
+					icdf = icdfExcitationSignInactiveSignalHighQuantization2Pulse
+				case 3:
+					icdf = icdfExcitationSignInactiveSignalHighQuantization3Pulse
+				case 4:
+					icdf = icdfExcitationSignInactiveSignalHighQuantization4Pulse
+				case 5:
+					icdf = icdfExcitationSignInactiveSignalHighQuantization5Pulse
+				default:
+					icdf = icdfExcitationSignInactiveSignalHighQuantization6PlusPulse
+				}
+
+			}
+		case frameSignalTypeUnvoiced:
+			switch quantizationOffsetType {
+			case frameQuantizationOffsetTypeLow:
+				switch pulsecount {
+				case 0:
+					icdf = icdfExcitationSignUnvoicedSignalLowQuantization0Pulse
+				case 1:
+					icdf = icdfExcitationSignUnvoicedSignalLowQuantization1Pulse
+				case 2:
+					icdf = icdfExcitationSignUnvoicedSignalLowQuantization2Pulse
+				case 3:
+					icdf = icdfExcitationSignUnvoicedSignalLowQuantization3Pulse
+				case 4:
+					icdf = icdfExcitationSignUnvoicedSignalLowQuantization4Pulse
+				case 5:
+					icdf = icdfExcitationSignUnvoicedSignalLowQuantization5Pulse
+				default:
+					icdf = icdfExcitationSignUnvoicedSignalLowQuantization6PlusPulse
+				}
+			case frameQuantizationOffsetTypeHigh:
+				switch pulsecount {
+				case 0:
+					icdf = icdfExcitationSignUnvoicedSignalHighQuantization0Pulse
+				case 1:
+					icdf = icdfExcitationSignUnvoicedSignalHighQuantization1Pulse
+				case 2:
+					icdf = icdfExcitationSignUnvoicedSignalHighQuantization2Pulse
+				case 3:
+					icdf = icdfExcitationSignUnvoicedSignalHighQuantization3Pulse
+				case 4:
+					icdf = icdfExcitationSignUnvoicedSignalHighQuantization4Pulse
+				case 5:
+					icdf = icdfExcitationSignUnvoicedSignalHighQuantization5Pulse
+				default:
+					icdf = icdfExcitationSignUnvoicedSignalHighQuantization6PlusPulse
+				}
+
+			}
+
+		case frameSignalTypeVoiced:
+			switch quantizationOffsetType {
+			case frameQuantizationOffsetTypeLow:
+				switch pulsecount {
+				case 0:
+					icdf = icdfExcitationSignVoicedSignalLowQuantization0Pulse
+				case 1:
+					icdf = icdfExcitationSignVoicedSignalLowQuantization1Pulse
+				case 2:
+					icdf = icdfExcitationSignVoicedSignalLowQuantization2Pulse
+				case 3:
+					icdf = icdfExcitationSignVoicedSignalLowQuantization3Pulse
+				case 4:
+					icdf = icdfExcitationSignVoicedSignalLowQuantization4Pulse
+				case 5:
+					icdf = icdfExcitationSignVoicedSignalLowQuantization5Pulse
+				default:
+					icdf = icdfExcitationSignVoicedSignalLowQuantization6PlusPulse
+				}
+			case frameQuantizationOffsetTypeHigh:
+				switch pulsecount {
+				case 0:
+					icdf = icdfExcitationSignVoicedSignalHighQuantization0Pulse
+				case 1:
+					icdf = icdfExcitationSignVoicedSignalHighQuantization1Pulse
+				case 2:
+					icdf = icdfExcitationSignVoicedSignalHighQuantization2Pulse
+				case 3:
+					icdf = icdfExcitationSignVoicedSignalHighQuantization3Pulse
+				case 4:
+					icdf = icdfExcitationSignVoicedSignalHighQuantization4Pulse
+				case 5:
+					icdf = icdfExcitationSignVoicedSignalHighQuantization5Pulse
+				default:
+					icdf = icdfExcitationSignVoicedSignalHighQuantization6PlusPulse
+				}
+			}
+		}
+
+		// If the value decoded is 0, then the coefficient magnitude is negated.
+		// Otherwise, it remains positive.
+		if d.rangeDecoder.DecodeSymbolWithICDF(icdf) == 0 {
+			excitation[i] *= -1
 		}
 	}
 }
