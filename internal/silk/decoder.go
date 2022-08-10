@@ -580,24 +580,17 @@ func (d *Decoder) decodePulseAndLSBCounts(shellblocks int, rateLevel uint32) (pu
 	return
 }
 
-// SILK codes the excitation using a modified version of the Pyramid
-// Vector Quantizer (PVQ) codebook [PVQ].  The PVQ codebook is designed
-// for Laplace-distributed values and consists of all sums of K signed,
-// unit pulses in a vector of dimension N, where two pulses at the same
-// position are required to have the same sign.
+// The locations of the pulses in each shell block follow the pulse
+// counts. As with the pulse counts, these locations are coded for all the shell blocks
+// before any of the remaining information for each block.  Unlike many
+// other codecs, SILK places no restriction on the distribution of
+// pulses within a shell block.  All of the pulses may be placed in a
+// single location, or each one in a unique location, or anything in
+// between.
 //
-// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8
-func (d *Decoder) decodeExcitation(signalType frameSignalType, quantizationOffsetType frameQuantizationOffsetType, lcgSeed uint32, pulsecounts, lsbcounts []uint8) {
-	// The locations of the pulses in each shell block follow the pulse
-	// counts. As with the pulse counts, these locations are coded for all the shell blocks
-	// before any of the remaining information for each block.  Unlike many
-	// other codecs, SILK places no restriction on the distribution of
-	// pulses within a shell block.  All of the pulses may be placed in a
-	// single location, or each one in a unique location, or anything in
-	// between.
-	//
-	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8.3
-	excitation := make([]int32, len(pulsecounts)*pulsecountLargestPartitionSize)
+// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8.3
+func (d *Decoder) decodePulseLocation(pulsecounts []uint8) (eRaw []int32) {
+	eRaw = make([]int32, len(pulsecounts)*pulsecountLargestPartitionSize)
 	for i := range pulsecounts {
 		// This process skips partitions without any pulses, i.e., where
 		// the initial pulse count from Section 4.2.7.8.2 was zero, or where the
@@ -608,7 +601,7 @@ func (d *Decoder) decodeExcitation(signalType frameSignalType, quantizationOffse
 			continue
 		}
 
-		excitationIndex := pulsecountLargestPartitionSize * i
+		eRawIndex := pulsecountLargestPartitionSize * i
 		samplePartition16 := make([]uint8, 2)
 		samplePartition8 := make([]uint8, 2)
 		samplePartition4 := make([]uint8, 2)
@@ -625,38 +618,44 @@ func (d *Decoder) decodeExcitation(signalType frameSignalType, quantizationOffse
 				d.partitionPulseCount(icdfPulseCountSplit4SamplePartitions, samplePartition8[k], samplePartition4)
 				for l := 0; l < 2; l++ {
 					d.partitionPulseCount(icdfPulseCountSplit2SamplePartitions, samplePartition4[l], samplePartition2)
-					excitation[excitationIndex] = int32(samplePartition2[0])
-					excitationIndex++
+					eRaw[eRawIndex] = int32(samplePartition2[0])
+					eRawIndex++
 
-					excitation[excitationIndex] = int32(samplePartition2[1])
-					excitationIndex++
+					eRaw[eRawIndex] = int32(samplePartition2[1])
+					eRawIndex++
 				}
 			}
 		}
 	}
 
-	// After the decoder reads the pulse locations for all blocks, it reads
-	// the LSBs (if any) for each block in turn.  Inside each block, it
-	// reads all the LSBs for each coefficient in turn, even those where no
-	// pulses were allocated, before proceeding to the next one.
-	//
-	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8.4
-	for i := 0; i < len(excitation); i++ {
+	return
+}
+
+// After the decoder reads the pulse locations for all blocks, it reads
+// the LSBs (if any) for each block in turn.  Inside each block, it
+// reads all the LSBs for each coefficient in turn, even those where no
+// pulses were allocated, before proceeding to the next one.
+//
+// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8.4
+func (d *Decoder) decodeExcitationLSB(eRaw []int32, lsbcounts []uint8) {
+	for i := 0; i < len(eRaw); i++ {
 		for bit := uint8(0); bit < lsbcounts[i/pulsecountLargestPartitionSize]; bit++ {
-			excitation[i] = (excitation[i] << 1) | int32(d.rangeDecoder.DecodeSymbolWithICDF(icdfExcitationLSB))
+			eRaw[i] = (eRaw[i] << 1) | int32(d.rangeDecoder.DecodeSymbolWithICDF(icdfExcitationLSB))
 		}
 	}
+}
 
-	// After decoding the pulse locations and the LSBs, the decoder knows
-	// the magnitude of each coefficient in the excitation.
-	//
-	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8.5
-	for i := 0; i < len(excitation); i++ {
+// After decoding the pulse locations and the LSBs, the decoder knows
+// the magnitude of each coefficient in the excitation.
+//
+// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8.5
+func (d *Decoder) decodeExcitationSign(eRaw []int32, signalType frameSignalType, quantizationOffsetType frameQuantizationOffsetType, pulsecounts []uint8) {
+	for i := 0; i < len(eRaw); i++ {
 		// It then decodes a sign for all coefficients
 		// with a non-zero magnitude
 		//
 		// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8.5
-		if excitation[i] == 0 {
+		if eRaw[i] == 0 {
 			continue
 		}
 
@@ -786,20 +785,26 @@ func (d *Decoder) decodeExcitation(signalType frameSignalType, quantizationOffse
 		// If the value decoded is 0, then the coefficient magnitude is negated.
 		// Otherwise, it remains positive.
 		if d.rangeDecoder.DecodeSymbolWithICDF(icdf) == 0 {
-			excitation[i] *= -1
+			eRaw[i] *= -1
 		}
 	}
 
-	for f := range excitation {
-		fmt.Println(excitation[f])
-	}
+}
 
+// SILK codes the excitation using a modified version of the Pyramid
+// Vector Quantizer (PVQ) codebook [PVQ].  The PVQ codebook is designed
+// for Laplace-distributed values and consists of all sums of K signed,
+// unit pulses in a vector of dimension N, where two pulses at the same
+// position are required to have the same sign.
+//
+// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8
+func (d *Decoder) decodeExcitation(signalType frameSignalType, quantizationOffsetType frameQuantizationOffsetType, seed uint32, pulsecounts, lsbcounts []uint8) (eQ23 []int32) {
 	// After the signs have been read, there is enough information to
 	// reconstruct the complete excitation signal.  This requires adding a
 	// constant quantization offset to each non-zero sample and then
 	// pseudorandomly inverting and offsetting every sample.
 	//
-	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8.5
+	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8.6
 
 	// The constant quantization offset varies depending on the signal type and
 	// quantization offset type
@@ -821,7 +826,7 @@ func (d *Decoder) decodeExcitation(signalType frameSignalType, quantizationOffse
 	// | Voiced      | High                     |                       25 |
 	// +-------------+--------------------------+--------------------------+
 	// Table 53: Excitation Quantization Offsets
-	var offsetQ23 int
+	var offsetQ23 int32
 	switch {
 	case signalType == frameSignalTypeInactive && quantizationOffsetType == frameQuantizationOffsetTypeLow:
 		offsetQ23 = 25
@@ -837,11 +842,18 @@ func (d *Decoder) decodeExcitation(signalType frameSignalType, quantizationOffse
 		offsetQ23 = 25
 	}
 
-	for i := 0; i < len(excitation); i++ {
-		// Let e_raw[i] be the raw excitation value at position i,
-		// with a magnitude composed of the pulses at that location (see Section 4.2.7.8.3)
-		// combined with any additional LSBs (see Section 4.2.7.8.4),
-		// and with the corresponding sign decoded in Section 4.2.7.8.5.
+	// Let e_raw[i] be the raw excitation value at position i,
+	// with a magnitude composed of the pulses at that location (see Section 4.2.7.8.3)
+	eRaw := d.decodePulseLocation(pulsecounts)
+
+	// combined with any additional LSBs (see Section 4.2.7.8.4),
+	d.decodeExcitationLSB(eRaw, lsbcounts)
+
+	// and with the corresponding sign decoded in Section 4.2.7.8.5.
+	d.decodeExcitationSign(eRaw, signalType, quantizationOffsetType, pulsecounts)
+
+	eQ23 = make([]int32, len(eRaw))
+	for i := 0; i < len(eRaw); i++ {
 		// Additionally, let seed be the current pseudorandom seed, which is initialized to the
 		// value decoded from Section 4.2.7.7 for the first sample in the current SILK frame, and
 		// updated for each subsequent sample according to the procedure below.
@@ -859,8 +871,15 @@ func (d *Decoder) decodeExcitation(signalType frameSignalType, quantizationOffse
 		// e_Q23[i] value may require more than 16 bits per sample, but it will
 		// not require more than 23, including the sign.
 
-		panic(offsetQ23)
+		eQ23[i] = (eRaw[i] << 8) - int32(sign(int(eRaw[i])))*20 + offsetQ23
+		seed = (196314165*seed + 907633515) & 0xFFFFFFFF
+		if seed&0x80000000 != 0 {
+			eQ23[i] *= -1
+		}
+		seed = (seed + uint32(eRaw[i])) & 0xFFFFFFFF
 	}
+
+	return
 }
 
 // The PDF to use is chosen by the size of the current partition (16, 8, 4, or 2) and the
