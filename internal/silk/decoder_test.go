@@ -103,5 +103,9 @@ func TestExcitation(t *testing.T) {
 	d := &Decoder{rangeDecoder: createRangeDecoder(silkFrame, 71, 851775140, 846837397)}
 
 	lcgSeed := d.decodeLinearCongruentialGeneratorSeed()
-	d.decodeExcitation(nanoseconds20Ms, BandwidthWideband, false, lcgSeed, frameSignalTypeUnvoiced, frameQuantizationOffsetTypeLow)
+	shellblocks := d.decodeShellblocks(nanoseconds20Ms, BandwidthWideband)
+	rateLevel := d.decodeRatelevel(false)
+	pulsecounts, lsbcounts := d.decodePulseAndLSBCounts(shellblocks, rateLevel)
+
+	d.decodeExcitation(frameSignalTypeUnvoiced, frameQuantizationOffsetTypeLow, lcgSeed, pulsecounts, lsbcounts)
 }

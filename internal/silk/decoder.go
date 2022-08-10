@@ -484,38 +484,31 @@ func (d *Decoder) decodeLinearCongruentialGeneratorSeed() uint32 {
 	return d.rangeDecoder.DecodeSymbolWithICDF(icdfLinearCongruentialGeneratorSeed)
 }
 
-// SILK codes the excitation using a modified version of the Pyramid
-// Vector Quantizer (PVQ) codebook [PVQ].  The PVQ codebook is designed
-// for Laplace-distributed values and consists of all sums of K signed,
-// unit pulses in a vector of dimension N, where two pulses at the same
-// position are required to have the same sign.
+// SILK fixes the dimension of the codebook to N = 16.  The excitation
+// is made up of a number of "shell blocks", each 16 samples in size.
+// Table 44 lists the number of shell blocks required for a SILK frame
+// for each possible audio bandwidth and frame size.
+//
+// +-----------------+------------+------------------------+
+// | Audio Bandwidth | Frame Size | Number of Shell Blocks |
+// +-----------------+------------+------------------------+
+// | NB              | 10 ms      |                      5 |
+// |                 |            |                        |
+// | MB              | 10 ms      |                      8 |
+// |                 |            |                        |
+// | WB              | 10 ms      |                     10 |
+// |                 |            |                        |
+// | NB              | 20 ms      |                     10 |
+// |                 |            |                        |
+// | MB              | 20 ms      |                     15 |
+// |                 |            |                        |
+// | WB              | 20 ms      |                     20 |
+// +-----------------+------------+------------------------+
+//
+//  Table 44: Number of Shell Blocks Per SILK Frame
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8
-func (d *Decoder) decodeExcitation(nanoseconds int, bandwidth Bandwidth, voiceActivityDetected bool, lcgSeed uint32, signalType frameSignalType, quantizationOffsetType frameQuantizationOffsetType) {
-	// SILK fixes the dimension of the codebook to N = 16.  The excitation
-	// is made up of a number of "shell blocks", each 16 samples in size.
-	// Table 44 lists the number of shell blocks required for a SILK frame
-	// for each possible audio bandwidth and frame size.
-	//
-	// +-----------------+------------+------------------------+
-	// | Audio Bandwidth | Frame Size | Number of Shell Blocks |
-	// +-----------------+------------+------------------------+
-	// | NB              | 10 ms      |                      5 |
-	// |                 |            |                        |
-	// | MB              | 10 ms      |                      8 |
-	// |                 |            |                        |
-	// | WB              | 10 ms      |                     10 |
-	// |                 |            |                        |
-	// | NB              | 20 ms      |                     10 |
-	// |                 |            |                        |
-	// | MB              | 20 ms      |                     15 |
-	// |                 |            |                        |
-	// | WB              | 20 ms      |                     20 |
-	// +-----------------+------------+------------------------+
-	//
-	//  Table 44: Number of Shell Blocks Per SILK Frame
-	shellblocks := int(0)
-
+func (d *Decoder) decodeShellblocks(nanoseconds int, bandwidth Bandwidth) (shellblocks int) {
 	switch {
 	case bandwidth == BandwidthNarrowband && nanoseconds == nanoseconds10Ms:
 		shellblocks = 5
@@ -530,25 +523,29 @@ func (d *Decoder) decodeExcitation(nanoseconds int, bandwidth Bandwidth, voiceAc
 	case bandwidth == BandwidthWideband && nanoseconds == nanoseconds20Ms:
 		shellblocks = 20
 	}
+	return
+}
 
-	// The first symbol in the excitation is a "rate level", which is an
-	// index from 0 to 8, inclusive, coded using the PDF in Table 45
-	//
-	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8.1
-	var rateLevel uint32
+// The first symbol in the excitation is a "rate level", which is an
+// index from 0 to 8, inclusive, coded using the PDF in Table 45
+//
+// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8.1
+func (d *Decoder) decodeRatelevel(voiceActivityDetected bool) uint32 {
 	if voiceActivityDetected {
-		rateLevel = d.rangeDecoder.DecodeSymbolWithICDF(icdfRateLevelVoiced)
-	} else {
-		rateLevel = d.rangeDecoder.DecodeSymbolWithICDF(icdfRateLevelUnvoiced)
+		return d.rangeDecoder.DecodeSymbolWithICDF(icdfRateLevelVoiced)
 	}
 
-	// The total number of pulses in each of the shell blocks follows the
-	// rate level.  The pulse counts for all of the shell blocks are coded
-	// consecutively, before the content of any of the blocks.
-	//
-	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8.2
-	pulsecounts := make([]uint8, shellblocks)
-	lsbcounts := make([]uint8, shellblocks)
+	return d.rangeDecoder.DecodeSymbolWithICDF(icdfRateLevelUnvoiced)
+}
+
+// The total number of pulses in each of the shell blocks follows the
+// rate level.  The pulse counts for all of the shell blocks are coded
+// consecutively, before the content of any of the blocks.
+//
+// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8.2
+func (d *Decoder) decodePulseAndLSBCounts(shellblocks int, rateLevel uint32) (pulsecounts []uint8, lsbcounts []uint8) {
+	pulsecounts = make([]uint8, shellblocks)
+	lsbcounts = make([]uint8, shellblocks)
 	for i := 0; i < shellblocks; i++ {
 		pulsecounts[i] = uint8(d.rangeDecoder.DecodeSymbolWithICDF(icdfPulseCount[rateLevel]))
 
@@ -580,6 +577,17 @@ func (d *Decoder) decodeExcitation(nanoseconds int, bandwidth Bandwidth, voiceAc
 		}
 	}
 
+	return
+}
+
+// SILK codes the excitation using a modified version of the Pyramid
+// Vector Quantizer (PVQ) codebook [PVQ].  The PVQ codebook is designed
+// for Laplace-distributed values and consists of all sums of K signed,
+// unit pulses in a vector of dimension N, where two pulses at the same
+// position are required to have the same sign.
+//
+// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8
+func (d *Decoder) decodeExcitation(signalType frameSignalType, quantizationOffsetType frameQuantizationOffsetType, lcgSeed uint32, pulsecounts, lsbcounts []uint8) {
 	// The locations of the pulses in each shell block follow the pulse
 	// counts. As with the pulse counts, these locations are coded for all the shell blocks
 	// before any of the remaining information for each block.  Unlike many
@@ -589,8 +597,7 @@ func (d *Decoder) decodeExcitation(nanoseconds int, bandwidth Bandwidth, voiceAc
 	// between.
 	//
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8.3
-
-	excitation := make([]int32, shellblocks*pulsecountLargestPartitionSize)
+	excitation := make([]int32, len(pulsecounts)*pulsecountLargestPartitionSize)
 	for i := range pulsecounts {
 		// This process skips partitions without any pulses, i.e., where
 		// the initial pulse count from Section 4.2.7.8.2 was zero, or where the
@@ -781,6 +788,78 @@ func (d *Decoder) decodeExcitation(nanoseconds int, bandwidth Bandwidth, voiceAc
 		if d.rangeDecoder.DecodeSymbolWithICDF(icdf) == 0 {
 			excitation[i] *= -1
 		}
+	}
+
+	for f := range excitation {
+		fmt.Println(excitation[f])
+	}
+
+	// After the signs have been read, there is enough information to
+	// reconstruct the complete excitation signal.  This requires adding a
+	// constant quantization offset to each non-zero sample and then
+	// pseudorandomly inverting and offsetting every sample.
+	//
+	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8.5
+
+	// The constant quantization offset varies depending on the signal type and
+	// quantization offset type
+
+	// +-------------+--------------------------+--------------------------+
+	// | Signal Type | Quantization Offset Type |      Quantization Offset |
+	// |             |                          |                    (Q23) |
+	// +-------------+--------------------------+--------------------------+
+	// | Inactive    | Low                      |                       25 |
+	// |             |                          |                          |
+	// | Inactive    | High                     |                       60 |
+	// |             |                          |                          |
+	// | Unvoiced    | Low                      |                       25 |
+	// |             |                          |                          |
+	// | Unvoiced    | High                     |                       60 |
+	// |             |                          |                          |
+	// | Voiced      | Low                      |                        8 |
+	// |             |                          |                          |
+	// | Voiced      | High                     |                       25 |
+	// +-------------+--------------------------+--------------------------+
+	// Table 53: Excitation Quantization Offsets
+	var offsetQ23 int
+	switch {
+	case signalType == frameSignalTypeInactive && quantizationOffsetType == frameQuantizationOffsetTypeLow:
+		offsetQ23 = 25
+	case signalType == frameSignalTypeInactive && quantizationOffsetType == frameQuantizationOffsetTypeHigh:
+		offsetQ23 = 60
+	case signalType == frameSignalTypeUnvoiced && quantizationOffsetType == frameQuantizationOffsetTypeLow:
+		offsetQ23 = 25
+	case signalType == frameSignalTypeUnvoiced && quantizationOffsetType == frameQuantizationOffsetTypeHigh:
+		offsetQ23 = 25
+	case signalType == frameSignalTypeVoiced && quantizationOffsetType == frameQuantizationOffsetTypeLow:
+		offsetQ23 = 8
+	case signalType == frameSignalTypeVoiced && quantizationOffsetType == frameQuantizationOffsetTypeHigh:
+		offsetQ23 = 25
+	}
+
+	for i := 0; i < len(excitation); i++ {
+		// Let e_raw[i] be the raw excitation value at position i,
+		// with a magnitude composed of the pulses at that location (see Section 4.2.7.8.3)
+		// combined with any additional LSBs (see Section 4.2.7.8.4),
+		// and with the corresponding sign decoded in Section 4.2.7.8.5.
+		// Additionally, let seed be the current pseudorandom seed, which is initialized to the
+		// value decoded from Section 4.2.7.7 for the first sample in the current SILK frame, and
+		// updated for each subsequent sample according to the procedure below.
+		// Finally, let offset_Q23 be the quantization offset from Table 53.
+		// Then the following procedure produces the final reconstructed
+		// excitation value, e_Q23[i]:
+
+		//      e_Q23[i] = (e_raw[i] << 8) - sign(e_raw[i])*20 + offset_Q23;
+		//          seed = (196314165*seed + 907633515) & 0xFFFFFFFF;
+		//      e_Q23[i] = (seed & 0x80000000) ? -e_Q23[i] : e_Q23[i];
+		//          seed = (seed + e_raw[i]) & 0xFFFFFFFF;
+
+		// When e_raw[i] is zero, sign() returns 0 by the definition in
+		// Section 1.1.4, so the factor of 20 does not get added.  The final
+		// e_Q23[i] value may require more than 16 bits per sample, but it will
+		// not require more than 23, including the sign.
+
+		panic(offsetQ23)
 	}
 }
 
