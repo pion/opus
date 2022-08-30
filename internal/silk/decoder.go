@@ -1,8 +1,6 @@
 package silk
 
 import (
-	"fmt"
-
 	"github.com/pion/opus/internal/rangecoding"
 )
 
@@ -312,9 +310,9 @@ func (d *Decoder) normalizeLineSpectralFrequencyCoefficients(bandwidth Bandwidth
 	// Let d_LPC be the order of the codebook, i.e., 10 for NB and MB, and 16 for WB
 	dLPC := len(resQ10)
 
-	nlsfQ15 = make([]int16, len(resQ10))
-	w2Q18 := make([]uint, len(resQ10))
-	wQ9 := make([]int16, len(resQ10))
+	nlsfQ15 = make([]int16, dLPC)
+	w2Q18 := make([]uint, dLPC)
+	wQ9 := make([]int16, dLPC)
 
 	cb1Q8 := codebookNormalizedLSFStageOneNarrowbandOrMediumband
 	if bandwidth == BandwidthWideband {
@@ -412,8 +410,8 @@ func (d *Decoder) normalizeLSFInterpolation() error {
 	return nil
 }
 
-func (d *Decoder) convertNormalizedLSFsToLPCCoefficients(I1 uint32, nlsfQ1 []int16, bandwidth Bandwidth) {
-	cQ17 := make([]int32, len(nlsfQ1))
+func (d *Decoder) convertNormalizedLSFsToLPCCoefficients(nlsfQ15 []int16, bandwidth Bandwidth) (a32Q17 []int32) {
+	cQ17 := make([]int32, len(nlsfQ15))
 	cosQ12 := q12CosineTableForLSFConverion
 
 	ordering := lsfOrderingForPolynomialEvaluationNarrowbandAndMediumband
@@ -435,19 +433,21 @@ func (d *Decoder) convertNormalizedLSFsToLPCCoefficients(I1 uint32, nlsfQ1 []int
 	// i'th entry of Table 28.
 	//
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.6
-	for k := range nlsfQ1 {
-		i := int32(nlsfQ1[k] >> 8)
-		f := int32(nlsfQ1[k] & 255)
+	for k := range nlsfQ15 {
+		i := int32(nlsfQ15[k] >> 8)
+		f := int32(nlsfQ15[k] & 255)
 
 		cQ17[ordering[k]] = (cosQ12[i]*256 +
 			(cosQ12[i+1]-cosQ12[i])*f + 4) >> 3
 	}
 
-	// Given the list of cosine values, silk_NLSF2A_find_poly() (NLSF2A.c)
-	// computes the coefficients of P and Q, described here via a simple
-	// recurrence.  Let p_Q16[k][j] and q_Q16[k][j] be the coefficients of
-	// the products of the first (k+1) root pairs for P and Q, with j
-	// indexing the coefficient number.  Only the first (k+2) coefficients
+	pQ16 := make([]int32, (len(nlsfQ15)/2)+1)
+	qQ16 := make([]int32, (len(nlsfQ15)/2)+1)
+
+	// Given the list of cosine values compute the coefficients of P and Q,
+	// described here via a simple recurrence.  Let p_Q16[k][j] and q_Q16[k][j]
+	// be the coefficients of the products of the first (k+1) root pairs for P and
+	// Q, with j indexing the coefficient number.  Only the first (k+2) coefficients
 	// are needed, as the products are symmetric.  Let
 	//
 	//      p_Q16[0][0] = q_Q16[0][0] = 1<<16
@@ -455,6 +455,15 @@ func (d *Decoder) convertNormalizedLSFsToLPCCoefficients(I1 uint32, nlsfQ1 []int
 	//      q_Q16[0][1] = -c_Q17[1]
 	//      d2 = d_LPC/2
 	//
+	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.6
+
+	pQ16[0] = 1 << 16
+	qQ16[0] = 1 << 16
+	pQ16[1] = -cQ17[0]
+	qQ16[1] = -cQ17[1]
+	dLPC := len(nlsfQ15)
+	d2 := dLPC / 2
+
 	// As boundary conditions, assume p_Q16[k][j] = q_Q16[k][j] = 0 for all j < 0.
 	// Also, assume (because of the symmetry)
 	//
@@ -462,15 +471,51 @@ func (d *Decoder) convertNormalizedLSFsToLPCCoefficients(I1 uint32, nlsfQ1 []int
 	//      q_Q16[k][k+2] = q_Q16[k][k]
 	//
 	// Then, for 0 < k < d2 and 0 <= j <= k+1,
-
+	//
 	//      p_Q16[k][j] = p_Q16[k-1][j] + p_Q16[k-1][j-2]
 	//                    - ((c_Q17[2*k]*p_Q16[k-1][j-1] + 32768)>>16)
-
+	//
 	//      q_Q16[k][j] = q_Q16[k-1][j] + q_Q16[k-1][j-2]
 	//                    - ((c_Q17[2*k+1]*q_Q16[k-1][j-1] + 32768)>>16)
+	//
+	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.6
 
-	fmt.Println(cQ17)
-	panic("")
+	for k := 1; k < d2; k++ {
+		pQ16[k+1] = pQ16[k-1]*2 - int32(((int64(cQ17[2*k])*int64(pQ16[k]))+32768)>>16)
+		qQ16[k+1] = qQ16[k-1]*2 - int32(((int64(cQ17[(2*k)+1])*int64(qQ16[k]))+32768)>>16)
+
+		for j := k; j > 1; j-- {
+			pQ16[j] += pQ16[j-2] - int32(((int64(cQ17[2*k])*int64(pQ16[j-1]))+32768)>>16)
+			qQ16[j] += qQ16[j-2] - int32(((int64(cQ17[(2*k)+1])*int64(qQ16[j-1]))+32768)>>16)
+		}
+
+		pQ16[1] -= cQ17[2*k]
+		qQ16[1] -= cQ17[2*k+1]
+	}
+
+	// silk_NLSF2A() uses the values from the last row of this recurrence to
+	// reconstruct a 32-bit version of the LPC filter (without the leading
+	// 1.0 coefficient), a32_Q17[k], 0 <= k < d2:
+	//
+	//      a32_Q17[k]         = -(q_Q16[d2-1][k+1] - q_Q16[d2-1][k])
+	//                           - (p_Q16[d2-1][k+1] + p_Q16[d2-1][k]))
+	//
+	//      a32_Q17[d_LPC-k-1] =  (q_Q16[d2-1][k+1] - q_Q16[d2-1][k])
+	//                           - (p_Q16[d2-1][k+1] + p_Q16[d2-1][k]))
+	//
+	// The sum and difference of two terms from each of the p_Q16 and q_Q16
+	// coefficient lists reflect the (1 + z**-1) and (1 - z**-1) factors of
+	// P and Q, respectively.  The promotion of the expression from Q16 to
+	// Q17 implicitly scales the result by 1/2.
+	//
+	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.6
+
+	a32Q17 = make([]int32, len(nlsfQ15))
+	for k := 0; k < d2; k++ {
+		a32Q17[k] = -(qQ16[k+1] - qQ16[k]) - (pQ16[k+1] + pQ16[k])
+		a32Q17[dLPC-k-1] = (qQ16[k+1] - qQ16[k]) - (pQ16[k+1] + pQ16[k])
+	}
+	return
 }
 
 // As described in Section 4.2.7.8.6, SILK uses a Linear Congruential
@@ -959,7 +1004,7 @@ func (d *Decoder) Decode(in []byte, isStereo bool, nanoseconds int, bandwidth Ba
 	resQ10 := d.normalizeLineSpectralFrequencyStageTwo(bandwidth, I1)
 
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.3
-	nlsfQ1 := d.normalizeLineSpectralFrequencyCoefficients(bandwidth, resQ10, I1)
+	nlsfQ15 := d.normalizeLineSpectralFrequencyCoefficients(bandwidth, resQ10, I1)
 
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.4
 	d.normalizeLSFStabilization()
@@ -970,7 +1015,7 @@ func (d *Decoder) Decode(in []byte, isStereo bool, nanoseconds int, bandwidth Ba
 	}
 
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.6
-	d.convertNormalizedLSFsToLPCCoefficients(I1, nlsfQ1, bandwidth)
+	d.convertNormalizedLSFsToLPCCoefficients(nlsfQ15, bandwidth)
 
 	return
 }

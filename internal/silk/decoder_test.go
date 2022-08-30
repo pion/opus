@@ -98,6 +98,25 @@ func TestNormalizeLineSpectralFrequencyCoefficients(t *testing.T) {
 	}
 }
 
+func TestConvertNormalizedLSFsToLPCCoefficients(t *testing.T) {
+	d := &Decoder{}
+
+	nlsfQ15 := []int16{
+		0x854, 0xe00, 0x1580, 0x1d00, 0x2500, 0x2c80, 0x3480,
+		0x3c00, 0x4380, 0x4b00, 0x5280, 0x5a00, 0x6200, 0x6980,
+		0x7100, 0x7880,
+	}
+
+	expectedA32Q17 := []int32{
+		12974, 9765, 4176, 3646, -3766, -4429, -2292, -4663,
+		-3441, -3848, -4493, -1614, -1960, -3112, -2153, -2898,
+	}
+
+	if !reflect.DeepEqual(d.convertNormalizedLSFsToLPCCoefficients(nlsfQ15, BandwidthWideband), expectedA32Q17) {
+		t.Fatal()
+	}
+}
+
 func TestExcitation(t *testing.T) {
 	expected := []int32{
 		25, -25, -25, -25, 25, 25, -25, 25, 25, -25, 25, -25, -25, -25, 25, 25, -25,
