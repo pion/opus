@@ -946,6 +946,92 @@ func (d *Decoder) partitionPulseCount(icdf [][]uint, block uint8, halves []uint8
 	}
 }
 
+// The a32_Q17[] coefficients are too large to fit in a 16-bit value,
+// which significantly increases the cost of applying this filter in
+// fixed-point decoders.  Reducing them to Q12 precision doesn't incur
+// any significant quality loss, but still does not guarantee they will
+// fit.
+//
+// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.7
+func (d *Decoder) limitLPCCoefficientsRange(a32Q17 []int32) {
+	bandwidthExpansionRound := 0
+	for ; bandwidthExpansionRound < 10; bandwidthExpansionRound++ {
+
+		// For each round, the process first finds the index k such that
+		// abs(a32_Q17[k]) is largest, breaking ties by choosing the lowest
+		// value of k.
+		//
+		// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.7
+		maxabsQ17K := uint(0)
+		maxabsQ17 := uint(0)
+
+		for k, val := range a32Q17 {
+			abs := int32(sign(int(val))) * val
+			if maxabsQ17 < uint(abs) {
+				maxabsQ17K = uint(k)
+				maxabsQ17 = uint(abs)
+			}
+		}
+
+		// Then, it computes the corresponding Q12 precision value,
+		// maxabs_Q12, subject to an upper bound to avoid overflow in subsequent
+		// computations:
+		//
+		//    maxabs_Q12 = min((maxabs_Q17 + 16) >> 5, 163838)
+		//
+		// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.7
+
+		maxabsQ12 := minUint((maxabsQ17+16)>>5, 163838)
+
+		// If this is larger than 32767, the procedure derives the chirp factor,
+		// sc_Q16[0], to use in the bandwidth expansion as
+		//
+		//                       (maxabs_Q12 - 32767) << 14
+		//   sc_Q16[0] = 65470 - --------------------------
+		//                       (maxabs_Q12 * (k+1)) >> 2
+		//
+		// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.7
+		if maxabsQ12 > 32767 {
+			scQ16 := make([]uint, len(a32Q17))
+
+			scQ16[0] = uint(65470)
+			scQ16[0] -= ((maxabsQ12 - 32767) << 14) / ((maxabsQ12 * (maxabsQ17K + 1)) >> 2)
+
+			// silk_bwexpander_32() (bwexpander_32.c) performs the bandwidth
+			// expansion (again, only when maxabs_Q12 is greater than 32767) using
+			// the following recurrence:
+			//
+			//            a32_Q17[k] = (a32_Q17[k]*sc_Q16[k]) >> 16
+			//
+			//           sc_Q16[k+1] = (sc_Q16[0]*sc_Q16[k] + 32768) >> 16
+			//
+			// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.7
+			for k := 0; k < len(a32Q17); k++ {
+				a32Q17[k] = (a32Q17[k] * int32(scQ16[k])) >> 16
+				if len(scQ16) <= k {
+					scQ16[k+1] = (scQ16[0]*scQ16[k] + 32768) >> 16
+				}
+			}
+		} else {
+			break
+		}
+	}
+
+	// After 10 rounds of bandwidth expansion are performed, they are simply
+	// saturated to 16 bits:
+	//
+	//     a32_Q17[k] = clamp(-32768, (a32_Q17[k] + 16) >> 5, 32767) << 5
+	//
+	// Because this performs the actual saturation in the Q12 domain, but
+	// saturation is not performed if maxabs_Q12 drops to 32767 or less
+	// prior to the 10th round.
+	if bandwidthExpansionRound == 9 {
+		for k := 0; k < len(a32Q17); k++ {
+			a32Q17[k] = clamp(-32768, (a32Q17[k]+16)>>5, 32767) << 5
+		}
+	}
+}
+
 // Decode decodes many SILK subframes
 //   An overview of the decoder is given in Figure 14.
 //
@@ -1015,7 +1101,9 @@ func (d *Decoder) Decode(in []byte, isStereo bool, nanoseconds int, bandwidth Ba
 	}
 
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.6
-	d.convertNormalizedLSFsToLPCCoefficients(nlsfQ15, bandwidth)
+	a32Q17 := d.convertNormalizedLSFsToLPCCoefficients(nlsfQ15, bandwidth)
+
+	d.limitLPCCoefficientsRange(a32Q17)
 
 	return
 }

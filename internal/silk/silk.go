@@ -45,6 +45,14 @@ func maxInt32(a, b int32) int32 {
 	return b
 }
 
+func minUint(a, b uint) uint {
+	if a > b {
+		return b
+	}
+
+	return a
+}
+
 func clamp(low, in, high int32) int32 {
 	if in > high {
 		return high

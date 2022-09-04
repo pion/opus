@@ -117,6 +117,16 @@ func TestConvertNormalizedLSFsToLPCCoefficients(t *testing.T) {
 	}
 }
 
+func TestLimitLPCCoefficientsRange(t *testing.T) {
+	d := &Decoder{}
+	A32Q17 := []int32{
+		12974, 9765, 4176, 3646, -3766, -4429, -2292, -4663,
+		-3441, -3848, -4493, -1614, -1960, -3112, -2153, -2898,
+	}
+
+	d.limitLPCCoefficientsRange(A32Q17)
+}
+
 func TestExcitation(t *testing.T) {
 	expected := []int32{
 		25, -25, -25, -25, 25, 25, -25, 25, 25, -25, 25, -25, -25, -25, 25, 25, -25,
