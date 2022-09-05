@@ -7,4 +7,5 @@ var (
 	errUnsupportedSilkStereo               = errors.New("silk decoder does not support stereo")
 	errUnsupportedSilkLowBitrateRedundancy = errors.New("silk decoder does not low bit-rate redundancy")
 	errUnsupportedLSFInterpolation         = errors.New("silk decoder does not support LSF Interpolation yet")
+	errUnsupportedVoicedFrames             = errors.New("silk decoder does not support voiced frames")
 )

@@ -12,6 +12,9 @@ type Decoder struct {
 	// Have we decoded a frame yet?
 	haveDecoded bool
 
+	// Is the previous frame a voiced frame?
+	isPreviousFrameVoiced bool
+
 	// TODO, should have dedicated frame state
 	logGain       uint32
 	subframeState [4]struct {
@@ -385,7 +388,7 @@ func (d *Decoder) normalizeLineSpectralFrequencyCoefficients(bandwidth Bandwidth
 // percentile of a large training set).
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.4
-func (d *Decoder) normalizeLSFStabilization() {
+func (d *Decoder) normalizeLSFStabilization(nlsfQ15 []int16) {
 	// TODO
 }
 
@@ -395,7 +398,7 @@ func (d *Decoder) normalizeLSFStabilization() {
 // (in the same channel) and the current frame
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.5
-func (d *Decoder) normalizeLSFInterpolation() error {
+func (d *Decoder) normalizeLSFInterpolation(nlsfQ15 []int16) (n1Q15 []int16, err error) {
 	// Let n2_Q15[k] be the normalized LSF coefficients decoded by the
 	// procedure in Section 4.2.7.5, n0_Q15[k] be the LSF coefficients
 	// decoded for the prior frame, and w_Q2 be the interpolation factor.
@@ -404,14 +407,17 @@ func (d *Decoder) normalizeLSFInterpolation() error {
 	//
 	//      n1_Q15[k] = n0_Q15[k] + (w_Q2*(n2_Q15[k] - n0_Q15[k]) >> 2)
 	if wQ2 := d.rangeDecoder.DecodeSymbolWithICDF(icdfNormalizedLSFInterpolationIndex); wQ2 != 4 {
-		return errUnsupportedLSFInterpolation
+		return nil, errUnsupportedLSFInterpolation
 	}
 
-	return nil
+	// TODO
+	n1Q15 = nlsfQ15
+
+	return n1Q15, nil
 }
 
-func (d *Decoder) convertNormalizedLSFsToLPCCoefficients(nlsfQ15 []int16, bandwidth Bandwidth) (a32Q17 []int32) {
-	cQ17 := make([]int32, len(nlsfQ15))
+func (d *Decoder) convertNormalizedLSFsToLPCCoefficients(n1Q15 []int16, bandwidth Bandwidth) (a32Q17 []int32) {
+	cQ17 := make([]int32, len(n1Q15))
 	cosQ12 := q12CosineTableForLSFConverion
 
 	ordering := lsfOrderingForPolynomialEvaluationNarrowbandAndMediumband
@@ -433,16 +439,16 @@ func (d *Decoder) convertNormalizedLSFsToLPCCoefficients(nlsfQ15 []int16, bandwi
 	// i'th entry of Table 28.
 	//
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.6
-	for k := range nlsfQ15 {
-		i := int32(nlsfQ15[k] >> 8)
-		f := int32(nlsfQ15[k] & 255)
+	for k := range n1Q15 {
+		i := int32(n1Q15[k] >> 8)
+		f := int32(n1Q15[k] & 255)
 
 		cQ17[ordering[k]] = (cosQ12[i]*256 +
 			(cosQ12[i+1]-cosQ12[i])*f + 4) >> 3
 	}
 
-	pQ16 := make([]int32, (len(nlsfQ15)/2)+1)
-	qQ16 := make([]int32, (len(nlsfQ15)/2)+1)
+	pQ16 := make([]int32, (len(n1Q15)/2)+1)
+	qQ16 := make([]int32, (len(n1Q15)/2)+1)
 
 	// Given the list of cosine values compute the coefficients of P and Q,
 	// described here via a simple recurrence.  Let p_Q16[k][j] and q_Q16[k][j]
@@ -461,7 +467,7 @@ func (d *Decoder) convertNormalizedLSFsToLPCCoefficients(nlsfQ15 []int16, bandwi
 	qQ16[0] = 1 << 16
 	pQ16[1] = -cQ17[0]
 	qQ16[1] = -cQ17[1]
-	dLPC := len(nlsfQ15)
+	dLPC := len(n1Q15)
 	d2 := dLPC / 2
 
 	// As boundary conditions, assume p_Q16[k][j] = q_Q16[k][j] = 0 for all j < 0.
@@ -510,7 +516,7 @@ func (d *Decoder) convertNormalizedLSFsToLPCCoefficients(nlsfQ15 []int16, bandwi
 	//
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.6
 
-	a32Q17 = make([]int32, len(nlsfQ15))
+	a32Q17 = make([]int32, len(n1Q15))
 	for k := 0; k < d2; k++ {
 		a32Q17[k] = -(qQ16[k+1] - qQ16[k]) - (pQ16[k+1] + pQ16[k])
 		a32Q17[dLPC-k-1] = (qQ16[k+1] - qQ16[k]) - (pQ16[k+1] + pQ16[k])
@@ -1032,6 +1038,35 @@ func (d *Decoder) limitLPCCoefficientsRange(a32Q17 []int32) {
 	}
 }
 
+// The prediction gain of an LPC synthesis filter is the square root of
+// the output energy when the filter is excited by a unit-energy
+// impulse.  Even if the Q12 coefficients would fit, the resulting
+// filter may still have a significant gain (especially for voiced
+// sounds), making the filter unstable. silk_NLSF2A() applies up to 16
+// additional rounds of bandwidth expansion to limit the prediction
+// gain.
+//
+// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.8
+func (d *Decoder) limitLPCFilterPredictionGain(a32Q17 []int32) (aQ12 []float64) {
+	aQ12 = make([]float64, len(a32Q17))
+
+	// However, silk_LPC_inverse_pred_gain_QA() approximates this using
+	// fixed-point arithmetic to guarantee reproducible results across
+	// platforms and implementations.  Since small changes in the
+	// coefficients can make a stable filter unstable, it takes the real Q12
+	// coefficients that will be used during reconstruction as input.  Thus,
+	// let
+	//
+	//     a32_Q12[n] = (a32_Q17[n] + 16) >> 5
+	//
+	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.8
+	for n := range a32Q17 {
+		aQ12[n] = float64((a32Q17[n] + 16) >> 5)
+
+	}
+	return
+}
+
 // Decode decodes many SILK subframes
 //   An overview of the decoder is given in Figure 14.
 //
@@ -1093,17 +1128,27 @@ func (d *Decoder) Decode(in []byte, isStereo bool, nanoseconds int, bandwidth Ba
 	nlsfQ15 := d.normalizeLineSpectralFrequencyCoefficients(bandwidth, resQ10, I1)
 
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.4
-	d.normalizeLSFStabilization()
+	d.normalizeLSFStabilization(nlsfQ15)
 
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.5
-	if err := d.normalizeLSFInterpolation(); err != nil {
+	n1Q15, err := d.normalizeLSFInterpolation(nlsfQ15)
+	if err != nil {
 		return nil, err
 	}
 
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.6
-	a32Q17 := d.convertNormalizedLSFsToLPCCoefficients(nlsfQ15, bandwidth)
+	a32Q17 := d.convertNormalizedLSFsToLPCCoefficients(n1Q15, bandwidth)
 
+	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.5.7
 	d.limitLPCCoefficientsRange(a32Q17)
+
+	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.5.8
+	d.limitLPCFilterPredictionGain(a32Q17)
+
+	if signalType == frameSignalTypeVoiced {
+		return nil, errUnsupportedVoicedFrames
+	}
+	d.isPreviousFrameVoiced = signalType == frameSignalTypeVoiced
 
 	return
 }
