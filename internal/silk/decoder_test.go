@@ -28,7 +28,7 @@ func createRangeDecoder(data []byte, bitsRead uint, rangeSize uint32, highAndCod
 
 func TestDecode20MsOnly(t *testing.T) {
 	d := &Decoder{}
-	_, err := d.Decode(testSilkFrame(), false, 1, BandwidthWideband)
+	_, err := d.Decode(testSilkFrame(), []byte{}, false, 1, BandwidthWideband)
 	if !errors.Is(err, errUnsupportedSilkFrameDuration) {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func TestDecode20MsOnly(t *testing.T) {
 
 func TestDecodeStereoTODO(t *testing.T) {
 	d := &Decoder{}
-	_, err := d.Decode(testSilkFrame(), true, nanoseconds20Ms, BandwidthWideband)
+	_, err := d.Decode(testSilkFrame(), []byte{}, true, nanoseconds20Ms, BandwidthWideband)
 	if !errors.Is(err, errUnsupportedSilkStereo) {
 		t.Fatal(err)
 	}

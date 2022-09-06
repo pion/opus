@@ -1067,6 +1067,63 @@ func (d *Decoder) limitLPCFilterPredictionGain(a32Q17 []int32) (aQ12 []float64) 
 	return
 }
 
+// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.1
+func (d *Decoder) decodePitchLags(signalType frameSignalType) error {
+	if signalType == frameSignalTypeVoiced {
+		return errUnsupportedVoicedFrames
+	}
+
+	return nil
+}
+
+// This allows the encoder to trade off the prediction gain between
+// packets against the recovery time after packet loss.
+//
+// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.3
+func (d *Decoder) decodeLTPScalingParamater(signalType frameSignalType) (float64, error) {
+	// An LTP scaling parameter appears after the LTP filter coefficients if
+	// and only if
+	//
+	// o  This is a voiced frame (see Section 4.2.7.3), and
+	// o  Either
+	//    *  This SILK frame corresponds to the first time interval of the
+	//       current Opus frame for its type (LBRR or regular), or
+	//
+	//    *  This is an LBRR frame where the LBRR flags (see Section 4.2.4)
+	//       indicate the previous LBRR frame in the same channel is not
+	//       coded.
+
+	// Frames that do not code the scaling parameter
+	//    use the default factor of 15565 (approximately 0.95).
+	if signalType != frameSignalTypeVoiced {
+		return 15565.0, nil
+	}
+
+	// TODO
+	return 0, errUnsupportedVoicedFrames
+}
+
+// SILK uses a separate 5-tap pitch filter for each subframe, selected
+// from one of three codebooks.
+//
+// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.2
+func (d *Decoder) decodeLTPFilterCoefficients(signalType frameSignalType) error {
+	if signalType == frameSignalTypeVoiced {
+		return errUnsupportedVoicedFrames
+	}
+
+	// TODO
+	return nil
+}
+
+// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.1
+func (d *Decoder) ltpSynthesis() {
+}
+
+// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.2
+func (d *Decoder) lpcSynthesis() {
+}
+
 // Decode decodes many SILK subframes
 //   An overview of the decoder is given in Figure 14.
 //
@@ -1099,7 +1156,7 @@ func (d *Decoder) limitLPCFilterPredictionGain(a32Q17 []int32) (aQ12 []float64) 
 //     8: Resampled signal
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.1
-func (d *Decoder) Decode(in []byte, isStereo bool, nanoseconds int, bandwidth Bandwidth) (decoded []byte, err error) {
+func (d *Decoder) Decode(in, out []byte, isStereo bool, nanoseconds int, bandwidth Bandwidth) ([]byte, error) {
 	if nanoseconds != nanoseconds20Ms {
 		return nil, errUnsupportedSilkFrameDuration
 	} else if isStereo {
@@ -1113,7 +1170,7 @@ func (d *Decoder) Decode(in []byte, isStereo bool, nanoseconds int, bandwidth Ba
 		return nil, errUnsupportedSilkLowBitrateRedundancy
 	}
 
-	signalType, _ := d.determineFrameType(voiceActivityDetected)
+	signalType, quantizationOffsetType := d.determineFrameType(voiceActivityDetected)
 
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.4
 	d.decodeSubframeQuantizations(signalType)
@@ -1145,10 +1202,43 @@ func (d *Decoder) Decode(in []byte, isStereo bool, nanoseconds int, bandwidth Ba
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.5.8
 	d.limitLPCFilterPredictionGain(a32Q17)
 
-	if signalType == frameSignalTypeVoiced {
-		return nil, errUnsupportedVoicedFrames
+	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.1
+	if err := d.decodePitchLags(signalType); err != nil {
+		return nil, err
 	}
-	d.isPreviousFrameVoiced = signalType == frameSignalTypeVoiced
 
-	return
+	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.2
+	if err := d.decodeLTPFilterCoefficients(signalType); err != nil {
+		return nil, err
+	}
+
+	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.3
+	_, err = d.decodeLTPScalingParamater(signalType)
+	if err != nil {
+		return nil, err
+	}
+
+	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.7
+	lcgSeed := d.decodeLinearCongruentialGeneratorSeed()
+
+	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.8
+	shellblocks := d.decodeShellblocks(nanoseconds, bandwidth)
+
+	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.8.1
+	rateLevel := d.decodeRatelevel(signalType == frameSignalTypeVoiced)
+
+	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.8.2
+	pulsecounts, lsbcounts := d.decodePulseAndLSBCounts(shellblocks, rateLevel)
+
+	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.8.6
+	d.decodeExcitation(signalType, quantizationOffsetType, lcgSeed, pulsecounts, lsbcounts)
+
+	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.1
+	d.ltpSynthesis()
+
+	//https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.2
+	d.lpcSynthesis()
+
+	d.isPreviousFrameVoiced = signalType == frameSignalTypeVoiced
+	return out, nil
 }
