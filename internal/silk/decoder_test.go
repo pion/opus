@@ -164,3 +164,22 @@ func TestExcitation(t *testing.T) {
 		t.Fatal()
 	}
 }
+
+func TestLimitLPCFilterPredictionGain(t *testing.T) {
+	d := &Decoder{}
+
+	a32Q17 := []int32{
+		12974, 9765, 4176, 3646, -3766, -4429, -2292, -4663, -3441, -3848,
+		-4493, -1614, -1960, -3112, -2153, -2898,
+	}
+
+	expectedAQ12 := []float64{
+		405, 305, 131, 114, -118, -138, -72, -146, -108, -120, -140, -50, -61,
+		-97, -67, -91,
+	}
+
+	aQ12 := d.limitLPCFilterPredictionGain(a32Q17)
+	if !reflect.DeepEqual(aQ12, expectedAQ12) {
+		t.Fatal()
+	}
+}
