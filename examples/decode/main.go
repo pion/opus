@@ -29,6 +29,7 @@ func main() {
 		panic(err)
 	}
 
+	out := make([]float64, 1500)
 	for {
 		pageData, _, err := ogg.ParseNextPage()
 		if errors.Is(err, io.EOF) {
@@ -41,11 +42,11 @@ func main() {
 			panic(err)
 		}
 
-		bandwidth, isStereo, frames, err := decoder.Decode(pageData)
+		bandwidth, isStereo, err := decoder.Decode(pageData, out)
 		if err != nil {
 			panic(err)
 		}
 
-		fmt.Printf("bandwidth(%s) isStereo(%t) framesCount(%d)\n", bandwidth.String(), isStereo, len(frames))
+		fmt.Printf("bandwidth(%s) isStereo(%t) framesCount(%d)\n", bandwidth.String(), isStereo, len(out))
 	}
 }

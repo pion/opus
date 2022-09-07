@@ -18,7 +18,6 @@ type Decoder struct {
 	// TODO, should have dedicated frame state
 	logGain       uint32
 	subframeState [4]struct {
-		gain float64
 	}
 }
 
@@ -95,12 +94,14 @@ func (d *Decoder) determineFrameType(voiceActivityDetected bool) (signalType fra
 // A separate quantization gain is coded for each 5 ms subframe
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.4
-func (d *Decoder) decodeSubframeQuantizations(signalType frameSignalType) {
+func (d *Decoder) decodeSubframeQuantizations(signalType frameSignalType) (gainQ16 []float64) {
 	var (
 		logGain        uint32
 		deltaGainIndex uint32
 		gainIndex      uint32
 	)
+
+	gainQ16 = make([]float64, 4)
 
 	for subframeIndex := 0; subframeIndex < 4; subframeIndex++ {
 
@@ -168,9 +169,10 @@ func (d *Decoder) decodeSubframeQuantizations(signalType frameSignalType) {
 		// between 81920 and 1686110208, inclusive (representing scale factors
 		// of 1.25 to 25728, respectively).
 
-		gainQ16 := (1 << i) + ((-174*f*(128-f)>>16)+f)*((1<<i)>>7)
-		d.subframeState[subframeIndex].gain = float64(gainQ16) / 65536
+		gainQ16[subframeIndex] = float64((1 << i) + ((-174*f*(128-f)>>16)+f)*((1<<i)>>7))
 	}
+
+	return
 }
 
 // A set of normalized Line Spectral Frequency (LSF) coefficients follow
@@ -209,7 +211,7 @@ func (d *Decoder) normalizeLineSpectralFrequencyStageOne(voiceActivityDetected b
 // Predictive Coding (LPC) coefficients for the current SILK frame.
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.2
-func (d *Decoder) normalizeLineSpectralFrequencyStageTwo(bandwidth Bandwidth, I1 uint32) (resQ10 []int16) {
+func (d *Decoder) normalizeLineSpectralFrequencyStageTwo(bandwidth Bandwidth, I1 uint32) (dLPC int, resQ10 []int16) {
 	// Decoding the second stage residual proceeds as follows.  For each
 	// coefficient, the decoder reads a symbol using the PDF corresponding
 	// to I1 from either Table 17 or Table 18,
@@ -265,7 +267,7 @@ func (d *Decoder) normalizeLineSpectralFrequencyStageTwo(bandwidth Bandwidth, I1
 	resQ10 = make([]int16, len(I2))
 
 	// Let d_LPC be the order of the codebook, i.e., 10 for NB and MB, and 16 for WB
-	dLPC := len(I2)
+	dLPC = len(I2)
 
 	// for 0 <= k < d_LPC-1
 	for k := dLPC - 2; k >= 0; k-- {
@@ -309,10 +311,7 @@ func (d *Decoder) normalizeLineSpectralFrequencyStageTwo(bandwidth Bandwidth, I1
 // reconstructed.
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.3
-func (d *Decoder) normalizeLineSpectralFrequencyCoefficients(bandwidth Bandwidth, resQ10 []int16, I1 uint32) (nlsfQ15 []int16) {
-	// Let d_LPC be the order of the codebook, i.e., 10 for NB and MB, and 16 for WB
-	dLPC := len(resQ10)
-
+func (d *Decoder) normalizeLineSpectralFrequencyCoefficients(dLPC int, bandwidth Bandwidth, resQ10 []int16, I1 uint32) (nlsfQ15 []int16) {
 	nlsfQ15 = make([]int16, dLPC)
 	w2Q18 := make([]uint, dLPC)
 	wQ9 := make([]int16, dLPC)
@@ -1116,12 +1115,97 @@ func (d *Decoder) decodeLTPFilterCoefficients(signalType frameSignalType) error 
 	return nil
 }
 
-// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.1
-func (d *Decoder) ltpSynthesis() {
+func (d *Decoder) generateResValue(eQ23 []int32) []float64 {
+	return nil
 }
 
+// let n be the number of samples in a subframe (40 for NB, 60 for
+// MB, and 80 for WB)
+// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9
+func (d *Decoder) samplesInSubframe(bandwidth Bandwidth) int {
+	switch bandwidth {
+	case BandwidthNarrowband:
+		return 40
+	case BandwidthMediumband:
+		return 60
+	case BandwidthWideband:
+		return 80
+	}
+
+	return 0
+}
+
+// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.1
+func (d *Decoder) ltpSynthesis(signalType frameSignalType, eQ23 []int32) (res []float64) {
+	// For unvoiced frames (see Section 4.2.7.3), the LPC residual for i
+	// such that j <= i < (j + n) is simply a normalized copy of the
+	// excitation signal, i.e.,
+	//
+	//               e_Q23[i]
+	//     res[i] = ---------
+	//               2.0**23
+
+	res = make([]float64, len(eQ23))
+	if signalType != frameSignalTypeVoiced {
+		for i := range eQ23 {
+			res[i] = float64(eQ23[i]) / 8388608
+		}
+	}
+
+	return
+}
+
+// LPC synthesis uses the short-term LPC filter to predict the next
+// output coefficient.  For i such that (j - d_LPC) <= i < j, let lpc[i]
+// be the result of LPC synthesis from the last d_LPC samples of the
+// previous subframe or zeros in the first subframe for this channel
+// after either
+//
 // https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.2
-func (d *Decoder) lpcSynthesis() {
+func (d *Decoder) lpcSynthesis(out []float64, bandwidth Bandwidth, dLPC int, aQ12, res, gainQ16 []float64) {
+	// let n be the number of samples in a subframe
+	n := d.samplesInSubframe(bandwidth)
+
+	// j be the index of the first sample in the residual corresponding to
+	// the current subframe.
+	j := 0
+
+	// let lpc[i] be the result of LPC synthesis from the last d_LPC samples of the
+	//  previous subframe or zeros in the first subframe for this channel
+	lpc := make([]float64, n)
+
+	//Then, for i such that j <= i < (j + n), the result of LPC synthesis
+	//for the current subframe is
+	//
+	//                                     d_LPC-1
+	//                gain_Q16[i]            __              a_Q12[k]
+	//       lpc[i] = ----------- * res[i] + \  lpc[i-k-1] * --------
+	//                  65536.0              /_               4096.0
+	//                                       k=0
+	//
+	for i := j; i < (j + n); i++ {
+		lpcVal := gainQ16[0] / 65536.0
+		lpcVal *= res[i]
+		for k := 0; k < dLPC; k++ {
+			if i-k > 0 {
+				lpcVal += lpc[i-k-1] * (aQ12[k] / 4096.0)
+			}
+		}
+
+		lpc[i] = lpcVal
+
+		// The decoder saves the final d_LPC values, i.e., lpc[i] such that
+		// (j + n - d_LPC) <= i < (j + n), to feed into the LPC synthesis of the
+		// next subframe.  This requires storage for up to 16 values of lpc[i]
+		// (for WB frames).
+
+		// Then, the signal is clamped into the final nominal range:
+		//
+		//     out[i] = clamp(-1.0, lpc[i], 1.0)
+		//
+		out[i] = clampFloat(-1.0, lpc[i], 1.0)
+	}
+
 }
 
 // Decode decodes many SILK subframes
@@ -1156,33 +1240,33 @@ func (d *Decoder) lpcSynthesis() {
 //     8: Resampled signal
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.1
-func (d *Decoder) Decode(in, out []byte, isStereo bool, nanoseconds int, bandwidth Bandwidth) ([]byte, error) {
+func (d *Decoder) Decode(in []byte, out []float64, isStereo bool, nanoseconds int, bandwidth Bandwidth) error {
 	if nanoseconds != nanoseconds20Ms {
-		return nil, errUnsupportedSilkFrameDuration
+		return errUnsupportedSilkFrameDuration
 	} else if isStereo {
-		return nil, errUnsupportedSilkStereo
+		return errUnsupportedSilkStereo
 	}
 
 	d.rangeDecoder.Init(in)
 
 	voiceActivityDetected, lowBitRateRedundancy := d.decodeHeaderBits()
 	if lowBitRateRedundancy {
-		return nil, errUnsupportedSilkLowBitrateRedundancy
+		return errUnsupportedSilkLowBitrateRedundancy
 	}
 
 	signalType, quantizationOffsetType := d.determineFrameType(voiceActivityDetected)
 
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.4
-	d.decodeSubframeQuantizations(signalType)
+	gainQ16 := d.decodeSubframeQuantizations(signalType)
 
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.1
 	I1 := d.normalizeLineSpectralFrequencyStageOne(voiceActivityDetected, bandwidth)
 
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.2
-	resQ10 := d.normalizeLineSpectralFrequencyStageTwo(bandwidth, I1)
+	dLPC, resQ10 := d.normalizeLineSpectralFrequencyStageTwo(bandwidth, I1)
 
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.3
-	nlsfQ15 := d.normalizeLineSpectralFrequencyCoefficients(bandwidth, resQ10, I1)
+	nlsfQ15 := d.normalizeLineSpectralFrequencyCoefficients(dLPC, bandwidth, resQ10, I1)
 
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.4
 	d.normalizeLSFStabilization(nlsfQ15)
@@ -1190,7 +1274,7 @@ func (d *Decoder) Decode(in, out []byte, isStereo bool, nanoseconds int, bandwid
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.5
 	n1Q15, err := d.normalizeLSFInterpolation(nlsfQ15)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.6
@@ -1200,22 +1284,22 @@ func (d *Decoder) Decode(in, out []byte, isStereo bool, nanoseconds int, bandwid
 	d.limitLPCCoefficientsRange(a32Q17)
 
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.5.8
-	d.limitLPCFilterPredictionGain(a32Q17)
+	aQ12 := d.limitLPCFilterPredictionGain(a32Q17)
 
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.1
 	if err := d.decodePitchLags(signalType); err != nil {
-		return nil, err
+		return err
 	}
 
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.2
 	if err := d.decodeLTPFilterCoefficients(signalType); err != nil {
-		return nil, err
+		return err
 	}
 
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.3
 	_, err = d.decodeLTPScalingParamater(signalType)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.7
@@ -1231,14 +1315,14 @@ func (d *Decoder) Decode(in, out []byte, isStereo bool, nanoseconds int, bandwid
 	pulsecounts, lsbcounts := d.decodePulseAndLSBCounts(shellblocks, rateLevel)
 
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.8.6
-	d.decodeExcitation(signalType, quantizationOffsetType, lcgSeed, pulsecounts, lsbcounts)
+	eQ23 := d.decodeExcitation(signalType, quantizationOffsetType, lcgSeed, pulsecounts, lsbcounts)
 
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.1
-	d.ltpSynthesis()
+	res := d.ltpSynthesis(signalType, eQ23)
 
 	//https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.2
-	d.lpcSynthesis()
+	d.lpcSynthesis(out, bandwidth, dLPC, aQ12, res, gainQ16)
 
 	d.isPreviousFrameVoiced = signalType == frameSignalTypeVoiced
-	return out, nil
+	return nil
 }

@@ -28,7 +28,7 @@ func createRangeDecoder(data []byte, bitsRead uint, rangeSize uint32, highAndCod
 
 func TestDecode20MsOnly(t *testing.T) {
 	d := &Decoder{}
-	_, err := d.Decode(testSilkFrame(), []byte{}, false, 1, BandwidthWideband)
+	err := d.Decode(testSilkFrame(), []float64{}, false, 1, BandwidthWideband)
 	if !errors.Is(err, errUnsupportedSilkFrameDuration) {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func TestDecode20MsOnly(t *testing.T) {
 
 func TestDecodeStereoTODO(t *testing.T) {
 	d := &Decoder{}
-	_, err := d.Decode(testSilkFrame(), []byte{}, true, nanoseconds20Ms, BandwidthWideband)
+	err := d.Decode(testSilkFrame(), []float64{}, true, nanoseconds20Ms, BandwidthWideband)
 	if !errors.Is(err, errUnsupportedSilkStereo) {
 		t.Fatal(err)
 	}
@@ -57,16 +57,15 @@ func TestDecodeFrameType(t *testing.T) {
 func TestDecodeSubframeQuantizations(t *testing.T) {
 	d := &Decoder{rangeDecoder: createRangeDecoder(testSilkFrame(), 31, 482344960, 437100388)}
 
-	d.decodeSubframeQuantizations(frameSignalTypeInactive)
-
+	gainQ16 := d.decodeSubframeQuantizations(frameSignalTypeInactive)
 	switch {
-	case d.subframeState[0].gain != 3.21875:
+	case gainQ16[0] != 210944:
 		t.Fatal()
-	case d.subframeState[1].gain != 1.71875:
+	case gainQ16[1] != 112640:
 		t.Fatal()
-	case d.subframeState[2].gain != 1.46875:
+	case gainQ16[2] != 96256:
 		t.Fatal()
-	case d.subframeState[3].gain != 1.46875:
+	case gainQ16[3] != 96256:
 		t.Fatal()
 	}
 }
@@ -83,8 +82,10 @@ func TestNormalizeLineSpectralFrequencyStageOne(t *testing.T) {
 func TestNormalizeLineSpectralFrequencyStageTwo(t *testing.T) {
 	d := &Decoder{rangeDecoder: createRangeDecoder(testSilkFrame(), 47, 50822640, 5895957)}
 
-	resQ10 := d.normalizeLineSpectralFrequencyStageTwo(BandwidthWideband, 9)
+	dLPC, resQ10 := d.normalizeLineSpectralFrequencyStageTwo(BandwidthWideband, 9)
 	if !reflect.DeepEqual(resQ10, testResQ10()) {
+		t.Fatal()
+	} else if dLPC != 16 {
 		t.Fatal()
 	}
 }
@@ -92,7 +93,7 @@ func TestNormalizeLineSpectralFrequencyStageTwo(t *testing.T) {
 func TestNormalizeLineSpectralFrequencyCoefficients(t *testing.T) {
 	d := &Decoder{rangeDecoder: createRangeDecoder(testSilkFrame(), 55, 493249168, 174371199)}
 
-	nlsfQ1 := d.normalizeLineSpectralFrequencyCoefficients(BandwidthWideband, testResQ10(), 9)
+	nlsfQ1 := d.normalizeLineSpectralFrequencyCoefficients(16, BandwidthWideband, testResQ10(), 9)
 	if !reflect.DeepEqual(nlsfQ1, testNlsfQ1()) {
 		t.Fatal()
 	}

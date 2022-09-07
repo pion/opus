@@ -63,6 +63,16 @@ func clamp(low, in, high int32) int32 {
 	return in
 }
 
+func clampFloat(low, in, high float64) float64 {
+	if in > high {
+		return high
+	} else if in < low {
+		return low
+	}
+
+	return in
+}
+
 // The sign of x, i.e.,
 //            ( -1,  x < 0
 //  sign(x) = <  0,  x == 0
