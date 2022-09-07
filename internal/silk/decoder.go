@@ -1061,8 +1061,8 @@ func (d *Decoder) limitLPCFilterPredictionGain(a32Q17 []int32) (aQ12 []float64) 
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.8
 	for n := range a32Q17 {
 		aQ12[n] = float64((a32Q17[n] + 16) >> 5)
-
 	}
+
 	return
 }
 
