@@ -72,23 +72,24 @@ func (d *Decoder) determineFrameType(voiceActivityDetected bool) (signalType fra
 	// +------------+-------------+--------------------------+
 	//
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.3
-	switch frameTypeSymbol {
-	case 0:
+
+	switch {
+	case !voiceActivityDetected && frameTypeSymbol == 0:
 		signalType = frameSignalTypeInactive
 		quantizationOffsetType = frameQuantizationOffsetTypeLow
-	case 1:
+	case !voiceActivityDetected:
 		signalType = frameSignalTypeInactive
 		quantizationOffsetType = frameQuantizationOffsetTypeHigh
-	case 2:
+	case frameTypeSymbol == 0:
 		signalType = frameSignalTypeUnvoiced
 		quantizationOffsetType = frameQuantizationOffsetTypeLow
-	case 3:
+	case frameTypeSymbol == 1:
 		signalType = frameSignalTypeUnvoiced
 		quantizationOffsetType = frameQuantizationOffsetTypeHigh
-	case 4:
+	case frameTypeSymbol == 2:
 		signalType = frameSignalTypeVoiced
 		quantizationOffsetType = frameQuantizationOffsetTypeLow
-	case 5:
+	case frameTypeSymbol == 3:
 		signalType = frameSignalTypeVoiced
 		quantizationOffsetType = frameQuantizationOffsetTypeHigh
 	}
