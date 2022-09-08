@@ -15,8 +15,13 @@ type Decoder struct {
 	// Is the previous frame a voiced frame?
 	isPreviousFrameVoiced bool
 
+	previousLogGain uint32
+
+	// n0Q15 are the LSF coefficients decoded for the prior frame
+	// see normalizeLSFInterpolation
+	n0Q15 []int16
+
 	// TODO, should have dedicated frame state
-	logGain       uint32
 	subframeState [4]struct {
 	}
 }
@@ -130,7 +135,7 @@ func (d *Decoder) decodeSubframeQuantizations(signalType frameSignalType) (gainQ
 			// current gain is limited as follows:
 			//     log_gain = max(gain_index, previous_log_gain - 16)
 			if d.haveDecoded {
-				logGain = maxUint32(gainIndex, d.logGain-16)
+				logGain = maxUint32(gainIndex, d.previousLogGain-16)
 			} else {
 				logGain = gainIndex
 			}
@@ -144,10 +149,10 @@ func (d *Decoder) decodeSubframeQuantizations(signalType frameSignalType) (gainQ
 			// The following formula translates this index into a quantization gain
 			// for the current subframe using the gain from the previous subframe:
 			//      log_gain = clamp(0, max(2*delta_gain_index - 16, previous_log_gain + delta_gain_index - 4), 63)
-			logGain = uint32(clamp(0, maxInt32(2*int32(deltaGainIndex)-16, int32(d.logGain+deltaGainIndex)-4), 63))
+			logGain = uint32(clamp(0, maxInt32(2*int32(deltaGainIndex)-16, int32(d.previousLogGain+deltaGainIndex)-4), 63))
 		}
 
-		d.logGain = logGain
+		d.previousLogGain = logGain
 
 		// silk_gains_dequant() (gain_quant.c) dequantizes log_gain for the k'th
 		// subframe and converts it into a linear Q16 scale factor via
@@ -397,7 +402,7 @@ func (d *Decoder) normalizeLSFStabilization(nlsfQ15 []int16) {
 // (in the same channel) and the current frame
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.5
-func (d *Decoder) normalizeLSFInterpolation(nlsfQ15 []int16) (n1Q15 []int16, err error) {
+func (d *Decoder) normalizeLSFInterpolation(n2Q15 []int16) (n1Q15 []int16) {
 	// Let n2_Q15[k] be the normalized LSF coefficients decoded by the
 	// procedure in Section 4.2.7.5, n0_Q15[k] be the LSF coefficients
 	// decoded for the prior frame, and w_Q2 be the interpolation factor.
@@ -405,14 +410,17 @@ func (d *Decoder) normalizeLSFInterpolation(nlsfQ15 []int16) (n1Q15 []int16, err
 	// 20 ms frame, n1_Q15[k], are
 	//
 	//      n1_Q15[k] = n0_Q15[k] + (w_Q2*(n2_Q15[k] - n0_Q15[k]) >> 2)
-	if wQ2 := d.rangeDecoder.DecodeSymbolWithICDF(icdfNormalizedLSFInterpolationIndex); wQ2 != 4 {
-		return nil, errUnsupportedLSFInterpolation
+	wQ2 := int16(d.rangeDecoder.DecodeSymbolWithICDF(icdfNormalizedLSFInterpolationIndex))
+	if wQ2 == 4 || !d.haveDecoded {
+		return n2Q15
 	}
 
-	// TODO
-	n1Q15 = nlsfQ15
+	n1Q15 = make([]int16, len(n2Q15))
+	for k := range n1Q15 {
+		n1Q15[k] = d.n0Q15[k] + (wQ2 * (n2Q15[k] - d.n0Q15[k]) >> 2)
+	}
 
-	return n1Q15, nil
+	return
 }
 
 func (d *Decoder) convertNormalizedLSFsToLPCCoefficients(n1Q15 []int16, bandwidth Bandwidth) (a32Q17 []int32) {
@@ -1272,10 +1280,7 @@ func (d *Decoder) Decode(in []byte, out []float64, isStereo bool, nanoseconds in
 	d.normalizeLSFStabilization(nlsfQ15)
 
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.5
-	n1Q15, err := d.normalizeLSFInterpolation(nlsfQ15)
-	if err != nil {
-		return err
-	}
+	n1Q15 := d.normalizeLSFInterpolation(nlsfQ15)
 
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.6
 	a32Q17 := d.convertNormalizedLSFsToLPCCoefficients(n1Q15, bandwidth)
@@ -1297,7 +1302,7 @@ func (d *Decoder) Decode(in []byte, out []float64, isStereo bool, nanoseconds in
 	}
 
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.3
-	_, err = d.decodeLTPScalingParamater(signalType)
+	_, err := d.decodeLTPScalingParamater(signalType)
 	if err != nil {
 		return err
 	}
@@ -1323,6 +1328,15 @@ func (d *Decoder) Decode(in []byte, out []float64, isStereo bool, nanoseconds in
 	//https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.2
 	d.lpcSynthesis(out, bandwidth, dLPC, aQ12, res, gainQ16)
 
+	// n0Q15 is the LSF coefficients decoded for the prior frame
+	// see normalizeLSFInterpolation.
+	if len(d.n0Q15) != len(nlsfQ15) {
+		d.n0Q15 = make([]int16, len(nlsfQ15))
+	}
+
+	copy(d.n0Q15, nlsfQ15)
 	d.isPreviousFrameVoiced = signalType == frameSignalTypeVoiced
+	d.haveDecoded = true
+
 	return nil
 }

@@ -58,14 +58,7 @@ func TestDecodeSubframeQuantizations(t *testing.T) {
 	d := &Decoder{rangeDecoder: createRangeDecoder(testSilkFrame(), 31, 482344960, 437100388)}
 
 	gainQ16 := d.decodeSubframeQuantizations(frameSignalTypeInactive)
-	switch {
-	case gainQ16[0] != 210944:
-		t.Fatal()
-	case gainQ16[1] != 112640:
-		t.Fatal()
-	case gainQ16[2] != 96256:
-		t.Fatal()
-	case gainQ16[3] != 96256:
+	if !reflect.DeepEqual(gainQ16, []float64{210944, 112640, 96256, 96256}) {
 		t.Fatal()
 	}
 }
@@ -97,6 +90,40 @@ func TestNormalizeLineSpectralFrequencyCoefficients(t *testing.T) {
 	if !reflect.DeepEqual(nlsfQ1, testNlsfQ1()) {
 		t.Fatal()
 	}
+}
+
+func TestNormalizeLSFInterpolation(t *testing.T) {
+	t.Run("wQ2 == 4", func(t *testing.T) {
+		d := &Decoder{rangeDecoder: createRangeDecoder(testSilkFrame(), 55, 493249168, 174371199)}
+		n2Q15 := []int16{
+			2132, 3584, 5504, 7424, 9472, 11392, 13440, 15360, 17280,
+			19200, 21120, 23040, 25088, 27008, 28928, 30848,
+		}
+
+		if !reflect.DeepEqual(d.normalizeLSFInterpolation(n2Q15), n2Q15) {
+			t.Fatal()
+		}
+	})
+
+	t.Run("wQ2 == 1", func(t *testing.T) {
+		frame := []byte{0xac, 0xbd, 0xa9, 0xf7, 0x26, 0x24, 0x5a, 0xa4, 0x00, 0x37, 0xbf, 0x9c, 0xde, 0xe, 0xcf, 0x94, 0x64, 0xaa, 0xf9, 0x87, 0xd0, 0x79, 0x19, 0xa8, 0x21, 0xc0}
+		d := &Decoder{
+			rangeDecoder: createRangeDecoder(frame, 65, 1231761776, 1068195183),
+			haveDecoded:  true,
+			n0Q15: []int16{
+				518, 380, 4444, 6982, 8752, 10510, 12381, 14102, 15892, 17651, 19340, 21888, 23936, 25984, 28160, 30208,
+			},
+		}
+		n2Q15 := []int16{215, 1447, 3712, 5120, 7168, 9088, 11264, 13184, 15232, 17536, 19712, 21888, 24192, 26240, 28416, 30336}
+		expectedN1Q15 := []int16{
+			442, 646, 4261, 6516, 8356, 10154, 12101, 13872, 15727,
+			17622, 19433, 21888, 24000, 26048, 28224, 30240,
+		}
+
+		if !reflect.DeepEqual(d.normalizeLSFInterpolation(n2Q15), expectedN1Q15) {
+			t.Fatal()
+		}
+	})
 }
 
 func TestConvertNormalizedLSFsToLPCCoefficients(t *testing.T) {
