@@ -1253,13 +1253,47 @@ func (d *Decoder) decodeLTPScalingParamater(signalType frameSignalType) (float64
 // from one of three codebooks.
 //
 // https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.2
-func (d *Decoder) decodeLTPFilterCoefficients(signalType frameSignalType) error {
-	if signalType == frameSignalTypeVoiced {
-		return errUnsupportedVoicedFrames
+func (d *Decoder) decodeLTPFilterCoefficients(signalType frameSignalType) (bQ7 []int8) {
+	if signalType != frameSignalTypeVoiced {
+		return
 	}
 
-	// TODO
-	return nil
+	bQ7 = make([]int8, 5)
+
+	// This is signaled with an explicitly-coded "periodicity index".  This
+	// immediately follows the subframe pitch lags, and is coded using the
+	// 3-entry PDF from Table 37.
+	periodicityIndex := d.rangeDecoder.DecodeSymbolWithICDF(icdfPeriodicityIndex)
+
+	// The indices of the filters for each subframe follow.  They are all
+	// coded using the PDF from Table 38 corresponding to the periodicity
+	// index.  Tables 39 through 41 contain the corresponding filter taps as
+	// signed Q7 integers.
+	var filterIndiceIcdf []uint
+	switch periodicityIndex {
+	case 0:
+		filterIndiceIcdf = icdfLTPFilterIndex0
+	case 1:
+		filterIndiceIcdf = icdfLTPFilterIndex1
+	case 2:
+		filterIndiceIcdf = icdfLTPFilterIndex2
+	}
+
+	filterIndex := d.rangeDecoder.DecodeSymbolWithICDF(filterIndiceIcdf)
+	var LTPFilterCodebook [][]int8
+
+	switch periodicityIndex {
+	case 0:
+		LTPFilterCodebook = codebookLTPFilterPeriodicityIndex0
+	case 1:
+		LTPFilterCodebook = codebookLTPFilterPeriodicityIndex1
+	case 2:
+		LTPFilterCodebook = codebookLTPFilterPeriodicityIndex2
+
+	}
+
+	copy(bQ7, LTPFilterCodebook[filterIndex])
+	return
 }
 
 // let n be the number of samples in a subframe (40 for NB, 60 for
@@ -1293,8 +1327,11 @@ func (d *Decoder) ltpSynthesis(signalType frameSignalType, eQ23 []int32) (res []
 		for i := range eQ23 {
 			res[i] = float64(eQ23[i]) / 8388608
 		}
+
+		return
 	}
 
+	// TODO
 	return
 }
 
@@ -1430,9 +1467,7 @@ func (d *Decoder) Decode(in []byte, out []float64, isStereo bool, nanoseconds in
 	d.decodePitchLags(signalType, bandwidth)
 
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.2
-	if err := d.decodeLTPFilterCoefficients(signalType); err != nil {
-		return err
-	}
+	d.decodeLTPFilterCoefficients(signalType)
 
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.3
 	_, err := d.decodeLTPScalingParamater(signalType)
