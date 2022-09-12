@@ -1262,10 +1262,6 @@ func (d *Decoder) decodeLTPFilterCoefficients(signalType frameSignalType) error 
 	return nil
 }
 
-func (d *Decoder) generateResValue(eQ23 []int32) []float64 {
-	return nil
-}
-
 // let n be the number of samples in a subframe (40 for NB, 60 for
 // MB, and 80 for WB)
 // https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9
