@@ -1076,12 +1076,150 @@ func (d *Decoder) limitLPCFilterPredictionGain(a32Q17 []int32) (aQ12 []float64) 
 }
 
 // https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.1
-func (d *Decoder) decodePitchLags(signalType frameSignalType) error {
-	if signalType == frameSignalTypeVoiced {
-		return errUnsupportedVoicedFrames
+func (d *Decoder) decodePitchLags(signalType frameSignalType, bandwidth Bandwidth) (lag uint32, pitchLags []int) {
+	if signalType != frameSignalTypeVoiced {
+		return
 	}
 
-	return nil
+	var (
+		lagMin uint32
+		lagMax uint32
+	)
+
+	// The primary lag index is coded either relative to the primary lag of
+	// the prior frame in the same channel or as an absolute index.
+	// Absolute coding is used if and only if
+	//
+	// *  This is the first SILK frame of its type (LBRR or regular) for
+	//    this channel in the current Opus frame,
+	//
+	// *  The previous SILK frame of the same type (LBRR or regular) for
+	//    this channel in the same Opus frame was not coded, or
+	//
+	// *  That previous SILK frame was coded, but was not voiced (see
+	//    Section 4.2.7.3).
+
+	lagAbsolute := true
+	if lagAbsolute {
+		// With absolute coding, the primary pitch lag may range from 2 ms
+		// (inclusive) up to 18 ms (exclusive), corresponding to pitches from
+		// 500 Hz down to 55.6 Hz, respectively.  It is comprised of a high part
+		// and a low part, where the decoder first reads the high part using the
+		// 32-entry codebook in Table 29 and then the low part using the
+		// codebook corresponding to the current audio bandwidth from Table 30.
+		//
+		//  +------------+------------------------+-------+----------+----------+
+		//  | Audio      | PDF                    | Scale | Minimum  | Maximum  |
+		//  | Bandwidth  |                        |       | Lag      | Lag      |
+		//  +------------+------------------------+-------+----------+----------+
+		//  | NB         | {64, 64, 64, 64}/256   | 4     | 16       | 144      |
+		//  |            |                        |       |          |          |
+		//  | MB         | {43, 42, 43, 43, 42,   | 6     | 24       | 216      |
+		//  |            | 43}/256                |       |          |          |
+		//  |            |                        |       |          |          |
+		//  | WB         | {32, 32, 32, 32, 32,   | 8     | 32       | 288      |
+		//  |            | 32, 32, 32}/256        |       |          |          |
+		//  +------------+------------------------+-------+----------+----------+
+
+		// Table 30: PDF for Low Part of Primary Pitch Lag
+		var (
+			lowPartICDF []uint
+			lagScale    uint32
+		)
+		switch bandwidth {
+		case BandwidthNarrowband:
+			lowPartICDF = icdfPrimaryPitchLagLowPartNarrowband
+			lagScale = 4
+			lagMin = 16
+			lagMax = 144
+		case BandwidthMediumband:
+			lowPartICDF = icdfPrimaryPitchLagLowPartMediumband
+			lagScale = 6
+			lagMin = 24
+			lagMax = 216
+		case BandwidthWideband:
+			lowPartICDF = icdfPrimaryPitchLagLowPartWideband
+			lagScale = 8
+			lagMin = 32
+			lagMax = 288
+		}
+
+		lagHigh := d.rangeDecoder.DecodeSymbolWithICDF(icdfPrimaryPitchLagHighPart)
+		lagLow := d.rangeDecoder.DecodeSymbolWithICDF(lowPartICDF)
+
+		// The final primary pitch lag is then
+		//
+		//              lag = lag_high*lag_scale + lag_low + lag_min
+		//
+		// where lag_high is the high part, lag_low is the low part, and
+		// lag_scale and lag_min are the values from the "Scale" and "Minimum
+		// Lag" columns of Table 30, respectively.
+		lag = lagHigh*lagScale + lagLow + lagMin
+	} else {
+		// TODO
+	}
+
+	// After the primary pitch lag, a "pitch contour", stored as a single
+	// entry from one of four small VQ codebooks, gives lag offsets for each
+	// subframe in the current SILK frame.  The codebook index is decoded
+	// using one of the PDFs in Table 32 depending on the current frame size
+	// and audio bandwidth.  Tables 33 through 36 give the corresponding
+	// offsets to apply to the primary pitch lag for each subframe given the
+	// decoded codebook index.
+	//
+	// +-----------+--------+----------+-----------------------------------+
+	// | Audio     | SILK   | Codebook | PDF                               |
+	// | Bandwidth | Frame  |     Size |                                   |
+	// |           | Size   |          |                                   |
+	// +-----------+--------+----------+-----------------------------------+
+	// | NB        | 10 ms  |        3 | {143, 50, 63}/256                 |
+	// |           |        |          |                                   |
+	// | NB        | 20 ms  |       11 | {68, 12, 21, 17, 19, 22, 30, 24,  |
+	// |           |        |          | 17, 16, 10}/256                   |
+	// |           |        |          |                                   |
+	// | MB or WB  | 10 ms  |       12 | {91, 46, 39, 19, 14, 12, 8, 7, 6, |
+	// |           |        |          | 5, 5, 4}/256                      |
+	// |           |        |          |                                   |
+	// | MB or WB  | 20 ms  |       34 | {33, 22, 18, 16, 15, 14, 14, 13,  |
+	// |           |        |          | 13, 10, 9, 9, 8, 6, 6, 6, 5, 4,   |
+	// |           |        |          | 4, 4, 3, 3, 3, 2, 2, 2, 2, 2, 2,  |
+	// |           |        |          | 2, 1, 1, 1, 1}/256                |
+	// +-----------+--------+----------+-----------------------------------+
+	//
+	// Table 32: PDFs for Subframe Pitch Contour
+
+	// The final pitch lag for each subframe is assembled in
+	// silk_decode_pitch() (decode_pitch.c).  Let lag be the primary pitch
+	// lag for the current SILK frame, contour_index be index of the VQ
+	// codebook, and lag_cb[contour_index][k] be the corresponding entry of
+	// the codebook from the appropriate table given above for the k'th
+	// subframe.
+
+	var (
+		lagCb   [][]int8
+		lagIcdf []uint
+	)
+
+	switch bandwidth {
+	case BandwidthNarrowband:
+		lagCb = subframePitchCounterNarrowband20Ms
+		lagIcdf = icdfSubframePitchContourNarrowband20Ms
+	case BandwidthMediumband, BandwidthWideband:
+		lagCb = subframePitchCounterMediumbandOrWideband20Ms
+		lagIcdf = icdfSubframePitchContourMediumbandOrWideband20Ms
+	}
+
+	contourIndex := d.rangeDecoder.DecodeSymbolWithICDF(lagIcdf)
+
+	// Then the final pitch lag for that subframe is
+	//
+	//     pitch_lags[k] = clamp(lag_min, lag + lag_cb[contour_index][k],
+	//                           lag_max)
+	pitchLags = []int{
+		int(clamp(int32(lagMin), int32(lag+uint32(lagCb[contourIndex][0])), int32(lagMax))),
+	}
+
+	return
 }
 
 // This allows the encoder to trade off the prediction gain between
@@ -1269,7 +1407,7 @@ func (d *Decoder) Decode(in []byte, out []float64, isStereo bool, nanoseconds in
 	gainQ16 := d.decodeSubframeQuantizations(signalType)
 
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.1
-	I1 := d.normalizeLineSpectralFrequencyStageOne(voiceActivityDetected, bandwidth)
+	I1 := d.normalizeLineSpectralFrequencyStageOne(signalType == frameSignalTypeVoiced, bandwidth)
 
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.2
 	dLPC, resQ10 := d.normalizeLineSpectralFrequencyStageTwo(bandwidth, I1)
@@ -1293,9 +1431,7 @@ func (d *Decoder) Decode(in []byte, out []float64, isStereo bool, nanoseconds in
 	aQ12 := d.limitLPCFilterPredictionGain(a32Q17)
 
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.1
-	if err := d.decodePitchLags(signalType); err != nil {
-		return err
-	}
+	d.decodePitchLags(signalType, bandwidth)
 
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.2
 	if err := d.decodeLTPFilterCoefficients(signalType); err != nil {

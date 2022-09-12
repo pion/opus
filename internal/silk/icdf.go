@@ -637,4 +637,78 @@ var (
 	icdfExcitationSignVoicedSignalHighQuantization4Pulse       = []uint{256, 168, 256}
 	icdfExcitationSignVoicedSignalHighQuantization5Pulse       = []uint{256, 161, 256}
 	icdfExcitationSignVoicedSignalHighQuantization6PlusPulse   = []uint{256, 154, 256}
+
+	//  +-------------------------------------------------------------------+
+	//  | PDF                                                               |
+	//  +-------------------------------------------------------------------+
+	//  | {3, 3, 6, 11, 21, 30, 32, 19, 11, 10, 12, 13, 13, 12, 11, 9, 8,   |
+	//  | 7, 6, 4, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1}/256                  |
+	//  +-------------------------------------------------------------------+
+	//
+	//  Table 29: PDF for High Part of Primary Pitch Lag
+	//
+	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.1
+	icdfPrimaryPitchLagHighPart = []uint{
+		256, 3, 6, 12, 23, 44, 74, 106, 125, 136,
+		146, 158, 171, 184, 196, 207, 216, 224, 231, 237,
+		241, 243, 245, 247, 248, 249, 250, 251, 252, 253,
+		254, 255, 256,
+	}
+
+	// +------------+------------------------+-------+----------+----------+
+	// | Audio      | PDF                    | Scale | Minimum  | Maximum  |
+	// | Bandwidth  |                        |       | Lag      | Lag      |
+	// +------------+------------------------+-------+----------+----------+
+	// | NB         | {64, 64, 64, 64}/256   | 4     | 16       | 144      |
+	// |            |                        |       |          |          |
+	// | MB         | {43, 42, 43, 43, 42,   | 6     | 24       | 216      |
+	// |            | 43}/256                |       |          |          |
+	// |            |                        |       |          |          |
+	// | WB         | {32, 32, 32, 32, 32,   | 8     | 32       | 288      |
+	// |            | 32, 32, 32}/256        |       |          |          |
+	// +------------+------------------------+-------+----------+----------+
+	//
+	//            Table 30: PDF for Low Part of Primary Pitch Lag
+	//
+	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.1
+	icdfPrimaryPitchLagLowPartNarrowband = []uint{256, 64, 128, 192, 256}
+	icdfPrimaryPitchLagLowPartMediumband = []uint{256, 43, 85, 128, 171, 213, 256}
+	icdfPrimaryPitchLagLowPartWideband   = []uint{256, 32, 64, 96, 128, 160, 192, 224, 256}
+
+	// +-----------+--------+----------+-----------------------------------+
+	// | Audio     | SILK   | Codebook | PDF                               |
+	// | Bandwidth | Frame  |     Size |                                   |
+	// |           | Size   |          |                                   |
+	// +-----------+--------+----------+-----------------------------------+
+	// | NB        | 10 ms  |        3 | {143, 50, 63}/256                 |
+	// |           |        |          |                                   |
+	// | NB        | 20 ms  |       11 | {68, 12, 21, 17, 19, 22, 30, 24,  |
+	// |           |        |          | 17, 16, 10}/256                   |
+	// |           |        |          |                                   |
+	// | MB or WB  | 10 ms  |       12 | {91, 46, 39, 19, 14, 12, 8, 7, 6, |
+	// |           |        |          | 5, 5, 4}/256                      |
+	// |           |        |          |                                   |
+	// | MB or WB  | 20 ms  |       34 | {33, 22, 18, 16, 15, 14, 14, 13,  |
+	// |           |        |          | 13, 10, 9, 9, 8, 6, 6, 6, 5, 4,   |
+	// |           |        |          | 4, 4, 3, 3, 3, 2, 2, 2, 2, 2, 2,  |
+	// |           |        |          | 2, 1, 1, 1, 1}/256                |
+	// +-----------+--------+----------+-----------------------------------+
+	//
+	// Table 32: PDFs for Subframe Pitch Contour
+	//
+	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.1
+	icdfSubframePitchContourNarrowband10Ms = []uint{
+		256, 143, 193, 256,
+	}
+	icdfSubframePitchContourNarrowband20Ms = []uint{
+		256, 68, 80, 101, 118, 137, 159, 189, 213, 230, 246, 256,
+	}
+	icdfSubframePitchContourMediumbandOrWideband10Ms = []uint{
+		256, 91, 137, 176, 195, 209, 221, 229, 236, 242, 247, 252, 256,
+	}
+	icdfSubframePitchContourMediumbandOrWideband20Ms = []uint{
+		256, 33, 55, 73, 89, 104, 118, 132, 145, 158, 168, 177,
+		186, 194, 200, 206, 212, 217, 221, 225, 229, 232, 235, 238,
+		240, 242, 244, 246, 248, 250, 252, 253, 254, 255, 256,
+	}
 )
