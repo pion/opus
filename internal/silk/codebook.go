@@ -834,7 +834,7 @@ var (
 	//   +-------+------------------+
 	//
 	//   Table 33: Codebook Vectors for Subframe Pitch Contour: NB, 10 ms Frames
-	subframePitchCounterNarrowband10Ms = [][]int8{
+	codebookSubframePitchCounterNarrowband10Ms = [][]int8{
 		{0, 0},
 		{1, 0},
 		{0, 1},
@@ -867,7 +867,7 @@ var (
 	//  +-------+------------------+
 	//
 	//  Table 34: Codebook Vectors for Subframe Pitch Contour: NB, 20 ms Frames
-	subframePitchCounterNarrowband20Ms = [][]int8{
+	codebookSubframePitchCounterNarrowband20Ms = [][]int8{
 		{0, 0, 0, 0},
 		{2, 1, 0, -1},
 		{-1, 0, 1, 2},
@@ -910,7 +910,7 @@ var (
 	//  +-------+------------------+
 	//
 	//  Table 35: Codebook Vectors for Subframe Pitch Contour: MB or WB, 10 ms Frames
-	subframePitchCounterMediumbandOrWideband10Ms = [][]int8{
+	codebookSubframePitchCounterMediumbandOrWideband10Ms = [][]int8{
 		{0, 0},
 		{0, 1},
 		{1, 0},
@@ -998,7 +998,7 @@ var (
 	//  +-------+------------------+
 	//
 	//  Table 36: Codebook Vectors for Subframe Pitch Contour: MB or WB, 20 ms Frames
-	subframePitchCounterMediumbandOrWideband20Ms = [][]int8{
+	codebookSubframePitchCounterMediumbandOrWideband20Ms = [][]int8{
 		{0, 0, 0, 0},
 		{0, 0, 1, 1},
 		{1, 1, 0, 0},

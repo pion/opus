@@ -11,6 +11,9 @@ type (
 )
 
 const (
+	// TODO support non-20Ms frames
+	subframeCount = 4
+
 	pulsecountLargestPartitionSize = 16
 
 	nanoseconds10Ms = 10000000

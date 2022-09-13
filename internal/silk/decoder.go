@@ -20,10 +20,6 @@ type Decoder struct {
 	// n0Q15 are the LSF coefficients decoded for the prior frame
 	// see normalizeLSFInterpolation
 	n0Q15 []int16
-
-	// TODO, should have dedicated frame state
-	subframeState [4]struct {
-	}
 }
 
 // NewDecoder creates a new Silk Decoder
@@ -109,7 +105,7 @@ func (d *Decoder) decodeSubframeQuantizations(signalType frameSignalType) (gainQ
 
 	gainQ16 = make([]float64, 4)
 
-	for subframeIndex := 0; subframeIndex < 4; subframeIndex++ {
+	for subframeIndex := 0; subframeIndex < subframeCount; subframeIndex++ {
 
 		//The subframe gains are either coded independently, or relative to the
 		// gain from the most recent coded subframe in the same channel.
@@ -1202,10 +1198,10 @@ func (d *Decoder) decodePitchLags(signalType frameSignalType, bandwidth Bandwidt
 
 	switch bandwidth {
 	case BandwidthNarrowband:
-		lagCb = subframePitchCounterNarrowband20Ms
+		lagCb = codebookSubframePitchCounterNarrowband20Ms
 		lagIcdf = icdfSubframePitchContourNarrowband20Ms
 	case BandwidthMediumband, BandwidthWideband:
-		lagCb = subframePitchCounterMediumbandOrWideband20Ms
+		lagCb = codebookSubframePitchCounterMediumbandOrWideband20Ms
 		lagIcdf = icdfSubframePitchContourMediumbandOrWideband20Ms
 	}
 
@@ -1343,7 +1339,9 @@ func (d *Decoder) ltpSynthesis(signalType frameSignalType, eQ23 []int32) (res []
 		return
 	}
 
-	// TODO
+	// Voiced SILK frames, on the other hand, pass the excitation through an
+	// LTP filter using the parameters decoded in Section 4.2.7.6 to produce
+	// an LPC residual.
 	return
 }
 
@@ -1499,11 +1497,13 @@ func (d *Decoder) Decode(in []byte, out []float64, isStereo bool, nanoseconds in
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.8.6
 	eQ23 := d.decodeExcitation(signalType, quantizationOffsetType, lcgSeed, pulsecounts, lsbcounts)
 
-	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.1
-	res := d.ltpSynthesis(signalType, eQ23)
+	for i := 0; i < subframeCount; i++ {
+		// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.1
+		res := d.ltpSynthesis(signalType, eQ23)
 
-	//https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.2
-	d.lpcSynthesis(out, bandwidth, dLPC, aQ12, res, gainQ16)
+		//https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.2
+		d.lpcSynthesis(out, bandwidth, dLPC, aQ12, res, gainQ16)
+	}
 
 	// n0Q15 is the LSF coefficients decoded for the prior frame
 	// see normalizeLSFInterpolation.
