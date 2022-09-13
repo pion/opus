@@ -343,3 +343,21 @@ func TestDecodeLTPFilterCoefficients(t *testing.T) {
 		t.Fatal()
 	}
 }
+
+func TestDecodeLTPScalingParameter(t *testing.T) {
+	t.Run("Voiced", func(t *testing.T) {
+		silkFrame := []byte{0xb4, 0xe2, 0x2c, 0xe, 0x10, 0x65, 0x1d, 0xa9, 0x7, 0x5c, 0x36, 0x8f, 0x96, 0x7b, 0xf4, 0x89, 0x41, 0x55, 0x98, 0x7a, 0x39, 0x2e, 0x6b, 0x71, 0xa4, 0x3, 0x70, 0xbf}
+		d := &Decoder{rangeDecoder: createRangeDecoder(silkFrame, 105, 160412192, 164623240)}
+
+		if d.decodeLTPScalingParamater(frameSignalTypeVoiced) != 15565.0 {
+			t.Fatal()
+		}
+	})
+
+	t.Run("Unvoiced", func(t *testing.T) {
+		d := &Decoder{}
+		if d.decodeLTPScalingParamater(frameSignalTypeUnvoiced) != 15565.0 {
+			t.Fatal()
+		}
+	})
+}

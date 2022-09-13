@@ -1226,7 +1226,7 @@ func (d *Decoder) decodePitchLags(signalType frameSignalType, bandwidth Bandwidt
 // packets against the recovery time after packet loss.
 //
 // https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.3
-func (d *Decoder) decodeLTPScalingParamater(signalType frameSignalType) (float64, error) {
+func (d *Decoder) decodeLTPScalingParamater(signalType frameSignalType) (LTPscaleQ14 float64) {
 	// An LTP scaling parameter appears after the LTP filter coefficients if
 	// and only if
 	//
@@ -1242,11 +1242,23 @@ func (d *Decoder) decodeLTPScalingParamater(signalType frameSignalType) (float64
 	// Frames that do not code the scaling parameter
 	//    use the default factor of 15565 (approximately 0.95).
 	if signalType != frameSignalTypeVoiced {
-		return 15565.0, nil
+		return 15565.0
 	}
 
-	// TODO
-	return 0, errUnsupportedVoicedFrames
+	// The three possible values represent Q14 scale factors of
+	// 15565, 12288, and 8192, respectively (corresponding to approximately
+	// 0.95, 0.75, and 0.5)
+	scaleFactorIndex := d.rangeDecoder.DecodeSymbolWithICDF(icdfLTPScalingParameter)
+	switch scaleFactorIndex {
+	case 0:
+		return 15565.0
+	case 1:
+		return 12288.0
+	case 2:
+		return 8192.0
+	}
+
+	return 0
 }
 
 // SILK uses a separate 5-tap pitch filter for each subframe, selected
@@ -1470,10 +1482,7 @@ func (d *Decoder) Decode(in []byte, out []float64, isStereo bool, nanoseconds in
 	d.decodeLTPFilterCoefficients(signalType)
 
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.3
-	_, err := d.decodeLTPScalingParamater(signalType)
-	if err != nil {
-		return err
-	}
+	_ = d.decodeLTPScalingParamater(signalType)
 
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.7
 	lcgSeed := d.decodeLinearCongruentialGeneratorSeed()
