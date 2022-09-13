@@ -12,8 +12,10 @@ type Decoder struct {
 }
 
 // NewDecoder creates a new Opus Decoder
-func NewDecoder() *Decoder {
-	return &Decoder{}
+func NewDecoder() Decoder {
+	return Decoder{
+		silkDecoder: silk.NewDecoder(),
+	}
 }
 
 // Decode decodes the Opus bitstream into PCM

@@ -17,14 +17,24 @@ type Decoder struct {
 
 	previousLogGain uint32
 
+	// The decoder saves the final d_LPC values, i.e., lpc[i] such that
+	// (j + n - d_LPC) <= i < (j + n), to feed into the LPC synthesis of the
+	// next subframe.  This requires storage for up to 16 values of lpc[i]
+	// (for WB frames).
+	//
+	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.2
+	finalLPCValues []float64
+
 	// n0Q15 are the LSF coefficients decoded for the prior frame
 	// see normalizeLSFInterpolation
 	n0Q15 []int16
 }
 
 // NewDecoder creates a new Silk Decoder
-func NewDecoder() *Decoder {
-	return &Decoder{}
+func NewDecoder() Decoder {
+	return Decoder{
+		finalLPCValues: make([]float64, 16),
+	}
 }
 
 // The LP layer begins with two to eight header bits These consist of one
@@ -1353,6 +1363,8 @@ func (d *Decoder) ltpSynthesis(signalType frameSignalType, eQ23 []int32) (res []
 //
 // https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.2
 func (d *Decoder) lpcSynthesis(out []float64, bandwidth Bandwidth, dLPC int, aQ12, res, gainQ16 []float64) {
+	finalLPCValuesIndex := 0
+
 	// let n be the number of samples in a subframe
 	n := d.samplesInSubframe(bandwidth)
 
@@ -1373,13 +1385,19 @@ func (d *Decoder) lpcSynthesis(out []float64, bandwidth Bandwidth, dLPC int, aQ1
 	//                  65536.0              /_               4096.0
 	//                                       k=0
 	//
+	var currentLPCVal float64
 	for i := j; i < (j + n); i++ {
 		lpcVal := gainQ16[0] / 65536.0
 		lpcVal *= res[i]
+
 		for k := 0; k < dLPC; k++ {
 			if i-k > 0 {
-				lpcVal += lpc[i-k-1] * (aQ12[k] / 4096.0)
+				currentLPCVal = lpc[i-k-1]
+			} else {
+				currentLPCVal = d.finalLPCValues[len(d.finalLPCValues)-1+(i-k)]
 			}
+
+			lpcVal += currentLPCVal * (aQ12[k] / 4096.0)
 		}
 
 		lpc[i] = lpcVal
@@ -1388,6 +1406,10 @@ func (d *Decoder) lpcSynthesis(out []float64, bandwidth Bandwidth, dLPC int, aQ1
 		// (j + n - d_LPC) <= i < (j + n), to feed into the LPC synthesis of the
 		// next subframe.  This requires storage for up to 16 values of lpc[i]
 		// (for WB frames).
+		if (j+n-dLPC) <= i && i < (j+n) {
+			d.finalLPCValues[finalLPCValuesIndex] = lpcVal
+			finalLPCValuesIndex++
+		}
 
 		// Then, the signal is clamped into the final nominal range:
 		//

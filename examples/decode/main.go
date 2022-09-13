@@ -12,7 +12,7 @@ import (
 )
 
 func main() {
-	decoder := &opus.Decoder{}
+	decoder := opus.NewDecoder()
 
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
