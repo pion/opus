@@ -1362,7 +1362,7 @@ func (d *Decoder) ltpSynthesis(signalType frameSignalType, eQ23 []int32) (res []
 // after either
 //
 // https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.2
-func (d *Decoder) lpcSynthesis(out []float64, bandwidth Bandwidth, dLPC int, aQ12, res, gainQ16 []float64) {
+func (d *Decoder) lpcSynthesis(out []float64, bandwidth Bandwidth, currentSubframe, dLPC int, aQ12, res, gainQ16 []float64) {
 	finalLPCValuesIndex := 0
 
 	// let n be the number of samples in a subframe
@@ -1387,8 +1387,8 @@ func (d *Decoder) lpcSynthesis(out []float64, bandwidth Bandwidth, dLPC int, aQ1
 	//
 	var currentLPCVal float64
 	for i := j; i < (j + n); i++ {
-		lpcVal := gainQ16[0] / 65536.0
-		lpcVal *= res[i]
+		lpcVal := gainQ16[currentSubframe] / 65536.0
+		lpcVal *= res[i+(n*currentSubframe)]
 
 		for k := 0; k < dLPC; k++ {
 			if i-k > 0 {
@@ -1415,7 +1415,7 @@ func (d *Decoder) lpcSynthesis(out []float64, bandwidth Bandwidth, dLPC int, aQ1
 		//
 		//     out[i] = clamp(-1.0, lpc[i], 1.0)
 		//
-		out[i] = clampFloat(-1.0, lpc[i], 1.0)
+		out[i+(n*currentSubframe)] = clampFloat(-1.0, lpc[i], 1.0)
 	}
 
 }
@@ -1528,7 +1528,7 @@ func (d *Decoder) Decode(in []byte, out []float64, isStereo bool, nanoseconds in
 		res := d.ltpSynthesis(signalType, eQ23)
 
 		//https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.2
-		d.lpcSynthesis(out, bandwidth, dLPC, aQ12, res, gainQ16)
+		d.lpcSynthesis(out, bandwidth, i, dLPC, aQ12, res, gainQ16)
 	}
 
 	// n0Q15 is the LSF coefficients decoded for the prior frame
