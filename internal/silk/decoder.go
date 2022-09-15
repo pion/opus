@@ -1453,10 +1453,14 @@ func (d *Decoder) lpcSynthesis(out []float64, bandwidth Bandwidth, dLPC int, aQ1
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.1
 func (d *Decoder) Decode(in []byte, out []float64, isStereo bool, nanoseconds int, bandwidth Bandwidth) error {
-	if nanoseconds != nanoseconds20Ms {
+	subframeSize := d.samplesInSubframe(bandwidth)
+	switch {
+	case nanoseconds != nanoseconds20Ms:
 		return errUnsupportedSilkFrameDuration
-	} else if isStereo {
+	case isStereo:
 		return errUnsupportedSilkStereo
+	case (subframeSize * subframeCount) > len(out):
+		return errOutBufferTooSmall
 	}
 
 	d.rangeDecoder.Init(in)

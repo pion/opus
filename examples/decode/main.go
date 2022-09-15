@@ -29,7 +29,7 @@ func main() {
 		panic(err)
 	}
 
-	out := make([]float64, 1500)
+	out := make([]float64, 320)
 	for {
 		pageData, _, err := ogg.ParseNextPage()
 		if errors.Is(err, io.EOF) {
