@@ -15,7 +15,7 @@ type Decoder struct {
 	// Is the previous frame a voiced frame?
 	isPreviousFrameVoiced bool
 
-	previousLogGain uint32
+	previousLogGain int32
 
 	// The decoder saves the final d_LPC values, i.e., lpc[i] such that
 	// (j + n - d_LPC) <= i < (j + n), to feed into the LPC synthesis of the
@@ -107,12 +107,7 @@ func (d *Decoder) determineFrameType(voiceActivityDetected bool) (signalType fra
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.4
 func (d *Decoder) decodeSubframeQuantizations(signalType frameSignalType) (gainQ16 []float64) {
-	var (
-		logGain        uint32
-		deltaGainIndex uint32
-		gainIndex      uint32
-	)
-
+	var logGain, deltaGainIndex, gainIndex int32
 	gainQ16 = make([]float64, 4)
 
 	for subframeIndex := 0; subframeIndex < subframeCount; subframeIndex++ {
@@ -127,22 +122,22 @@ func (d *Decoder) decodeSubframeQuantizations(signalType frameSignalType) (gainQ
 			// Table 11 based on the decoded signal type
 			switch signalType {
 			case frameSignalTypeInactive:
-				gainIndex = d.rangeDecoder.DecodeSymbolWithICDF(icdfIndependentQuantizationGainMSBInactive)
+				gainIndex = int32(d.rangeDecoder.DecodeSymbolWithICDF(icdfIndependentQuantizationGainMSBInactive))
 			case frameSignalTypeVoiced:
-				gainIndex = d.rangeDecoder.DecodeSymbolWithICDF(icdfIndependentQuantizationGainMSBVoiced)
+				gainIndex = int32(d.rangeDecoder.DecodeSymbolWithICDF(icdfIndependentQuantizationGainMSBVoiced))
 			case frameSignalTypeUnvoiced:
-				gainIndex = d.rangeDecoder.DecodeSymbolWithICDF(icdfIndependentQuantizationGainMSBUnvoiced)
+				gainIndex = int32(d.rangeDecoder.DecodeSymbolWithICDF(icdfIndependentQuantizationGainMSBUnvoiced))
 			}
 
 			// The 3 least significant bits are decoded using a uniform PDF:
 			// These 6 bits are combined to form a value, gain_index, between 0 and 63.
-			gainIndex = (gainIndex << 3) | d.rangeDecoder.DecodeSymbolWithICDF(icdfIndependentQuantizationGainLSB)
+			gainIndex = (gainIndex << 3) | int32(d.rangeDecoder.DecodeSymbolWithICDF(icdfIndependentQuantizationGainLSB))
 
 			// When the gain for the previous subframe is available, then the
 			// current gain is limited as follows:
 			//     log_gain = max(gain_index, previous_log_gain - 16)
 			if d.haveDecoded {
-				logGain = maxUint32(gainIndex, d.previousLogGain-16)
+				logGain = maxInt32(gainIndex, d.previousLogGain-16)
 			} else {
 				logGain = gainIndex
 			}
@@ -151,12 +146,12 @@ func (d *Decoder) decodeSubframeQuantizations(signalType frameSignalType) (gainQ
 			// first subframe of frames not listed as using independent coding
 			// above), the quantization gain is coded relative to the gain from the
 			// previous subframe
-			deltaGainIndex = d.rangeDecoder.DecodeSymbolWithICDF(icdfDeltaQuantizationGain)
+			deltaGainIndex = int32(d.rangeDecoder.DecodeSymbolWithICDF(icdfDeltaQuantizationGain))
 
 			// The following formula translates this index into a quantization gain
 			// for the current subframe using the gain from the previous subframe:
 			//      log_gain = clamp(0, max(2*delta_gain_index - 16, previous_log_gain + delta_gain_index - 4), 63)
-			logGain = uint32(clamp(0, maxInt32(2*int32(deltaGainIndex)-16, int32(d.previousLogGain+deltaGainIndex)-4), 63))
+			logGain = int32(clamp(0, maxInt32(2*int32(deltaGainIndex)-16, int32(d.previousLogGain+deltaGainIndex)-4), 63))
 		}
 
 		d.previousLogGain = logGain
