@@ -1410,7 +1410,7 @@ func (d *Decoder) lpcSynthesis(out []float64, bandwidth Bandwidth, currentSubfra
 		//
 		//     out[i] = clamp(-1.0, lpc[i], 1.0)
 		//
-		out[i+(n*currentSubframe)] = clampFloat(-1.0, lpc[i], 1.0)
+		out[i] = clampFloat(-1.0, lpc[i], 1.0)
 	}
 
 }
@@ -1523,7 +1523,7 @@ func (d *Decoder) Decode(in []byte, out []float64, isStereo bool, nanoseconds in
 		res := d.ltpSynthesis(signalType, eQ23)
 
 		//https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.2
-		d.lpcSynthesis(out, bandwidth, i, dLPC, aQ12, res, gainQ16)
+		d.lpcSynthesis(out[subframeSize*i:], bandwidth, i, dLPC, aQ12, res, gainQ16)
 	}
 
 	// n0Q15 is the LSF coefficients decoded for the prior frame
