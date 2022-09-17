@@ -404,7 +404,7 @@ func (d *Decoder) normalizeLSFStabilization(nlsfQ15 []int16) {
 // (in the same channel) and the current frame
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.5
-func (d *Decoder) normalizeLSFInterpolation(n2Q15 []int16) (n1Q15 []int16) {
+func (d *Decoder) normalizeLSFInterpolation(n2Q15 []int16) (n1Q15 []int16, wQ2 int16) {
 	// Let n2_Q15[k] be the normalized LSF coefficients decoded by the
 	// procedure in Section 4.2.7.5, n0_Q15[k] be the LSF coefficients
 	// decoded for the prior frame, and w_Q2 be the interpolation factor.
@@ -412,9 +412,9 @@ func (d *Decoder) normalizeLSFInterpolation(n2Q15 []int16) (n1Q15 []int16) {
 	// 20 ms frame, n1_Q15[k], are
 	//
 	//      n1_Q15[k] = n0_Q15[k] + (w_Q2*(n2_Q15[k] - n0_Q15[k]) >> 2)
-	wQ2 := int16(d.rangeDecoder.DecodeSymbolWithICDF(icdfNormalizedLSFInterpolationIndex))
+	wQ2 = int16(d.rangeDecoder.DecodeSymbolWithICDF(icdfNormalizedLSFInterpolationIndex))
 	if wQ2 == 4 || !d.haveDecoded {
-		return n2Q15
+		return n2Q15, wQ2
 	}
 
 	n1Q15 = make([]int16, len(n2Q15))
@@ -565,7 +565,7 @@ func (d *Decoder) decodeLinearCongruentialGeneratorSeed() uint32 {
 // | WB              | 20 ms      |                     20 |
 // +-----------------+------------+------------------------+
 //
-//  Table 44: Number of Shell Blocks Per SILK Frame
+//	Table 44: Number of Shell Blocks Per SILK Frame
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8
 func (d *Decoder) decodeShellblocks(nanoseconds int, bandwidth Bandwidth) (shellblocks int) {
@@ -1326,7 +1326,7 @@ func (d *Decoder) samplesInSubframe(bandwidth Bandwidth) int {
 }
 
 // https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.1
-func (d *Decoder) ltpSynthesis(signalType frameSignalType, eQ23 []int32) (res []float64) {
+func (d *Decoder) ltpSynthesis(signalType frameSignalType, eQ23 []int32, i int, LTPscaleQ14 float64, bandwidth Bandwidth, wQ2 int16) (res []float64) {
 	// For unvoiced frames (see Section 4.2.7.3), the LPC residual for i
 	// such that j <= i < (j + n) is simply a normalized copy of the
 	// excitation signal, i.e.,
@@ -1412,39 +1412,39 @@ func (d *Decoder) lpcSynthesis(out []float64, bandwidth Bandwidth, currentSubfra
 		//
 		out[i] = clampFloat(-1.0, lpc[i], 1.0)
 	}
-
 }
 
 // Decode decodes many SILK subframes
-//   An overview of the decoder is given in Figure 14.
 //
-//        +---------+    +------------+
-//     -->| Range   |--->| Decode     |---------------------------+
-//      1 | Decoder | 2  | Parameters |----------+       5        |
-//        +---------+    +------------+     4    |                |
-//                            3 |                |                |
-//                             \/               \/               \/
-//                       +------------+   +------------+   +------------+
-//                       | Generate   |-->| LTP        |-->| LPC        |
-//                       | Excitation |   | Synthesis  |   | Synthesis  |
-//                       +------------+   +------------+   +------------+
-//                                               ^                |
-//                                               |                |
-//                           +-------------------+----------------+
-//                           |                                      6
-//                           |   +------------+   +-------------+
-//                           +-->| Stereo     |-->| Sample Rate |-->
-//                               | Unmixing   | 7 | Conversion  | 8
-//                               +------------+   +-------------+
+//	An overview of the decoder is given in Figure 14.
 //
-//     1: Range encoded bitstream
-//     2: Coded parameters
-//     3: Pulses, LSBs, and signs
-//     4: Pitch lags, Long-Term Prediction (LTP) coefficients
-//     5: Linear Predictive Coding (LPC) coefficients and gains
-//     6: Decoded signal (mono or mid-side stereo)
-//     7: Unmixed signal (mono or left-right stereo)
-//     8: Resampled signal
+//	     +---------+    +------------+
+//	  -->| Range   |--->| Decode     |---------------------------+
+//	   1 | Decoder | 2  | Parameters |----------+       5        |
+//	     +---------+    +------------+     4    |                |
+//	                         3 |                |                |
+//	                          \/               \/               \/
+//	                    +------------+   +------------+   +------------+
+//	                    | Generate   |-->| LTP        |-->| LPC        |
+//	                    | Excitation |   | Synthesis  |   | Synthesis  |
+//	                    +------------+   +------------+   +------------+
+//	                                            ^                |
+//	                                            |                |
+//	                        +-------------------+----------------+
+//	                        |                                      6
+//	                        |   +------------+   +-------------+
+//	                        +-->| Stereo     |-->| Sample Rate |-->
+//	                            | Unmixing   | 7 | Conversion  | 8
+//	                            +------------+   +-------------+
+//
+//	  1: Range encoded bitstream
+//	  2: Coded parameters
+//	  3: Pulses, LSBs, and signs
+//	  4: Pitch lags, Long-Term Prediction (LTP) coefficients
+//	  5: Linear Predictive Coding (LPC) coefficients and gains
+//	  6: Decoded signal (mono or mid-side stereo)
+//	  7: Unmixed signal (mono or left-right stereo)
+//	  8: Resampled signal
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.1
 func (d *Decoder) Decode(in []byte, out []float64, isStereo bool, nanoseconds int, bandwidth Bandwidth) error {
@@ -1483,7 +1483,7 @@ func (d *Decoder) Decode(in []byte, out []float64, isStereo bool, nanoseconds in
 	d.normalizeLSFStabilization(nlsfQ15)
 
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.5
-	n1Q15 := d.normalizeLSFInterpolation(nlsfQ15)
+	n1Q15, wQ2 := d.normalizeLSFInterpolation(nlsfQ15)
 
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.6
 	a32Q17 := d.convertNormalizedLSFsToLPCCoefficients(n1Q15, bandwidth)
@@ -1501,7 +1501,7 @@ func (d *Decoder) Decode(in []byte, out []float64, isStereo bool, nanoseconds in
 	d.decodeLTPFilterCoefficients(signalType)
 
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.3
-	_ = d.decodeLTPScalingParamater(signalType)
+	LTPscaleQ14 := d.decodeLTPScalingParamater(signalType)
 
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.7
 	lcgSeed := d.decodeLinearCongruentialGeneratorSeed()
@@ -1520,7 +1520,7 @@ func (d *Decoder) Decode(in []byte, out []float64, isStereo bool, nanoseconds in
 
 	for i := 0; i < subframeCount; i++ {
 		// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.1
-		res := d.ltpSynthesis(signalType, eQ23)
+		res := d.ltpSynthesis(signalType, eQ23, subframeCount, LTPscaleQ14, bandwidth, wQ2)
 
 		//https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.2
 		d.lpcSynthesis(out[subframeSize*i:], bandwidth, i, dLPC, aQ12, res, gainQ16)
