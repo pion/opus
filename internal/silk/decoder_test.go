@@ -382,7 +382,7 @@ func TestLPCSynthesis(t *testing.T) {
 
 	for i := range expectedOut {
 		out := make([]float64, 80)
-		d.lpcSynthesis(out, bandwidth, i, dLPC, aQ12, res, gainQ16)
+		d.lpcSynthesis(out, bandwidth, d.samplesInSubframe(BandwidthWideband), i, dLPC, aQ12, res, gainQ16)
 		for j := range out {
 			if out[j]-expectedOut[i][j] > floatEqualityThreshold {
 				t.Fatalf("run(%d) index(%d) (%f) != (%f)", i, j, out[j], expectedOut[i][j])

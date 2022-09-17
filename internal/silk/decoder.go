@@ -1357,11 +1357,8 @@ func (d *Decoder) ltpSynthesis(signalType frameSignalType, eQ23 []int32, i int, 
 // after either
 //
 // https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.2
-func (d *Decoder) lpcSynthesis(out []float64, bandwidth Bandwidth, currentSubframe, dLPC int, aQ12, res, gainQ16 []float64) {
+func (d *Decoder) lpcSynthesis(out []float64, bandwidth Bandwidth, n, currentSubframe, dLPC int, aQ12, res, gainQ16 []float64) {
 	finalLPCValuesIndex := 0
-
-	// let n be the number of samples in a subframe
-	n := d.samplesInSubframe(bandwidth)
 
 	// j be the index of the first sample in the residual corresponding to
 	// the current subframe.
@@ -1411,6 +1408,35 @@ func (d *Decoder) lpcSynthesis(out []float64, bandwidth Bandwidth, currentSubfra
 		//     out[i] = clamp(-1.0, lpc[i], 1.0)
 		//
 		out[i] = clampFloat(-1.0, lpc[i], 1.0)
+	}
+}
+
+// The remainder of the reconstruction process for the frame does not
+// need to be bit-exact, as small errors should only introduce
+// proportionally small distortions.  Although the reference
+// implementation only includes a fixed-point version of the remaining
+// steps, this section describes them in terms of a floating-point
+// version for simplicity.  This produces a signal with a nominal range
+// of -1.0 to 1.0.
+//
+// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9
+func (d *Decoder) silkFrameReconstruction(
+	signalType frameSignalType, bandwidth Bandwidth,
+	dLPC int,
+	eQ23 []int32,
+	LTPscaleQ14 float64,
+	wQ2 int16,
+	aQ12, gainQ16, out []float64,
+) {
+	// let n be the number of samples in a subframe
+	n := d.samplesInSubframe(bandwidth)
+
+	for i := 0; i < subframeCount; i++ {
+		// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.1
+		res := d.ltpSynthesis(signalType, eQ23, subframeCount, LTPscaleQ14, bandwidth, wQ2)
+
+		//https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.2
+		d.lpcSynthesis(out[n*i:], bandwidth, n, i, dLPC, aQ12, res, gainQ16)
 	}
 }
 
@@ -1518,13 +1544,14 @@ func (d *Decoder) Decode(in []byte, out []float64, isStereo bool, nanoseconds in
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.8.6
 	eQ23 := d.decodeExcitation(signalType, quantizationOffsetType, lcgSeed, pulsecounts, lsbcounts)
 
-	for i := 0; i < subframeCount; i++ {
-		// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.1
-		res := d.ltpSynthesis(signalType, eQ23, subframeCount, LTPscaleQ14, bandwidth, wQ2)
-
-		//https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.2
-		d.lpcSynthesis(out[subframeSize*i:], bandwidth, i, dLPC, aQ12, res, gainQ16)
-	}
+	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9
+	d.silkFrameReconstruction(signalType, bandwidth,
+		dLPC,
+		eQ23,
+		LTPscaleQ14,
+		wQ2,
+		aQ12, gainQ16, out,
+	)
 
 	// n0Q15 is the LSF coefficients decoded for the prior frame
 	// see normalizeLSFInterpolation.
