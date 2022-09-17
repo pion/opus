@@ -400,7 +400,7 @@ func TestDecodePitchLags(t *testing.T) {
 		t.Fatal()
 	}
 
-	if !reflect.DeepEqual(pitchLags, []int{206}) {
+	if !reflect.DeepEqual(pitchLags, []int{206, 206, 206, 206}) {
 		t.Fatal()
 	}
 }
@@ -433,7 +433,7 @@ func TestDecodeLTPScalingParameter(t *testing.T) {
 	})
 }
 
-func TestSean(t *testing.T) {
+func TestDecode(t *testing.T) {
 	d := NewDecoder()
 	out := make([]float64, 320)
 
