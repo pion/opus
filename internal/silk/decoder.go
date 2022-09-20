@@ -1362,6 +1362,13 @@ func (d *Decoder) ltpSynthesis(
 	// Voiced SILK frames, on the other hand, pass the excitation through an
 	// LTP filter using the parameters decoded in Section 4.2.7.6 to produce
 	// an LPC residual.
+	for i := range res {
+		res[i] = float32(eQ23[i]) / 8388608.0
+	}
+
+	// Voiced SILK frames, on the other hand, pass the excitation through an
+	// LTP filter using the parameters decoded in Section 4.2.7.6 to produce
+	// an LPC residual.
 
 	// If this is the third or fourth subframe of a 20 ms SILK frame and the LSF
 	// interpolation factor, w_Q2 (see Section 4.2.7.5.5), is less than 4,
