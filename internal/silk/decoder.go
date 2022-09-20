@@ -23,7 +23,7 @@ type Decoder struct {
 	// (for WB frames).
 	//
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.2
-	finalLPCValues []float64
+	finalLPCValues []float32
 
 	// n0Q15 are the LSF coefficients decoded for the prior frame
 	// see normalizeLSFInterpolation
@@ -33,7 +33,7 @@ type Decoder struct {
 // NewDecoder creates a new Silk Decoder
 func NewDecoder() Decoder {
 	return Decoder{
-		finalLPCValues: make([]float64, 16),
+		finalLPCValues: make([]float32, 16),
 	}
 }
 
@@ -106,9 +106,9 @@ func (d *Decoder) determineFrameType(voiceActivityDetected bool) (signalType fra
 // A separate quantization gain is coded for each 5 ms subframe
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.4
-func (d *Decoder) decodeSubframeQuantizations(signalType frameSignalType) (gainQ16 []float64) {
+func (d *Decoder) decodeSubframeQuantizations(signalType frameSignalType) (gainQ16 []float32) {
 	var logGain, deltaGainIndex, gainIndex int32
-	gainQ16 = make([]float64, 4)
+	gainQ16 = make([]float32, 4)
 
 	for subframeIndex := 0; subframeIndex < subframeCount; subframeIndex++ {
 
@@ -176,7 +176,7 @@ func (d *Decoder) decodeSubframeQuantizations(signalType frameSignalType) (gainQ
 		// between 81920 and 1686110208, inclusive (representing scale factors
 		// of 1.25 to 25728, respectively).
 
-		gainQ16[subframeIndex] = float64((1 << i) + ((-174*f*(128-f)>>16)+f)*((1<<i)>>7))
+		gainQ16[subframeIndex] = float32((1 << i) + ((-174*f*(128-f)>>16)+f)*((1<<i)>>7))
 	}
 
 	return
@@ -1056,8 +1056,8 @@ func (d *Decoder) limitLPCCoefficientsRange(a32Q17 []int32) {
 // gain.
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.8
-func (d *Decoder) limitLPCFilterPredictionGain(a32Q17 []int32) (aQ12 []float64) {
-	aQ12 = make([]float64, len(a32Q17))
+func (d *Decoder) limitLPCFilterPredictionGain(a32Q17 []int32) (aQ12 []float32) {
+	aQ12 = make([]float32, len(a32Q17))
 
 	// However, silk_LPC_inverse_pred_gain_QA() approximates this using
 	// fixed-point arithmetic to guarantee reproducible results across
@@ -1070,7 +1070,7 @@ func (d *Decoder) limitLPCFilterPredictionGain(a32Q17 []int32) (aQ12 []float64) 
 	//
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.8
 	for n := range a32Q17 {
-		aQ12[n] = float64((a32Q17[n] + 16) >> 5)
+		aQ12[n] = float32((a32Q17[n] + 16) >> 5)
 	}
 
 	return
@@ -1232,7 +1232,7 @@ func (d *Decoder) decodePitchLags(signalType frameSignalType, bandwidth Bandwidt
 // packets against the recovery time after packet loss.
 //
 // https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.3
-func (d *Decoder) decodeLTPScalingParamater(signalType frameSignalType) (LTPscaleQ14 float64) {
+func (d *Decoder) decodeLTPScalingParamater(signalType frameSignalType) (LTPscaleQ14 float32) {
 	// An LTP scaling parameter appears after the LTP filter coefficients if
 	// and only if
 	//
@@ -1332,17 +1332,17 @@ func (d *Decoder) samplesInSubframe(bandwidth Bandwidth) int {
 
 // https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.1
 func (d *Decoder) ltpSynthesis(
-	out []float64,
+	out []float32,
 	signalType frameSignalType,
 	bQ7 []int8,
 	pitchLags []int,
 	eQ23 []int32,
 	n, j, s, dLPC int,
-	LTPScaleQ14 float64,
+	LTPScaleQ14 float32,
 	bandwidth Bandwidth,
 	wQ2 int16,
-	aQ12, gainQ16, lpc []float64,
-) (res []float64) {
+	aQ12, gainQ16, lpc []float32,
+) (res []float32) {
 	// For unvoiced frames (see Section 4.2.7.3), the LPC residual for i
 	// such that j <= i < (j + n) is simply a normalized copy of the
 	// excitation signal, i.e.,
@@ -1351,10 +1351,10 @@ func (d *Decoder) ltpSynthesis(
 	//     res[i] = ---------
 	//               2.0**23
 
-	res = make([]float64, len(eQ23))
+	res = make([]float32, len(eQ23))
 	if signalType != frameSignalTypeVoiced {
 		for i := j; i < (j + n); i++ {
-			res[i] = float64(eQ23[i]) / 8388608
+			res[i] = float32(eQ23[i]) / 8388608
 		}
 		return
 	}
@@ -1388,7 +1388,7 @@ func (d *Decoder) ltpSynthesis(
 	//                                 out[i] - \  out[i-k-1] * --------, 1.0)
 	//                                          /_               4096.0
 	//                                          k=0
-	var outVal float64
+	var outVal float32
 	for i := (j - pitchLags[s] - 2); i < out_end; i++ {
 		index := i + j
 		if index < 0 || index >= len(res) || index >= len(out) {
@@ -1427,7 +1427,7 @@ func (d *Decoder) ltpSynthesis(
 	// lpc[i] in Section 4.2.7.9.2, the output of this latter equation is
 	// merely a scaled version of the values of res[i] from previous
 	// subframes.
-	var lpcVal float64
+	var lpcVal float32
 	for i := out_end; i < j; i++ {
 		index := i + j
 		if index < 0 || index >= len(res) {
@@ -1460,7 +1460,7 @@ func (d *Decoder) ltpSynthesis(
 	//    res[i] = --------- + \  res[i - pitch_lags[s] + 2 - k] * -------
 	//              2.0**23    /_                                   128.0
 	//                         k=0
-	var resSum, resVal float64
+	var resSum, resVal float32
 	for i := j; i < (j + n); i++ {
 		index := i + j
 		if index < 0 || index >= len(res) {
@@ -1473,14 +1473,14 @@ func (d *Decoder) ltpSynthesis(
 			if resValIndex < 0 || resValIndex >= len(res) {
 				resVal = 0
 			} else {
-				resVal = res[resValIndex] * (float64(bQ7[k]) / 128.0)
+				resVal = res[resValIndex] * (float32(bQ7[k]) / 128.0)
 
 			}
 
 			resSum += resVal
 		}
 
-		res[index] = (float64(eQ23[i]) / 8388608.0) + resSum
+		res[index] = (float32(eQ23[i]) / 8388608.0) + resSum
 	}
 
 	return
@@ -1493,7 +1493,7 @@ func (d *Decoder) ltpSynthesis(
 // after either
 //
 // https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.2
-func (d *Decoder) lpcSynthesis(out []float64, bandwidth Bandwidth, n, s, dLPC int, aQ12, res, gainQ16, lpc []float64) {
+func (d *Decoder) lpcSynthesis(out []float32, bandwidth Bandwidth, n, s, dLPC int, aQ12, res, gainQ16, lpc []float32) {
 	finalLPCValuesIndex := 0
 
 	// j be the index of the first sample in the residual corresponding to
@@ -1509,7 +1509,7 @@ func (d *Decoder) lpcSynthesis(out []float64, bandwidth Bandwidth, n, s, dLPC in
 	//                  65536.0              /_               4096.0
 	//                                       k=0
 	//
-	var currentLPCVal float64
+	var currentLPCVal float32
 	for i := j; i < (j + n); i++ {
 		sampleIndex := i + (n * s)
 
@@ -1560,9 +1560,9 @@ func (d *Decoder) silkFrameReconstruction(
 	bQ7 []int8,
 	pitchLags []int,
 	eQ23 []int32,
-	LTPscaleQ14 float64,
+	LTPscaleQ14 float32,
 	wQ2 int16,
-	aQ12, gainQ16, out []float64,
+	aQ12, gainQ16, out []float32,
 ) {
 	// let n be the number of samples in a subframe
 	//
@@ -1571,7 +1571,7 @@ func (d *Decoder) silkFrameReconstruction(
 
 	// let lpc[i] be the result of LPC synthesis from the last d_LPC samples of the
 	//  previous subframe or zeros in the first subframe for this channel
-	lpc := make([]float64, n*subframeCount)
+	lpc := make([]float32, n*subframeCount)
 
 	// s be the index of the current subframe in this SILK frame
 	// (0 or 1 for 10 ms frames, or 0 to 3 for 20 ms frames)
@@ -1623,7 +1623,7 @@ func (d *Decoder) silkFrameReconstruction(
 //	  8: Resampled signal
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.1
-func (d *Decoder) Decode(in []byte, out []float64, isStereo bool, nanoseconds int, bandwidth Bandwidth) error {
+func (d *Decoder) Decode(in []byte, out []float32, isStereo bool, nanoseconds int, bandwidth Bandwidth) error {
 	subframeSize := d.samplesInSubframe(bandwidth)
 	switch {
 	case nanoseconds != nanoseconds20Ms:
@@ -1695,7 +1695,8 @@ func (d *Decoder) Decode(in []byte, out []float64, isStereo bool, nanoseconds in
 	eQ23 := d.decodeExcitation(signalType, quantizationOffsetType, lcgSeed, pulsecounts, lsbcounts)
 
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9
-	d.silkFrameReconstruction(signalType, bandwidth,
+	d.silkFrameReconstruction(
+		signalType, bandwidth,
 		dLPC,
 		bQ7,
 		pitchLags,

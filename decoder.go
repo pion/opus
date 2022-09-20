@@ -19,7 +19,7 @@ func NewDecoder() Decoder {
 }
 
 // Decode decodes the Opus bitstream into PCM
-func (d *Decoder) Decode(in []byte, out []float64) (bandwidth Bandwidth, isStereo bool, err error) {
+func (d *Decoder) Decode(in []byte, out []float32) (bandwidth Bandwidth, isStereo bool, err error) {
 	if len(in) < 1 {
 		return 0, false, errTooShortForTableOfContentsHeader
 	}

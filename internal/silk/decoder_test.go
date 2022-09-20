@@ -30,7 +30,7 @@ func createRangeDecoder(data []byte, bitsRead uint, rangeSize uint32, highAndCod
 
 func TestDecode20MsOnly(t *testing.T) {
 	d := &Decoder{}
-	err := d.Decode(testSilkFrame(), []float64{}, false, 1, BandwidthWideband)
+	err := d.Decode(testSilkFrame(), []float32{}, false, 1, BandwidthWideband)
 	if !errors.Is(err, errUnsupportedSilkFrameDuration) {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func TestDecode20MsOnly(t *testing.T) {
 
 func TestDecodeStereoTODO(t *testing.T) {
 	d := &Decoder{}
-	err := d.Decode(testSilkFrame(), []float64{}, true, nanoseconds20Ms, BandwidthWideband)
+	err := d.Decode(testSilkFrame(), []float32{}, true, nanoseconds20Ms, BandwidthWideband)
 	if !errors.Is(err, errUnsupportedSilkStereo) {
 		t.Fatal(err)
 	}
@@ -60,14 +60,14 @@ func TestDecodeSubframeQuantizations(t *testing.T) {
 	d := &Decoder{rangeDecoder: createRangeDecoder(testSilkFrame(), 31, 482344960, 437100388)}
 
 	gainQ16 := d.decodeSubframeQuantizations(frameSignalTypeInactive)
-	if !reflect.DeepEqual(gainQ16, []float64{210944, 112640, 96256, 96256}) {
+	if !reflect.DeepEqual(gainQ16, []float32{210944, 112640, 96256, 96256}) {
 		t.Fatal()
 	}
 }
 
 func TestDecodeBufferSize(t *testing.T) {
 	d := NewDecoder()
-	err := d.Decode([]byte{}, make([]float64, 50), false, nanoseconds20Ms, BandwidthWideband)
+	err := d.Decode([]byte{}, make([]float32, 50), false, nanoseconds20Ms, BandwidthWideband)
 	if !errors.Is(err, errOutBufferTooSmall) {
 		t.Fatal()
 	}
@@ -213,7 +213,7 @@ func TestLimitLPCFilterPredictionGain(t *testing.T) {
 		-4493, -1614, -1960, -3112, -2153, -2898,
 	}
 
-	expectedAQ12 := []float64{
+	expectedAQ12 := []float32{
 		405, 305, 131, 114, -118, -138, -72, -146, -108, -120, -140, -50, -61,
 		-97, -67, -91,
 	}
@@ -229,12 +229,12 @@ func TestLPCSynthesis(t *testing.T) {
 
 	bandwidth := BandwidthWideband
 	dLPC := 16
-	aQ12 := []float64{
+	aQ12 := []float32{
 		405, 305, 131, 114, -118, -138, -72, -146, -108, -120,
 		-140, -50, -61, -97, -67, -91,
 	}
 
-	res := []float64{
+	res := []float32{
 		7.152557373046875e-06, 7.152557373046875e-06, 7.152557373046875e-06, -7.152557373046875e-06, 7.152557373046875e-06,
 		-7.152557373046875e-06, 7.152557373046875e-06, -7.152557373046875e-06, 7.152557373046875e-06, 7.152557373046875e-06,
 		-7.152557373046875e-06, -7.152557373046875e-06, 7.152557373046875e-06, 7.152557373046875e-06, -7.152557373046875e-06,
@@ -301,11 +301,11 @@ func TestLPCSynthesis(t *testing.T) {
 		-7.152557373046875e-06, -7.152557373046875e-06, 7.152557373046875e-06, 7.152557373046875e-06, 7.152557373046875e-06,
 	}
 
-	gainQ16 := []float64{
+	gainQ16 := []float32{
 		210944, 112640, 96256, 96256,
 	}
 
-	expectedOut := [][]float64{
+	expectedOut := [][]float32{
 		{
 			0.000023, 0.000025, 0.000027, -0.000018, 0.000025,
 			-0.000021, 0.000021, -0.000024, 0.000021, 0.000021,
@@ -380,9 +380,9 @@ func TestLPCSynthesis(t *testing.T) {
 		},
 	}
 
-	lpc := make([]float64, d.samplesInSubframe(BandwidthWideband)*subframeCount)
+	lpc := make([]float32, d.samplesInSubframe(BandwidthWideband)*subframeCount)
 	for i := range expectedOut {
-		out := make([]float64, 80)
+		out := make([]float32, 80)
 		d.lpcSynthesis(out, bandwidth, d.samplesInSubframe(BandwidthWideband), i, dLPC, aQ12, res, gainQ16, lpc)
 		for j := range out {
 			if out[j]-expectedOut[i][j] > floatEqualityThreshold {
@@ -436,9 +436,9 @@ func TestDecodeLTPScalingParameter(t *testing.T) {
 
 func TestDecode(t *testing.T) {
 	d := NewDecoder()
-	out := make([]float64, 320)
+	out := make([]float32, 320)
 
-	compareBuffer := func(out, expectedOut []float64, t *testing.T) {
+	compareBuffer := func(out, expectedOut []float32, t *testing.T) {
 		for i := range expectedOut {
 			if out[i]-expectedOut[i] > floatEqualityThreshold {
 				t.Fatalf("%d (%f) != (%f)", i, out[i], expectedOut[i])
@@ -451,7 +451,7 @@ func TestDecode(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		expectedOut := []float64{
+		expectedOut := []float32{
 			0.000023, 0.000025, 0.000027, -0.000018, 0.000025,
 			-0.000021, 0.000021, -0.000024, 0.000021, 0.000021,
 			-0.000022, -0.000026, 0.000018, 0.000022, -0.000023,
@@ -525,7 +525,7 @@ func TestDecode(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		expectedOut := []float64{
+		expectedOut := []float32{
 			0.000014, -0.000006, -0.000007, -0.000009, 0.000010,
 			0.000011, -0.000009, 0.000011, 0.000011, -0.000009,
 			0.000010, -0.000010, -0.000011, -0.000014, 0.000007,
