@@ -57,7 +57,7 @@ func main() {
 				panic(err)
 			}
 
-			f.Write(floatarrtobytes(out))
+			f.Write(convertFloatToByteSlice(out))
 		}
 	}
 }
