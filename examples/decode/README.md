@@ -28,9 +28,9 @@ decoder `pwd`/output.ogg `audio-samples.pcm`
 Now play the audio with the tool of your choice.
 
 ```
-gst-launch-1.0 filesrc location=pion-out ! audio/x-raw, format=F32LE, rate=16000,channels=1  ! autoaudiosink -v
+gst-launch-1.0 filesrc location=audio-samples.pcm ! audio/x-raw, format=F32LE, rate=16000,channels=1  ! autoaudiosink -v
 ```
 
 ```
-ffplay -f f32le -ar 16000
+ffplay -f f32le -ar 16000 audio-samples.pcm
 ```
