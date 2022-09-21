@@ -89,7 +89,7 @@ func newWith(in io.Reader, doChecksum bool) (*OggReader, *OggHeader, error) {
 }
 
 func (o *OggReader) readHeaders() (*OggHeader, error) {
-	payload, pageHeader, err := o.ParseNextPage()
+	segments, pageHeader, err := o.ParseNextPage()
 	if err != nil {
 		return nil, err
 	}
@@ -103,27 +103,27 @@ func (o *OggReader) readHeaders() (*OggHeader, error) {
 		return nil, errBadIDPageType
 	}
 
-	if len(payload) != idPagePayloadLength {
+	if len(segments[0]) != idPagePayloadLength {
 		return nil, errBadIDPageLength
 	}
 
-	if s := string(payload[:8]); s != idPageSignature {
+	if s := string(segments[0][:8]); s != idPageSignature {
 		return nil, errBadIDPagePayloadSignature
 	}
 
-	header.Version = payload[8]
-	header.Channels = payload[9]
-	header.PreSkip = binary.LittleEndian.Uint16(payload[10:12])
-	header.SampleRate = binary.LittleEndian.Uint32(payload[12:16])
-	header.OutputGain = binary.LittleEndian.Uint16(payload[16:18])
-	header.ChannelMap = payload[18]
+	header.Version = segments[0][8]
+	header.Channels = segments[0][9]
+	header.PreSkip = binary.LittleEndian.Uint16(segments[0][10:12])
+	header.SampleRate = binary.LittleEndian.Uint32(segments[0][12:16])
+	header.OutputGain = binary.LittleEndian.Uint16(segments[0][16:18])
+	header.ChannelMap = segments[0][18]
 
 	return header, nil
 }
 
-// ParseNextPage reads from stream and returns Ogg page payload, header,
+// ParseNextPage reads from stream and returns Ogg page segments, header,
 // and an error if there is incomplete page data.
-func (o *OggReader) ParseNextPage() ([]byte, *OggPageHeader, error) {
+func (o *OggReader) ParseNextPage() ([][]byte, *OggPageHeader, error) {
 	h := make([]byte, pageHeaderLen)
 
 	n, err := io.ReadFull(o.stream, h)
@@ -149,14 +149,15 @@ func (o *OggReader) ParseNextPage() ([]byte, *OggPageHeader, error) {
 		return nil, nil, err
 	}
 
-	payloadSize := 0
-	for _, s := range sizeBuffer {
-		payloadSize += int(s)
-	}
+	segments := [][]byte{}
 
-	payload := make([]byte, payloadSize)
-	if _, err = io.ReadFull(o.stream, payload); err != nil {
-		return nil, nil, err
+	for _, s := range sizeBuffer {
+		segment := make([]byte, int(s))
+		if _, err = io.ReadFull(o.stream, segment); err != nil {
+			return nil, nil, err
+		}
+
+		segments = append(segments, segment)
 	}
 
 	if o.doChecksum {
@@ -177,8 +178,11 @@ func (o *OggReader) ParseNextPage() ([]byte, *OggPageHeader, error) {
 		for _, s := range sizeBuffer {
 			updateChecksum(s)
 		}
-		for index := range payload {
-			updateChecksum(payload[index])
+
+		for i := range segments {
+			for index := range segments[i] {
+				updateChecksum(segments[i][index])
+			}
 		}
 
 		if binary.LittleEndian.Uint32(h[22:22+4]) != checksum {
@@ -186,7 +190,7 @@ func (o *OggReader) ParseNextPage() ([]byte, *OggPageHeader, error) {
 		}
 	}
 
-	return payload, pageHeader, nil
+	return segments, pageHeader, nil
 }
 
 // ResetReader resets the internal stream of OggReader. This is useful
