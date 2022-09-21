@@ -19,10 +19,24 @@ This package provides a Pure Go implementation of the [Opus Codec](https://opus-
 
 ### Why Opus?
 
-### Why Opus in Go?
+* **open and royalty-free** - No license fees or restrictions. Use it as you wish!
+* **versatile** - Wide bitrate support. Can be used in constrained networks and high quality stereo.
+* **ubiquitous** - Used in video streaming, gaming, storing music and video conferencing.
+
+### Why a Go implementation?
+
+* **empower interesting use cases** - This project also exports the internals of the Encoder and Decoder.
+                                      Allowing for things like analysis of a Opus bitstream without decoding the entire thing.
+* **learning** - This project was written to be read by others. It includes excerpts and links to [RFC 6716](https://datatracker.ietf.org/doc/rfc6716/)
+* **safety** - Go provides memory safety. Avoids a class of bugs that are devastating in sensitive environments.
+* **maintainability** - Go was designed to build simple, reliable, and efficient software.
+* **portability** - A Pure Go implementation makes it easier to build for other platforms. Using libopus from Go prevents cross compilation.
 
 ### Running
+See our [examples](examples) for demonstrations of how to use this package.
 
 ### Get Involved!
+We would love to have you involved! This project needs a lot of help before it can be useful to everyone. See the Roadmap for open issues and join us on [Slack](https://pion.ly/slack)
 
 ### Roadmap
+See [Issue 9](https://github.com/pion/opus/issues/9)
