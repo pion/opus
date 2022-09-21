@@ -411,7 +411,12 @@ func TestDecodeLTPFilterCoefficients(t *testing.T) {
 	d := &Decoder{rangeDecoder: createRangeDecoder(silkFrame, 89, 253853952, 138203876)}
 
 	bQ7 := d.decodeLTPFilterCoefficients(frameSignalTypeVoiced)
-	if !reflect.DeepEqual(bQ7, []int8{1, 1, 8, 1, 1}) {
+	if !reflect.DeepEqual(bQ7, [][]int8{
+		{1, 1, 8, 1, 1},
+		{2, 0, 77, 11, 9},
+		{1, 1, 8, 1, 1},
+		{-1, 36, 64, 27, -6},
+	}) {
 		t.Fatal()
 	}
 }

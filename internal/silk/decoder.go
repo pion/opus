@@ -1271,12 +1271,17 @@ func (d *Decoder) decodeLTPScalingParamater(signalType frameSignalType) (LTPscal
 // from one of three codebooks.
 //
 // https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.2
-func (d *Decoder) decodeLTPFilterCoefficients(signalType frameSignalType) (bQ7 []int8) {
+func (d *Decoder) decodeLTPFilterCoefficients(signalType frameSignalType) (bQ7 [][]int8) {
 	if signalType != frameSignalTypeVoiced {
 		return
 	}
 
-	bQ7 = make([]int8, 5)
+	bQ7 = [][]int8{
+		make([]int8, 5),
+		make([]int8, 5),
+		make([]int8, 5),
+		make([]int8, 5),
+	}
 
 	// This is signaled with an explicitly-coded "periodicity index".  This
 	// immediately follows the subframe pitch lags, and is coded using the
@@ -1287,30 +1292,32 @@ func (d *Decoder) decodeLTPFilterCoefficients(signalType frameSignalType) (bQ7 [
 	// coded using the PDF from Table 38 corresponding to the periodicity
 	// index.  Tables 39 through 41 contain the corresponding filter taps as
 	// signed Q7 integers.
-	var filterIndiceIcdf []uint
-	switch periodicityIndex {
-	case 0:
-		filterIndiceIcdf = icdfLTPFilterIndex0
-	case 1:
-		filterIndiceIcdf = icdfLTPFilterIndex1
-	case 2:
-		filterIndiceIcdf = icdfLTPFilterIndex2
+	for i := 0; i < subframeCount; i++ {
+		var filterIndiceIcdf []uint
+		switch periodicityIndex {
+		case 0:
+			filterIndiceIcdf = icdfLTPFilterIndex0
+		case 1:
+			filterIndiceIcdf = icdfLTPFilterIndex1
+		case 2:
+			filterIndiceIcdf = icdfLTPFilterIndex2
+		}
+
+		filterIndex := d.rangeDecoder.DecodeSymbolWithICDF(filterIndiceIcdf)
+		var LTPFilterCodebook [][]int8
+
+		switch periodicityIndex {
+		case 0:
+			LTPFilterCodebook = codebookLTPFilterPeriodicityIndex0
+		case 1:
+			LTPFilterCodebook = codebookLTPFilterPeriodicityIndex1
+		case 2:
+			LTPFilterCodebook = codebookLTPFilterPeriodicityIndex2
+
+		}
+
+		copy(bQ7[i], LTPFilterCodebook[filterIndex])
 	}
-
-	filterIndex := d.rangeDecoder.DecodeSymbolWithICDF(filterIndiceIcdf)
-	var LTPFilterCodebook [][]int8
-
-	switch periodicityIndex {
-	case 0:
-		LTPFilterCodebook = codebookLTPFilterPeriodicityIndex0
-	case 1:
-		LTPFilterCodebook = codebookLTPFilterPeriodicityIndex1
-	case 2:
-		LTPFilterCodebook = codebookLTPFilterPeriodicityIndex2
-
-	}
-
-	copy(bQ7, LTPFilterCodebook[filterIndex])
 	return
 }
 
@@ -1334,7 +1341,7 @@ func (d *Decoder) samplesInSubframe(bandwidth Bandwidth) int {
 func (d *Decoder) ltpSynthesis(
 	out []float32,
 	signalType frameSignalType,
-	bQ7 []int8,
+	bQ7 [][]int8,
 	pitchLags []int,
 	eQ23 []int32,
 	n, j, s, dLPC int,
@@ -1480,7 +1487,7 @@ func (d *Decoder) ltpSynthesis(
 			if resValIndex < 0 || resValIndex >= len(res) {
 				resVal = 0
 			} else {
-				resVal = res[resValIndex] * (float32(bQ7[k]) / 128.0)
+				resVal = res[resValIndex] * (float32(bQ7[s][k]) / 128.0)
 
 			}
 
@@ -1564,7 +1571,7 @@ func (d *Decoder) lpcSynthesis(out []float32, bandwidth Bandwidth, n, s, dLPC in
 func (d *Decoder) silkFrameReconstruction(
 	signalType frameSignalType, bandwidth Bandwidth,
 	dLPC int,
-	bQ7 []int8,
+	bQ7 [][]int8,
 	pitchLags []int,
 	eQ23 []int32,
 	LTPscaleQ14 float32,
