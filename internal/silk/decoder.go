@@ -1348,35 +1348,8 @@ func (d *Decoder) ltpSynthesis(
 	LTPScaleQ14 float32,
 	bandwidth Bandwidth,
 	wQ2 int16,
-	aQ12, gainQ16, lpc []float32,
-) (res []float32) {
-	// For unvoiced frames (see Section 4.2.7.3), the LPC residual for i
-	// such that j <= i < (j + n) is simply a normalized copy of the
-	// excitation signal, i.e.,
-	//
-	//               e_Q23[i]
-	//     res[i] = ---------
-	//               2.0**23
-
-	res = make([]float32, len(eQ23))
-	if signalType != frameSignalTypeVoiced {
-		for i := j; i < (j + n); i++ {
-			res[i] = float32(eQ23[i]) / 8388608
-		}
-		return
-	}
-
-	// Voiced SILK frames, on the other hand, pass the excitation through an
-	// LTP filter using the parameters decoded in Section 4.2.7.6 to produce
-	// an LPC residual.
-	for i := range res {
-		res[i] = float32(eQ23[i]) / 8388608.0
-	}
-
-	// Voiced SILK frames, on the other hand, pass the excitation through an
-	// LTP filter using the parameters decoded in Section 4.2.7.6 to produce
-	// an LPC residual.
-
+	aQ12, gainQ16, lpc, res []float32,
+) {
 	// If this is the third or fourth subframe of a 20 ms SILK frame and the LSF
 	// interpolation factor, w_Q2 (see Section 4.2.7.5.5), is less than 4,
 	// then let out_end be set to (j - (s-2)*n) and let LTP_scale_Q14 be set
@@ -1402,6 +1375,7 @@ func (d *Decoder) ltpSynthesis(
 	//                                 out[i] - \  out[i-k-1] * --------, 1.0)
 	//                                          /_               4096.0
 	//                                          k=0
+
 	var outVal float32
 	for i := (j - pitchLags[s] - 2); i < out_end; i++ {
 		index := i + j
@@ -1587,6 +1561,18 @@ func (d *Decoder) silkFrameReconstruction(
 	//  previous subframe or zeros in the first subframe for this channel
 	lpc := make([]float32, n*subframeCount)
 
+	// For unvoiced frames (see Section 4.2.7.3), the LPC residual for i
+	// such that j <= i < (j + n) is simply a normalized copy of the
+	// excitation signal, i.e.,
+	//
+	//               e_Q23[i]
+	//     res[i] = ---------
+	//               2.0**23
+	res := make([]float32, len(eQ23))
+	for i := range res {
+		res[i] = float32(eQ23[i]) / 8388608.0
+	}
+
 	// s be the index of the current subframe in this SILK frame
 	// (0 or 1 for 10 ms frames, or 0 to 3 for 20 ms frames)
 	for s := 0; s < subframeCount; s++ {
@@ -1596,8 +1582,14 @@ func (d *Decoder) silkFrameReconstruction(
 		// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9
 		j := n * s
 
+		// Voiced SILK frames, on the other hand, pass the excitation through an
+		// LTP filter using the parameters decoded in Section 4.2.7.6 to produce
+		// an LPC residual.
+		//
 		// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.1
-		res := d.ltpSynthesis(out, signalType, bQ7, pitchLags, eQ23, n, j, s, dLPC, LTPscaleQ14, bandwidth, wQ2, aQ12, gainQ16, lpc)
+		if signalType == frameSignalTypeVoiced {
+			d.ltpSynthesis(out, signalType, bQ7, pitchLags, eQ23, n, j, s, dLPC, LTPscaleQ14, bandwidth, wQ2, aQ12, gainQ16, lpc, res)
+		}
 
 		//https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.2
 		d.lpcSynthesis(out[n*s:], bandwidth, n, s, dLPC, aQ12, res, gainQ16, lpc)
