@@ -25,6 +25,11 @@ type Decoder struct {
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.2
 	finalLPCValues []float32
 
+	// This requires storage to buffer up to 306 values of out[i] from
+	// previous subframes.
+	// https://www.rfc-editor.org/rfc/rfc6716#section-4.2.7.9.1
+	finalOutValues []float32
+
 	// n0Q15 are the LSF coefficients decoded for the prior frame
 	// see normalizeLSFInterpolation
 	n0Q15 []int16
@@ -34,6 +39,7 @@ type Decoder struct {
 func NewDecoder() Decoder {
 	return Decoder{
 		finalLPCValues: make([]float32, 16),
+		finalOutValues: make([]float32, 306),
 	}
 }
 
@@ -1077,14 +1083,14 @@ func (d *Decoder) limitLPCFilterPredictionGain(a32Q17 []int32) (aQ12 []float32) 
 }
 
 // https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.1
-func (d *Decoder) decodePitchLags(signalType frameSignalType, bandwidth Bandwidth) (lag uint32, pitchLags []int) {
+func (d *Decoder) decodePitchLags(signalType frameSignalType, bandwidth Bandwidth) (lagMax uint32, pitchLags []int) {
 	if signalType != frameSignalTypeVoiced {
 		return
 	}
 
 	var (
+		lag    uint32
 		lagMin uint32
-		lagMax uint32
 	)
 
 	// The primary lag index is coded either relative to the primary lag of
@@ -1348,7 +1354,7 @@ func (d *Decoder) ltpSynthesis(
 	LTPScaleQ14 float32,
 	bandwidth Bandwidth,
 	wQ2 int16,
-	aQ12, gainQ16, lpc, res []float32,
+	aQ12, gainQ16, lpc, res, resLag []float32,
 ) {
 	// If this is the third or fourth subframe of a 20 ms SILK frame and the LSF
 	// interpolation factor, w_Q2 (see Section 4.2.7.5.5), is less than 4,
@@ -1411,7 +1417,9 @@ func (d *Decoder) ltpSynthesis(
 	// previous subframes (240 from the current SILK frame and 16 from the
 	// previous SILK frame).  This corresponds to WB with up to three
 	// previous subframes in the current SILK frame, plus 16 samples for
-	// d_LPC.  The astute reader will notice that, given the definition of
+	// d_LPC.
+
+	// The astute reader will notice that, given the definition of
 	// lpc[i] in Section 4.2.7.9.2, the output of this latter equation is
 	// merely a scaled version of the values of res[i] from previous
 	// subframes.
@@ -1482,6 +1490,11 @@ func (d *Decoder) ltpSynthesis(
 //
 // https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.2
 func (d *Decoder) lpcSynthesis(out []float32, bandwidth Bandwidth, n, s, dLPC int, aQ12, res, gainQ16, lpc []float32) {
+	// Shift left one subframe of samples
+	for i := 0; i < len(d.finalOutValues)-n; i++ {
+		d.finalOutValues[i] = d.finalOutValues[i+n]
+	}
+
 	finalLPCValuesIndex := 0
 
 	// j be the index of the first sample in the residual corresponding to
@@ -1530,6 +1543,7 @@ func (d *Decoder) lpcSynthesis(out []float32, bandwidth Bandwidth, n, s, dLPC in
 		//     out[i] = clamp(-1.0, lpc[i], 1.0)
 		//
 		out[i] = clampFloat(-1.0, lpc[sampleIndex], 1.0)
+		d.finalOutValues[len(d.finalOutValues)-n+i] = out[i]
 	}
 }
 
@@ -1545,6 +1559,7 @@ func (d *Decoder) lpcSynthesis(out []float32, bandwidth Bandwidth, n, s, dLPC in
 func (d *Decoder) silkFrameReconstruction(
 	signalType frameSignalType, bandwidth Bandwidth,
 	dLPC int,
+	lagMax uint32,
 	bQ7 [][]int8,
 	pitchLags []int,
 	eQ23 []int32,
@@ -1569,6 +1584,7 @@ func (d *Decoder) silkFrameReconstruction(
 	//     res[i] = ---------
 	//               2.0**23
 	res := make([]float32, len(eQ23))
+	resLag := make([]float32, lagMax)
 	for i := range res {
 		res[i] = float32(eQ23[i]) / 8388608.0
 	}
@@ -1588,7 +1604,7 @@ func (d *Decoder) silkFrameReconstruction(
 		//
 		// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.1
 		if signalType == frameSignalTypeVoiced {
-			d.ltpSynthesis(out, signalType, bQ7, pitchLags, eQ23, n, j, s, dLPC, LTPscaleQ14, bandwidth, wQ2, aQ12, gainQ16, lpc, res)
+			d.ltpSynthesis(out, signalType, bQ7, pitchLags, eQ23, n, j, s, dLPC, LTPscaleQ14, bandwidth, wQ2, aQ12, gainQ16, lpc, res, resLag)
 		}
 
 		//https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.2
@@ -1677,7 +1693,7 @@ func (d *Decoder) Decode(in []byte, out []float32, isStereo bool, nanoseconds in
 	aQ12 := d.limitLPCFilterPredictionGain(a32Q17)
 
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.1
-	_, pitchLags := d.decodePitchLags(signalType, bandwidth)
+	lagMax, pitchLags := d.decodePitchLags(signalType, bandwidth)
 
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.2
 	bQ7 := d.decodeLTPFilterCoefficients(signalType)
@@ -1704,6 +1720,7 @@ func (d *Decoder) Decode(in []byte, out []float32, isStereo bool, nanoseconds in
 	d.silkFrameReconstruction(
 		signalType, bandwidth,
 		dLPC,
+		lagMax,
 		bQ7,
 		pitchLags,
 		eQ23,
