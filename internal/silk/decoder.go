@@ -17,14 +17,6 @@ type Decoder struct {
 
 	previousLogGain int32
 
-	// The decoder saves the final d_LPC values, i.e., lpc[i] such that
-	// (j + n - d_LPC) <= i < (j + n), to feed into the LPC synthesis of the
-	// next subframe.  This requires storage for up to 16 values of lpc[i]
-	// (for WB frames).
-	//
-	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.2
-	finalLPCValues []float32
-
 	// This requires storage to buffer up to 306 values of out[i] from
 	// previous subframes.
 	// https://www.rfc-editor.org/rfc/rfc6716#section-4.2.7.9.1
@@ -38,7 +30,6 @@ type Decoder struct {
 // NewDecoder creates a new Silk Decoder
 func NewDecoder() Decoder {
 	return Decoder{
-		finalLPCValues: make([]float32, 16),
 		finalOutValues: make([]float32, 306),
 	}
 }
@@ -1432,11 +1423,12 @@ func (d *Decoder) ltpSynthesis(
 
 		res[index] = 0
 		for k := 0; k < dLPC; k++ {
-			if i-k > 0 {
-				lpcVal = lpc[index-k-1]
+			if lpcIndex := index - k - 1; lpcIndex >= 0 {
+				lpcVal = lpc[lpcIndex]
 			} else {
-				lpcVal = d.finalLPCValues[len(d.finalLPCValues)-1+(i-k)]
+				lpcVal = 0
 			}
+
 			res[index] += lpcVal * (aQ12[k] / 4096.0)
 		}
 
@@ -1495,8 +1487,6 @@ func (d *Decoder) lpcSynthesis(out []float32, bandwidth Bandwidth, n, s, dLPC in
 		d.finalOutValues[i] = d.finalOutValues[i+n]
 	}
 
-	finalLPCValuesIndex := 0
-
 	// j be the index of the first sample in the residual corresponding to
 	// the current subframe.
 	j := 0
@@ -1518,25 +1508,16 @@ func (d *Decoder) lpcSynthesis(out []float32, bandwidth Bandwidth, n, s, dLPC in
 		lpcVal *= res[sampleIndex]
 
 		for k := 0; k < dLPC; k++ {
-			if i-k > 0 {
-				currentLPCVal = lpc[sampleIndex-k-1]
+			if lpcIndex := sampleIndex - k - 1; lpcIndex >= 0 {
+				currentLPCVal = lpc[lpcIndex]
 			} else {
-				currentLPCVal = d.finalLPCValues[len(d.finalLPCValues)-1+(i-k)]
+				currentLPCVal = 0
 			}
 
 			lpcVal += currentLPCVal * (aQ12[k] / 4096.0)
 		}
 
 		lpc[sampleIndex] = lpcVal
-
-		// The decoder saves the final d_LPC values, i.e., lpc[i] such that
-		// (j + n - d_LPC) <= i < (j + n), to feed into the LPC synthesis of the
-		// next subframe.  This requires storage for up to 16 values of lpc[i]
-		// (for WB frames).
-		if (j+n-dLPC) <= i && i < (j+n) {
-			d.finalLPCValues[finalLPCValuesIndex] = lpcVal
-			finalLPCValuesIndex++
-		}
 
 		// Then, the signal is clamped into the final nominal range:
 		//
