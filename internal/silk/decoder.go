@@ -17,6 +17,12 @@ type Decoder struct {
 
 	previousLogGain int32
 
+	//  The decoder saves the final d_LPC values, i.e., lpc[i] such that
+	// (j + n - d_LPC) <= i < (j + n), to feed into the LPC synthesis of the
+	// next subframe.  This requires storage for up to 16 values of lpc[i]
+	// (for WB frames).
+	previousFrameLPCValues []float32
+
 	// This requires storage to buffer up to 306 values of out[i] from
 	// previous subframes.
 	// https://www.rfc-editor.org/rfc/rfc6716#section-4.2.7.9.1
@@ -1521,6 +1527,8 @@ func (d *Decoder) lpcSynthesis(out []float32, bandwidth Bandwidth, n, s, dLPC in
 		for k := 0; k < dLPC; k++ {
 			if lpcIndex := sampleIndex - k - 1; lpcIndex >= 0 {
 				currentLPCVal = lpc[lpcIndex]
+			} else if i < len(d.previousFrameLPCValues) && s == 0 {
+				currentLPCVal = d.previousFrameLPCValues[len(d.previousFrameLPCValues)-1+(i-k)]
 			} else {
 				currentLPCVal = 0
 			}
@@ -1535,6 +1543,14 @@ func (d *Decoder) lpcSynthesis(out []float32, bandwidth Bandwidth, n, s, dLPC in
 		//     out[i] = clamp(-1.0, lpc[i], 1.0)
 		//
 		out[i] = clampFloat(-1.0, lpc[sampleIndex], 1.0)
+
+		//  The decoder saves the final d_LPC values, i.e., lpc[i] such that
+		// (j + n - d_LPC) <= i < (j + n), to feed into the LPC synthesis of the
+		// next subframe.  This requires storage for up to 16 values of lpc[i]
+		// (for WB frames).
+		if len(out)-1 == i && d.haveDecoded {
+			d.previousFrameLPCValues = append([]float32{}, lpc[len(lpc)-dLPC:]...)
+		}
 		d.finalOutValues[len(d.finalOutValues)-n+i] = out[i]
 	}
 }
@@ -1609,7 +1625,15 @@ func (d *Decoder) silkFrameReconstruction(
 		//
 		// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.1
 		if signalType == frameSignalTypeVoiced {
-			d.ltpSynthesis(out, signalType, bQ7, pitchLags, eQ23, n, j, s, dLPC, LTPscaleQ14, bandwidth, wQ2, aQ12[aQ12Index], gainQ16, lpc, res, resLag)
+			d.ltpSynthesis(
+				out,
+				signalType,
+				bQ7, pitchLags,
+				eQ23, n, j, s, dLPC,
+				LTPscaleQ14, bandwidth,
+				wQ2,
+				aQ12[aQ12Index], gainQ16, lpc, res, resLag,
+			)
 		}
 
 		//https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.2
