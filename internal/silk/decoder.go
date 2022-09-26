@@ -395,11 +395,6 @@ func (d *Decoder) normalizeLSFStabilization(nlsfQ15 []int16) {
 	// TODO
 }
 
-// For 20 ms SILK frames, the first half of the frame (i.e., the first
-// two subframes) may use normalized LSF coefficients that are
-// interpolated between the decoded LSFs for the most recent coded frame
-// (in the same channel) and the current frame
-//
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.5
 func (d *Decoder) normalizeLSFInterpolation(n2Q15 []int16) (n1Q15 []int16, wQ2 int16) {
 	// Let n2_Q15[k] be the normalized LSF coefficients decoded by the
@@ -411,7 +406,7 @@ func (d *Decoder) normalizeLSFInterpolation(n2Q15 []int16) (n1Q15 []int16, wQ2 i
 	//      n1_Q15[k] = n0_Q15[k] + (w_Q2*(n2_Q15[k] - n0_Q15[k]) >> 2)
 	wQ2 = int16(d.rangeDecoder.DecodeSymbolWithICDF(icdfNormalizedLSFInterpolationIndex))
 	if wQ2 == 4 || !d.haveDecoded {
-		return n2Q15, wQ2
+		return nil, wQ2
 	}
 
 	n1Q15 = make([]int16, len(n2Q15))
@@ -420,6 +415,22 @@ func (d *Decoder) normalizeLSFInterpolation(n2Q15 []int16) (n1Q15 []int16, wQ2 i
 	}
 
 	return
+}
+
+func (d *Decoder) generateAQ12(Q15 []int16, bandwidth Bandwidth, aQ12 [][]float32) [][]float32 {
+	if Q15 == nil {
+		return aQ12
+	}
+
+	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.6
+	a32Q17 := d.convertNormalizedLSFsToLPCCoefficients(Q15, bandwidth)
+
+	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.5.7
+	d.limitLPCCoefficientsRange(a32Q17)
+
+	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.5.8
+	aQ12 = append(aQ12, d.limitLPCFilterPredictionGain(a32Q17))
+	return aQ12
 }
 
 func (d *Decoder) convertNormalizedLSFsToLPCCoefficients(n1Q15 []int16, bandwidth Bandwidth) (a32Q17 []int32) {
@@ -1546,7 +1557,8 @@ func (d *Decoder) silkFrameReconstruction(
 	eQ23 []int32,
 	LTPscaleQ14 float32,
 	wQ2 int16,
-	aQ12, gainQ16, out []float32,
+	aQ12 [][]float32,
+	gainQ16, out []float32,
 ) {
 	// let n be the number of samples in a subframe
 	//
@@ -1573,6 +1585,18 @@ func (d *Decoder) silkFrameReconstruction(
 	// s be the index of the current subframe in this SILK frame
 	// (0 or 1 for 10 ms frames, or 0 to 3 for 20 ms frames)
 	for s := 0; s < subframeCount; s++ {
+
+		// For 20 ms SILK frames, the first half of the frame (i.e., the first
+		// two subframes) may use normalized LSF coefficients that are
+		// interpolated between the decoded LSFs for the most recent coded frame
+		// (in the same channel) and the current frame
+		//
+		// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.5
+		aQ12Index := 0
+		if s > 1 && len(aQ12) > 1 {
+			aQ12Index = 1
+		}
+
 		// j be the index of the first sample in the residual corresponding to
 		// the current subframe.
 		//
@@ -1585,11 +1609,11 @@ func (d *Decoder) silkFrameReconstruction(
 		//
 		// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.1
 		if signalType == frameSignalTypeVoiced {
-			d.ltpSynthesis(out, signalType, bQ7, pitchLags, eQ23, n, j, s, dLPC, LTPscaleQ14, bandwidth, wQ2, aQ12, gainQ16, lpc, res, resLag)
+			d.ltpSynthesis(out, signalType, bQ7, pitchLags, eQ23, n, j, s, dLPC, LTPscaleQ14, bandwidth, wQ2, aQ12[aQ12Index], gainQ16, lpc, res, resLag)
 		}
 
 		//https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.2
-		d.lpcSynthesis(out[n*s:], bandwidth, n, s, dLPC, aQ12, res, gainQ16, lpc)
+		d.lpcSynthesis(out[n*s:], bandwidth, n, s, dLPC, aQ12[aQ12Index], res, gainQ16, lpc)
 	}
 }
 
@@ -1664,14 +1688,15 @@ func (d *Decoder) Decode(in []byte, out []float32, isStereo bool, nanoseconds in
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.5
 	n1Q15, wQ2 := d.normalizeLSFInterpolation(nlsfQ15)
 
-	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.6
-	a32Q17 := d.convertNormalizedLSFsToLPCCoefficients(n1Q15, bandwidth)
-
-	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.5.7
-	d.limitLPCCoefficientsRange(a32Q17)
-
-	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.5.8
-	aQ12 := d.limitLPCFilterPredictionGain(a32Q17)
+	// For 20 ms SILK frames, the first half of the frame (i.e., the first
+	// two subframes) may use normalized LSF coefficients that are
+	// interpolated between the decoded LSFs for the most recent coded frame
+	// (in the same channel) and the current frame
+	//
+	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.5
+	aQ12 := [][]float32{}
+	aQ12 = d.generateAQ12(n1Q15, bandwidth, aQ12)
+	aQ12 = d.generateAQ12(nlsfQ15, bandwidth, aQ12)
 
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.1
 	lagMax, pitchLags := d.decodePitchLags(signalType, bandwidth)
@@ -1707,7 +1732,8 @@ func (d *Decoder) Decode(in []byte, out []float32, isStereo bool, nanoseconds in
 		eQ23,
 		LTPscaleQ14,
 		wQ2,
-		aQ12, gainQ16, out,
+		aQ12,
+		gainQ16, out,
 	)
 
 	// n0Q15 is the LSF coefficients decoded for the prior frame

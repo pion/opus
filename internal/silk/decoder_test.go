@@ -105,10 +105,7 @@ func TestNormalizeLineSpectralFrequencyCoefficients(t *testing.T) {
 func TestNormalizeLSFInterpolation(t *testing.T) {
 	t.Run("wQ2 == 4", func(t *testing.T) {
 		d := &Decoder{rangeDecoder: createRangeDecoder(testSilkFrame(), 55, 493249168, 174371199)}
-		expectedN1Q15 := []int16{
-			2132, 3584, 5504, 7424, 9472, 11392, 13440, 15360, 17280,
-			19200, 21120, 23040, 25088, 27008, 28928, 30848,
-		}
+		var expectedN1Q15 []int16
 
 		actualN1Q15, _ := d.normalizeLSFInterpolation(expectedN1Q15)
 		if !reflect.DeepEqual(actualN1Q15, expectedN1Q15) {
