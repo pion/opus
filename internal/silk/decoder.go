@@ -1370,9 +1370,9 @@ func (d *Decoder) ltpSynthesis(
 	// to 16384.  Otherwise, set out_end to (j - s*n) and set LTP_scale_Q14
 	// to the Q14 LTP scaling value from Section 4.2.7.6.3.
 	var out_end int
-	if s > 2 || wQ2 < 4 {
+	if s > 2 && wQ2 < 4 {
 		out_end = (j - (s-2)*n)
-		LTPScaleQ14 = 16386.0
+		LTPScaleQ14 = 16384.0
 	} else {
 		out_end = (j - s*n)
 	}
@@ -1389,26 +1389,36 @@ func (d *Decoder) ltpSynthesis(
 	//                                 out[i] - \  out[i-k-1] * --------, 1.0)
 	//                                          /_               4096.0
 	//                                          k=0
-
-	var outVal float32
+	var (
+		resPtr *float32
+		outVal float32
+	)
 	for i := (j - pitchLags[s] - 2); i < out_end; i++ {
 		index := i + j
-		if index < 0 || index >= len(res) || index >= len(out) {
-			continue
-		}
 
-		res[index] = out[index]
-		for k := 0; k < dLPC; k++ {
-			if index-k > 0 {
-				outVal = out[index-k-1]
-			} else {
-				outVal = 0
+		if index >= 0 {
+			if index >= len(res) {
+				continue
 			}
 
-			res[index] -= outVal * (aQ12[k] / 4096.0)
+			resPtr = &res[index]
+			*resPtr = out[index]
+		} else {
+			resPtr = &resLag[len(resLag)+index]
+			*resPtr = d.finalOutValues[len(d.finalOutValues)+index]
 		}
-		res[index] = clampFloat(-1.0, res[index], 1.0)
-		res[index] *= (4.0 / LTPScaleQ14) / gainQ16[s]
+
+		for k := 0; k < dLPC; k++ {
+			if outIndex := index - k - 1; outIndex >= 0 {
+				outVal = out[outIndex]
+			} else {
+				outVal = d.finalOutValues[len(d.finalOutValues)+outIndex]
+			}
+			*resPtr -= outVal * (aQ12[k] / 4096.0)
+		}
+
+		*resPtr = clampFloat(-1.0, *resPtr, 1.0)
+		*resPtr *= (4.0 * LTPScaleQ14) / gainQ16[s]
 	}
 
 	// Then, for i such that
@@ -1431,26 +1441,16 @@ func (d *Decoder) ltpSynthesis(
 	// lpc[i] in Section 4.2.7.9.2, the output of this latter equation is
 	// merely a scaled version of the values of res[i] from previous
 	// subframes.
-	var lpcVal float32
-	for i := out_end; i < j; i++ {
-		index := i + j
-		if index < 0 || index >= len(res) {
-			continue
-		}
-
-		res[index] = 0
-		for k := 0; k < dLPC; k++ {
-			if lpcIndex := index - k - 1; lpcIndex >= 0 {
-				lpcVal = lpc[lpcIndex]
+	if s > 1 {
+		scaledGain := gainQ16[s-1] / gainQ16[s]
+		for i := out_end; i < 0; i++ {
+			index := i + j
+			if index < 0 {
+				resLag[len(resLag)+index] *= scaledGain
 			} else {
-				lpcVal = 0
+				res[index] *= scaledGain
 			}
-
-			res[index] += lpcVal * (aQ12[k] / 4096.0)
 		}
-
-		res[index] = lpc[index] - res[index]
-		res[index] *= (65536.0 / gainQ16[s])
 	}
 
 	// Let e_Q23[i] for j <= i < (j + n) be the excitation for the current
@@ -1465,24 +1465,23 @@ func (d *Decoder) ltpSynthesis(
 	//    res[i] = --------- + \  res[i - pitch_lags[s] + 2 - k] * -------
 	//              2.0**23    /_                                   128.0
 	//                         k=0
+
 	var resSum, resVal float32
 	for i := j; i < (j + n); i++ {
 		index := i + j
-		if index < 0 || index >= len(res) {
+		if index >= len(res) {
 			continue
 		}
 
 		resSum = 0
 		for k := 0; k <= 4; k++ {
-			resValIndex := index - pitchLags[s] + 2 - k
-			if resValIndex < 0 || resValIndex >= len(res) {
-				resVal = 0
+			if resIndex := index - pitchLags[s] + 2 - k; resIndex < 0 {
+				resVal = resLag[len(resLag)+resIndex]
 			} else {
-				resVal = res[resValIndex] * (float32(bQ7[s][k]) / 128.0)
-
+				resVal = res[resIndex]
 			}
 
-			resSum += resVal
+			resSum += resVal * (float32(bQ7[s][k]) / 128.0)
 		}
 
 		res[index] = (float32(eQ23[i]) / 8388608.0) + resSum
@@ -1593,7 +1592,7 @@ func (d *Decoder) silkFrameReconstruction(
 	//     res[i] = ---------
 	//               2.0**23
 	res := make([]float32, len(eQ23))
-	resLag := make([]float32, lagMax)
+	resLag := make([]float32, lagMax+1)
 	for i := range res {
 		res[i] = float32(eQ23[i]) / 8388608.0
 	}
