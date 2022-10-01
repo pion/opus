@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/binary"
 	"errors"
 	"io"
 	"os"
@@ -10,12 +9,6 @@ import (
 	"github.com/pion/opus"
 	"github.com/pion/opus/pkg/oggreader"
 )
-
-func convertFloatToByteSlice(i []float32) []byte {
-	buf := new(bytes.Buffer)
-	binary.Write(buf, binary.LittleEndian, i)
-	return buf.Bytes()
-}
 
 func main() {
 	if len(os.Args) != 3 {
@@ -32,13 +25,14 @@ func main() {
 		panic(err)
 	}
 
-	out := make([]float32, 320)
+	out := make([]byte, 1920)
 	f, err := os.Create(os.Args[2])
 	if err != nil {
 		panic(err)
 	}
 
 	decoder := opus.NewDecoder()
+	x := 0
 	for {
 		segments, _, err := ogg.ParseNextPage()
 
@@ -57,7 +51,7 @@ func main() {
 				panic(err)
 			}
 
-			f.Write(convertFloatToByteSlice(out))
+			f.Write(out)
 		}
 	}
 }
