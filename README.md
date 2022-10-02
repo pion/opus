@@ -30,7 +30,8 @@ This package provides a Pure Go implementation of the [Opus Codec](https://opus-
 * **learning** - This project was written to be read by others. It includes excerpts and links to [RFC 6716](https://datatracker.ietf.org/doc/rfc6716/)
 * **safety** - Go provides memory safety. Avoids a class of bugs that are devastating in sensitive environments.
 * **maintainability** - Go was designed to build simple, reliable, and efficient software.
-* **portability** - A Pure Go implementation makes it easier to build for other platforms. Using libopus from Go prevents cross compilation.
+* **inspire** - Go is a power language, but lacking in media libraries. We hope this project inspires the next generation to build
+*               more media libraries for Go.
 
 ### Running
 See our [examples](examples) for demonstrations of how to use this package.
