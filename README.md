@@ -33,6 +33,8 @@ This package provides a Pure Go implementation of the [Opus Codec](https://opus-
 * **inspire** - Go is a power language, but lacking in media libraries. We hope this project inspires the next generation to build
 *               more media libraries for Go.
 
+You can read more [here](https://pion.ly/blog/pion-opus/)
+
 ### Running
 See our [examples](examples) for demonstrations of how to use this package.
 
