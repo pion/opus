@@ -42,7 +42,7 @@ func (o *opusReader) Read(p []byte) (n int, err error) {
 
 		o.decodeBufferOffset = 0
 		if _, _, err = o.opusDecoder.Decode(segment, o.decodeBuffer); err != nil {
-			return 0, err
+			panic(err)
 		}
 	}
 
