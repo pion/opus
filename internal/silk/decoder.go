@@ -1529,7 +1529,7 @@ func (d *Decoder) lpcSynthesis(out []float32, bandwidth Bandwidth, n, s, dLPC in
 		lpcVal := gainQ16[s] / 65536.0
 		lpcVal *= res[sampleIndex]
 
-		for k := 0; k < dLPC; k++ {
+		for k, aQ12 := range aQ12[:dLPC] {
 			if lpcIndex := sampleIndex - k - 1; lpcIndex >= 0 {
 				currentLPCVal = lpc[lpcIndex]
 			} else if i < len(d.previousFrameLPCValues) && s == 0 {
@@ -1538,7 +1538,7 @@ func (d *Decoder) lpcSynthesis(out []float32, bandwidth Bandwidth, n, s, dLPC in
 				currentLPCVal = 0
 			}
 
-			lpcVal += currentLPCVal * (aQ12[k] / 4096.0)
+			lpcVal += currentLPCVal * (aQ12 / 4096.0)
 		}
 
 		lpc[sampleIndex] = lpcVal
