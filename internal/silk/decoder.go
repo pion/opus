@@ -1389,7 +1389,6 @@ func (d *Decoder) ltpSynthesis(
 	//                                 out[i] - \  out[i-k-1] * --------, 1.0)
 	//                                          /_               4096.0
 	//                                          k=0
-	var outVal float32
 	for i := (j - pitchLags[s] - 2); i < out_end; i++ {
 		index := i + j
 
@@ -1409,6 +1408,7 @@ func (d *Decoder) ltpSynthesis(
 		}
 
 		for k := 0; k < dLPC; k++ {
+			var outVal float32
 			if outIndex := index - k - 1; outIndex >= 0 {
 				outVal = out[outIndex]
 			} else {
