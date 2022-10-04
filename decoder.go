@@ -21,8 +21,7 @@ func NewDecoder() Decoder {
 	}
 }
 
-// Decode decodes the Opus bitstream into PCM
-func (d *Decoder) Decode(in []byte, out []byte) (bandwidth Bandwidth, isStereo bool, err error) {
+func (d *Decoder) decode(in []byte) (bandwidth Bandwidth, isStereo bool, err error) {
 	if len(in) < 1 {
 		return 0, false, errTooShortForTableOfContentsHeader
 	}
@@ -49,9 +48,27 @@ func (d *Decoder) Decode(in []byte, out []byte) (bandwidth Bandwidth, isStereo b
 		}
 	}
 
-	if err := bitdepth.ConvertFloat32LittleEndianToSigned16LittleEndian(d.silkBuffer, out, 3); err != nil {
-		return 0, false, err
-	}
-
 	return cfg.bandwidth(), tocHeader.isStereo(), nil
+}
+
+// Decode decodes the Opus bitstream into PCM
+func (d *Decoder) Decode(in []byte, out []byte) (bandwidth Bandwidth, isStereo bool, err error) {
+	if bandwidth, isStereo, err = d.decode(in); err != nil {
+		return
+	} else {
+		if err := bitdepth.ConvertFloat32LittleEndianToSigned16LittleEndian(d.silkBuffer, out, 3); err != nil {
+			return 0, false, err
+		}
+		return
+	}
+}
+
+// DecodeFloat decodes the Opus bitstream into native float
+func (d *Decoder) DecodeFloat(in []byte, out []float32) (bandwidth Bandwidth, isStereo bool, err error) {
+	if bandwidth, isStereo, err = d.decode(in); err != nil {
+		return
+	} else {
+		copy(out, d.silkBuffer)
+		return
+	}
 }
