@@ -1417,7 +1417,7 @@ func (d *Decoder) ltpSynthesis(
 			*resPtr -= outVal * (aQ12[k] / 4096.0)
 		}
 
-		*resPtr = clampFloat(-1.0, *resPtr, 1.0)
+		*resPtr = clampNegativeOneToOne(*resPtr)
 		*resPtr *= (4.0 * LTPScaleQ14) / gainQ16[s]
 	}
 
@@ -1541,7 +1541,7 @@ func (d *Decoder) lpcSynthesis(out []float32, bandwidth Bandwidth, n, s, dLPC in
 		//
 		//     out[i] = clamp(-1.0, lpc[i], 1.0)
 		//
-		out[i] = clampFloat(-1.0, lpc[sampleIndex], 1.0)
+		out[i] = clampNegativeOneToOne(lpc[sampleIndex])
 
 		//  The decoder saves the final d_LPC values, i.e., lpc[i] such that
 		// (j + n - d_LPC) <= i < (j + n), to feed into the LPC synthesis of the
