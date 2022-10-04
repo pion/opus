@@ -32,7 +32,6 @@ func main() {
 	}
 
 	decoder := opus.NewDecoder()
-	x := 0
 	for {
 		segments, _, err := ogg.ParseNextPage()
 
