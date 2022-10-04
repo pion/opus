@@ -1,9 +1,5 @@
 package rangecoding
 
-import (
-	"math"
-)
-
 // Decoder implements rfc6716#section-4.1
 // Opus uses an entropy coder based on range coding [RANGE-CODING]
 // [MARTIN79], which is itself a rediscovery of the FIFO arithmetic code
@@ -21,25 +17,25 @@ import (
 // process, unlike corruption in the input to the range decoder.  Raw
 // bits are only used in the CELT layer.
 //
-//    0                   1                   2                   3
-//    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-//   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//   | Range coder data (packed MSB to LSB) ->                       :
-//   +                                                               +
-//   :                                                               :
-//   +     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//   :     | <- Boundary occurs at an arbitrary bit position         :
-//   +-+-+-+                                                         +
-//   :                          <- Raw bits data (packed LSB to MSB) |
-//   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//	 0                   1                   2                   3
+//	 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+//	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//	| Range coder data (packed MSB to LSB) ->                       :
+//	+                                                               +
+//	:                                                               :
+//	+     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//	:     | <- Boundary occurs at an arbitrary bit position         :
+//	+-+-+-+                                                         +
+//	:                          <- Raw bits data (packed LSB to MSB) |
+//	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 //
-//   Legend:
+//	Legend:
 //
-//   LSB = Least Significant Bit
-//   MSB = Most Significant Bit
+//	LSB = Least Significant Bit
+//	MSB = Most Significant Bit
 //
-//        Figure 12: Illustrative Example of Packing Range Coder
-//                           and Raw Bits Data
+//	     Figure 12: Illustrative Example of Packing Range Coder
+//	                        and Raw Bits Data
 //
 // Each symbol coded by the range coder is drawn from a finite alphabet
 // and coded in a separate "context", which describes the size of the
@@ -56,11 +52,11 @@ import (
 // frequency of symbol i.  Then, the three-tuple corresponding to symbol
 // k is given by the following:
 //
-//                 k-1                                   n-1
-//                 __                                    __
-//         fl[k] = \  f[i],  fh[k] = fl[k] + f[k],  ft = \  f[i]
-//                 /_                                    /_
-//                 i=0                                   i=0
+//	        k-1                                   n-1
+//	        __                                    __
+//	fl[k] = \  f[i],  fh[k] = fl[k] + f[k],  ft = \  f[i]
+//	        /_                                    /_
+//	        i=0                                   i=0
 //
 // The range decoder extracts the symbols and integers encoded using the
 // range encoder in Section 5.1.  The range decoder maintains an
@@ -81,7 +77,9 @@ type Decoder struct {
 // Let b0 be an 8-bit unsigned integer containing first input byte (or
 // containing zero if there are no bytes in this Opus frame).  The
 // decoder initializes rng to 128 and initializes val to (127 -
-//  (b0>>1)), where (b0>>1) is the top 7 bits of the first input byte.
+//
+//	(b0>>1)), where (b0>>1) is the top 7 bits of the first input byte.
+//
 // It saves the remaining bit, (b0&1), for use in the renormalization
 // procedure described in Section 4.1.2.1, which the decoder invokes
 // immediately after initialization to read additional bits and
@@ -175,6 +173,10 @@ func (r *Decoder) getBits(n int) uint32 {
 	return bits
 }
 
+// minRangeSize is the minimum allowed size for rng.
+// It's equal to math.Pow(2, 23).
+const minRangeSize = 1 << 23
+
 // To normalize the range, the decoder repeats the following process,
 // implemented by ec_dec_normalize() (entdec.c), until rng > 2**23.  If
 // rng is already greater than 2**23, the entire process is skipped.
@@ -191,7 +193,7 @@ func (r *Decoder) getBits(n int) uint32 {
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.1.2.1
 func (r *Decoder) normalize() {
-	for float64(r.rangeSize) <= math.Pow(2, 23) {
+	for r.rangeSize <= minRangeSize {
 		r.rangeSize <<= 8
 		r.highAndCodedDifference = ((r.highAndCodedDifference << 8) + (255 - r.getBits(8))) & 0x7FFFFFFF
 	}
