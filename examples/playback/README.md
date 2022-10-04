@@ -1,5 +1,5 @@
 # playback
-playback demonstrates decoding a ogg file and then playing using the [faiface/beep](github.com/faiface/beep) library
+playback demonstrates decoding a ogg file and then playing using the [faiface/beep](https://github.com/faiface/beep) library
 
 ## Instructions
 ### Install playback
