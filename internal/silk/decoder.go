@@ -1389,23 +1389,23 @@ func (d *Decoder) ltpSynthesis(
 	//                                 out[i] - \  out[i-k-1] * --------, 1.0)
 	//                                          /_               4096.0
 	//                                          k=0
-	var (
-		resPtr *float32
-		outVal float32
-	)
+	var outVal float32
 	for i := (j - pitchLags[s] - 2); i < out_end; i++ {
 		index := i + j
 
+		var resVal float32
+		var resIndex int
+		var writeToLag bool
 		if index >= 0 {
 			if index >= len(res) {
 				continue
 			}
-
-			resPtr = &res[index]
-			*resPtr = out[index]
+			resVal = out[index]
+			resIndex = index
 		} else {
-			resPtr = &resLag[len(resLag)+index]
-			*resPtr = d.finalOutValues[len(d.finalOutValues)+index]
+			resIndex = len(resLag) + index
+			resVal = d.finalOutValues[len(d.finalOutValues)+index]
+			writeToLag = true
 		}
 
 		for k := 0; k < dLPC; k++ {
@@ -1414,11 +1414,17 @@ func (d *Decoder) ltpSynthesis(
 			} else {
 				outVal = d.finalOutValues[len(d.finalOutValues)+outIndex]
 			}
-			*resPtr -= outVal * (aQ12[k] / 4096.0)
+			resVal -= outVal * (aQ12[k] / 4096.0)
 		}
 
-		*resPtr = clampNegativeOneToOne(*resPtr)
-		*resPtr *= (4.0 * LTPScaleQ14) / gainQ16[s]
+		resVal = clampNegativeOneToOne(resVal)
+		resVal *= (4.0 * LTPScaleQ14) / gainQ16[s]
+
+		if !writeToLag {
+			res[resIndex] = resVal
+		} else {
+			resLag[resIndex] = resVal
+		}
 	}
 
 	// Then, for i such that
