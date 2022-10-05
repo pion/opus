@@ -2,6 +2,7 @@ package opus
 
 import (
 	"bytes"
+	_ "embed"
 	"errors"
 	"flag"
 	"io"
@@ -71,4 +72,68 @@ func benchmarkData(b *testing.B, data []byte) {
 			}
 		}
 	}
+}
+
+//go:embed testdata/tiny.ogg
+var tinyogg []byte // nolint: gochecknoglobals
+
+func TestTinyOgg(t *testing.T) {
+	var out [1920]byte
+
+	ogg, _, err := oggreader.NewWith(bytes.NewReader(tinyogg))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	decoder := NewDecoder()
+	for {
+		segments, _, err := ogg.ParseNextPage()
+		if errors.Is(err, io.EOF) {
+			break
+		} else if bytes.HasPrefix(segments[0], []byte("OpusTags")) {
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		for i := range segments {
+			if _, _, err = decoder.Decode(segments[i], out[:]); err != nil {
+				return
+			}
+		}
+	}
+}
+
+func FuzzDecoder(f *testing.F) {
+	f.Add([]byte{})
+	f.Add(tinyogg)
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		var out [1920]byte
+
+		ogg, _, err := oggreader.NewWith(bytes.NewReader(data))
+		if err != nil {
+			return
+		}
+
+		decoder := NewDecoder()
+		for {
+			segments, _, err := ogg.ParseNextPage()
+			if errors.Is(err, io.EOF) {
+				break
+			} else if bytes.HasPrefix(segments[0], []byte("OpusTags")) {
+				continue
+			}
+			if err != nil {
+				return
+			}
+
+			for i := range segments {
+				if _, _, err = decoder.Decode(segments[i], out[:]); err != nil {
+					return
+				}
+			}
+		}
+	})
 }
