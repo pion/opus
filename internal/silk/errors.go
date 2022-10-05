@@ -5,7 +5,7 @@ import "errors"
 var (
 	errUnsupportedSilkFrameDuration        = errors.New("only silk frames with a duration of 20ms supported")
 	errUnsupportedSilkStereo               = errors.New("silk decoder does not support stereo")
-	errUnsupportedSilkLowBitrateRedundancy = errors.New("silk decoder does not low bit-rate redundancy")
-	errUnsupportedLSFInterpolation         = errors.New("silk decoder does not support LSF Interpolation")
+	errUnsupportedSilkLowBitrateRedundancy = errors.New("silk decoder does not support low bit-rate redundancy")
 	errOutBufferTooSmall                   = errors.New("out isn't large enough")
+	errNonAbsoluteLagsUnsupported          = errors.New("silk decoder does not support non-absolute lags")
 )

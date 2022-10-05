@@ -1,3 +1,4 @@
+// Package main is an example of an Opus decoder that save the output PCM to disk
 package main
 
 import (
@@ -50,7 +51,9 @@ func main() {
 				panic(err)
 			}
 
-			f.Write(out)
+			if _, err := f.Write(out); err != nil {
+				panic(err)
+			}
 		}
 	}
 }

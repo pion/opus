@@ -130,7 +130,7 @@ func (r *Decoder) DecodeSymbolWithICDF(cumulativeDistributionTable []uint) uint3
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.1.3.2
 func (r *Decoder) DecodeSymbolLogP(logp uint) uint32 {
-	k := uint32(0)
+	var k uint32
 	scale := r.rangeSize >> logp
 
 	if r.highAndCodedDifference >= scale {
@@ -156,7 +156,6 @@ func (r *Decoder) getBit() uint32 {
 
 	r.bitsRead++
 	return uint32((r.data[index] >> (7 - offset)) & 1)
-
 }
 
 func (r *Decoder) getBits(n int) uint32 {
@@ -164,7 +163,7 @@ func (r *Decoder) getBits(n int) uint32 {
 
 	for i := 0; i < n; i++ {
 		if i != 0 {
-			bits = bits << 1
+			bits <<= 1
 		}
 
 		bits |= r.getBit()
@@ -204,7 +203,7 @@ func (r *Decoder) update(scale, low, high, total uint32) {
 	if low != 0 {
 		r.rangeSize = scale * (high - low)
 	} else {
-		r.rangeSize = r.rangeSize - scale*(total-high)
+		r.rangeSize -= scale * (total - high)
 	}
 
 	r.normalize()

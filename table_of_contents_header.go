@@ -119,11 +119,12 @@ func (t tableOfContentsHeader) isStereo() bool {
 	return (t & 0b00000100) != 0
 }
 
+// nolint: deadcode, varcheck
 const (
 	frameCodeOneFrame           frameCode = 0
-	frameCodeTwoEqualFrames               = 1
-	frameCodeTwoDifferentFrames           = 2
-	frameCodeArbitraryFrames              = 3
+	frameCodeTwoEqualFrames     frameCode = 1
+	frameCodeTwoDifferentFrames frameCode = 2
+	frameCodeArbitraryFrames    frameCode = 3
 )
 
 func (t tableOfContentsHeader) frameCode() frameCode {
@@ -145,14 +146,14 @@ func (c configurationMode) String() string {
 	case configurationModeHybrid:
 		return "Hybrid"
 	}
-	return "Invalid"
+	return "Invalid Configuration Mode"
 }
 
 // See Configuration for mapping of mode to configuration numbers
 // https://datatracker.ietf.org/doc/html/rfc6716#section-3.1
 func (c Configuration) mode() configurationMode {
 	switch {
-	case c >= 0 && c <= 11:
+	case c > 0 && c <= 11:
 		return configurationModeSilkOnly
 	case c >= 12 && c <= 15:
 		return configurationModeHybrid
@@ -188,7 +189,7 @@ func (f frameDuration) String() string {
 		return "60ms"
 	}
 
-	return "Invalid"
+	return "Invalid Frame Duration"
 }
 
 func (f frameDuration) nanoseconds() int {
@@ -280,7 +281,7 @@ func (b Bandwidth) String() string {
 	case BandwidthFullband:
 		return "Fullband"
 	}
-	return "Invalid"
+	return "Invalid Bandwidth"
 }
 
 // SampleRate returns the effective SampleRate for a given bandwidth
@@ -309,16 +310,18 @@ func (b Bandwidth) SampleRate() int {
 // frames), with lower limits for longer frame sizes.  Figure 5
 // illustrates the layout of the frame count byte.
 //
-//                          0
-//                          0 1 2 3 4 5 6 7
-//                         +-+-+-+-+-+-+-+-+
-//                         |v|p|     M     |
-//                         +-+-+-+-+-+-+-+-+
+//	        0
+//	        0 1 2 3 4 5 6 7
+//	       +-+-+-+-+-+-+-+-+
+//	       |v|p|     M     |
+//	       +-+-+-+-+-+-+-+-+
 //
-//                  Figure 5: The frame count byte
+//	Figure 5: The frame count byte
+//
+// nolint: deadcode, unused
 func parseFrameCountByte(in byte) (isVBR bool, hasPadding bool, frameCount byte) {
 	isVBR = (in & 0b10000000) == 1
 	hasPadding = (in & 0b01000000) == 1
-	frameCount = byte(in & 0b00111111)
+	frameCount = in & 0b00111111
 	return
 }

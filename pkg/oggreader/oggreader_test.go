@@ -61,7 +61,7 @@ func TestOggReader_ParseNextPage(t *testing.T) {
 	switch {
 	case err != nil:
 		t.Fatal()
-	case !reflect.DeepEqual([]byte{0x98, 0x36, 0xbe, 0x88, 0x9e}, payload):
+	case !reflect.DeepEqual([][]byte{{0x98, 0x36, 0xbe, 0x88, 0x9e}}, payload):
 		t.Fatal()
 	}
 

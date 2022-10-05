@@ -1,3 +1,4 @@
+// Package opus provides a Opus Audio Codec RFC 6716 implementation
 package opus
 
 import (

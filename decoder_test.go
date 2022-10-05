@@ -12,13 +12,15 @@ import (
 	"github.com/pion/opus/pkg/oggreader"
 )
 
-var testoggfile = flag.String("oggfile", "", "ogg file for benchmark")
-
-var _testogg struct {
-	once sync.Once
-	err  error
-	data []byte
-}
+// nolint: gochecknoglobals
+var (
+	testoggfile = flag.String("oggfile", "", "ogg file for benchmark")
+	_testogg    struct {
+		once sync.Once
+		err  error
+		data []byte
+	}
+)
 
 func loadTestOgg(tb testing.TB) []byte {
 	if *testoggfile == "" {

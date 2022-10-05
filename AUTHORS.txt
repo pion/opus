@@ -1,0 +1,9 @@
+# Thank you to everyone that made Pion possible. If you are interested in contributing
+# we would love to have you https://github.com/pion/webrtc/wiki/Contributing
+#
+# This file is auto generated, using git to list all individuals contributors.
+# see `.github/generate-authors.sh` for the scripting
+Egon Elbre <egonelbre@gmail.com>
+Sean DuBois <duboisea@justin.tv>
+Sean DuBois <duboisea@twitch.tv>
+Sean DuBois <sean@siobud.com>

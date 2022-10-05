@@ -224,13 +224,13 @@ func TestLimitLPCFilterPredictionGain(t *testing.T) {
 func TestLPCSynthesis(t *testing.T) {
 	d := NewDecoder()
 
-	bandwidth := BandwidthWideband
 	dLPC := 16
 	aQ12 := []float32{
 		405, 305, 131, 114, -118, -138, -72, -146, -108, -120,
 		-140, -50, -61, -97, -67, -91,
 	}
 
+	// nolint: dupl
 	res := []float32{
 		7.152557373046875e-06, 7.152557373046875e-06, 7.152557373046875e-06, -7.152557373046875e-06, 7.152557373046875e-06,
 		-7.152557373046875e-06, 7.152557373046875e-06, -7.152557373046875e-06, 7.152557373046875e-06, 7.152557373046875e-06,
@@ -380,7 +380,7 @@ func TestLPCSynthesis(t *testing.T) {
 	lpc := make([]float32, d.samplesInSubframe(BandwidthWideband)*subframeCount)
 	for i := range expectedOut {
 		out := make([]float32, 80)
-		d.lpcSynthesis(out, bandwidth, d.samplesInSubframe(BandwidthWideband), i, dLPC, aQ12, res, gainQ16, lpc)
+		d.lpcSynthesis(out, d.samplesInSubframe(BandwidthWideband), i, dLPC, aQ12, res, gainQ16, lpc)
 		for j := range out {
 			if out[j]-expectedOut[i][j] > floatEqualityThreshold {
 				t.Fatalf("run(%d) index(%d) (%f) != (%f)", i, j, out[j], expectedOut[i][j])
@@ -393,7 +393,7 @@ func TestDecodePitchLags(t *testing.T) {
 	silkFrame := []byte{0xb4, 0xe2, 0x2c, 0xe, 0x10, 0x65, 0x1d, 0xa9, 0x7, 0x5c, 0x36, 0x8f, 0x96, 0x7b, 0xf4, 0x89, 0x41, 0x55, 0x98, 0x7a, 0x39, 0x2e, 0x6b, 0x71, 0xa4, 0x3, 0x70, 0xbf}
 	d := &Decoder{rangeDecoder: createRangeDecoder(silkFrame, 73, 30770362, 1380489)}
 
-	lagMax, pitchLags := d.decodePitchLags(frameSignalTypeVoiced, BandwidthWideband)
+	lagMax, pitchLags, _ := d.decodePitchLags(frameSignalTypeVoiced, BandwidthWideband)
 	if lagMax != 288 {
 		t.Fatal()
 	}
@@ -453,6 +453,7 @@ func TestDecode(t *testing.T) {
 			t.Fatal(err)
 		}
 
+		// nolint: dupl
 		expectedOut := []float32{
 			0.000023, 0.000025, 0.000027, -0.000018, 0.000025,
 			-0.000021, 0.000021, -0.000024, 0.000021, 0.000021,
@@ -528,13 +529,13 @@ func TestDecode(t *testing.T) {
 		}
 
 		expectedOut := []float32{
-			0.000014, -0.000006, -0.000007, -0.000009, 0.000010,
-			0.000011, -0.000009, 0.000011, 0.000011, -0.000009,
-			0.000010, -0.000010, -0.000011, -0.000014, 0.000007,
-			0.000008, -0.000011, 0.000011, 0.000011, 0.000013,
-			0.000013, 0.000014, -0.000007, 0.000011, 0.000011,
-			0.000012, 0.000011, 0.000012, -0.000009, 0.000009,
-			-0.000012, -0.000013, 0.000006, 0.000008, 0.000008,
+			0.000011, -0.000009, -0.000011, -0.000012, 0.000009,
+			0.000010, -0.000010, 0.000011, 0.000012, -0.000008,
+			0.000011, -0.000009, -0.000010, -0.000012, 0.000008,
+			0.000009, -0.000010, 0.000011, 0.000012, 0.000013,
+			0.000012, 0.000013, -0.000007, 0.000011, 0.000011,
+			0.000011, 0.000011, 0.000012, -0.000009, 0.000009,
+			-0.000012, -0.000013, 0.000006, 0.000008, 0.000009,
 			0.000010, 0.000012, 0.000012, 0.000012, -0.000009,
 			-0.000011, -0.000013, 0.000007, -0.000013, 0.000008,
 			0.000009, 0.000011, -0.000009, -0.000011, 0.000009,
