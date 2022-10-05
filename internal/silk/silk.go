@@ -1,3 +1,4 @@
+// Package silk provides a Silk coder
 package silk
 
 import "math"
@@ -11,7 +12,6 @@ type (
 )
 
 const (
-	// TODO support non-20Ms frames
 	subframeCount = 4
 
 	pulsecountLargestPartitionSize = 16
@@ -34,13 +34,6 @@ const (
 	BandwidthWideband
 )
 
-func maxUint32(a, b uint32) uint32 {
-	if a > b {
-		return a
-	}
-	return b
-}
-
 func maxInt32(a, b int32) int32 {
 	if a > b {
 		return a
@@ -57,16 +50,6 @@ func minUint(a, b uint) uint {
 }
 
 func clamp(low, in, high int32) int32 {
-	if in > high {
-		return high
-	} else if in < low {
-		return low
-	}
-
-	return in
-}
-
-func clampFloat(low, in, high float32) float32 {
 	if in > high {
 		return high
 	} else if in < low {

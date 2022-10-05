@@ -1,5 +1,6 @@
 package silk
 
+// nolint: dupl, gochecknoglobals, deadcode, unused, varcheck
 var (
 	// In definition of codebook 'a = 0, b = 1...'
 
@@ -818,10 +819,6 @@ var (
 		-3703, -3745, -3784, -3822, -3857, -3889, -3920, -3948, -3973, -3997,
 		-4017, -4036, -4052, -4065, -4076, -4085, -4091, -4095, -4096,
 	}
-
-	//
-	//static const int8_t silk_pitch_offset_mbwb20ms[34][4] = {
-	//};
 
 	//   +-------+------------------+
 	//   | Index | Subframe Offsets |

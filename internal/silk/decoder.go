@@ -103,7 +103,7 @@ func (d *Decoder) determineFrameType(voiceActivityDetected bool) (signalType fra
 		quantizationOffsetType = frameQuantizationOffsetTypeHigh
 	}
 
-	return
+	return signalType, quantizationOffsetType
 }
 
 // A separate quantization gain is coded for each 5 ms subframe
@@ -114,8 +114,7 @@ func (d *Decoder) decodeSubframeQuantizations(signalType frameSignalType) (gainQ
 	gainQ16 = make([]float32, 4)
 
 	for subframeIndex := 0; subframeIndex < subframeCount; subframeIndex++ {
-
-		//The subframe gains are either coded independently, or relative to the
+		// The subframe gains are either coded independently, or relative to the
 		// gain from the most recent coded subframe in the same channel.
 		//
 		// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.4
@@ -154,7 +153,7 @@ func (d *Decoder) decodeSubframeQuantizations(signalType frameSignalType) (gainQ
 			// The following formula translates this index into a quantization gain
 			// for the current subframe using the gain from the previous subframe:
 			//      log_gain = clamp(0, max(2*delta_gain_index - 16, previous_log_gain + delta_gain_index - 4), 63)
-			logGain = int32(clamp(0, maxInt32(2*int32(deltaGainIndex)-16, int32(d.previousLogGain+deltaGainIndex)-4), 63))
+			logGain = clamp(0, maxInt32(2*deltaGainIndex-16, d.previousLogGain+deltaGainIndex-4), 63)
 		}
 
 		d.previousLogGain = logGain
@@ -164,7 +163,7 @@ func (d *Decoder) decodeSubframeQuantizations(signalType frameSignalType) (gainQ
 		//
 		//       gain_Q16[k] = silk_log2lin((0x1D1C71*log_gain>>16) + 2090)
 		//
-		inLogQ7 := (0x1D1C71 * int32(logGain) >> 16) + 2090
+		inLogQ7 := (0x1D1C71 * logGain >> 16) + 2090
 		i := inLogQ7 >> 7
 		f := inLogQ7 & 127
 
@@ -182,7 +181,7 @@ func (d *Decoder) decodeSubframeQuantizations(signalType frameSignalType) (gainQ
 		gainQ16[subframeIndex] = float32((1 << i) + ((-174*f*(128-f)>>16)+f)*((1<<i)>>7))
 	}
 
-	return
+	return gainQ16
 }
 
 // A set of normalized Line Spectral Frequency (LSF) coefficients follow
@@ -190,7 +189,7 @@ func (d *Decoder) decodeSubframeQuantizations(signalType frameSignalType) (gainQ
 // Predictive Coding (LPC) coefficients for the current SILK frame.
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.1
-func (d *Decoder) normalizeLineSpectralFrequencyStageOne(voiceActivityDetected bool, bandwidth Bandwidth) (I1 uint32) {
+func (d *Decoder) normalizeLineSpectralFrequencyStageOne(voiceActivityDetected bool, bandwidth Bandwidth) (I1 uint32) { // nolint: gocritic
 	// The first VQ stage uses a 32-element codebook, coded with one of the
 	// PDFs in Table 14, depending on the audio bandwidth and the signal
 	// type of the current SILK frame.  This yields a single index, I1, for
@@ -221,7 +220,7 @@ func (d *Decoder) normalizeLineSpectralFrequencyStageOne(voiceActivityDetected b
 // Predictive Coding (LPC) coefficients for the current SILK frame.
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.2
-func (d *Decoder) normalizeLineSpectralFrequencyStageTwo(bandwidth Bandwidth, I1 uint32) (dLPC int, resQ10 []int16) {
+func (d *Decoder) normalizeLineSpectralFrequencyStageTwo(bandwidth Bandwidth, I1 uint32) (dLPC int, resQ10 []int16) { // nolint: gocritic
 	// Decoding the second stage residual proceeds as follows.  For each
 	// coefficient, the decoder reads a symbol using the PDF corresponding
 	// to I1 from either Table 17 or Table 18,
@@ -294,7 +293,7 @@ func (d *Decoder) normalizeLineSpectralFrequencyStageTwo(bandwidth Bandwidth, I1
 		if k+1 < dLPC {
 			// Each coefficient selects its prediction weight from one of the two lists based on the stage-1 index, I1.
 			// let pred_Q8[k] be the weight for the k'th coefficient selected by this process for 0 <= k < d_LPC-1
-			predQ8 := int(0)
+			var predQ8 int
 			if bandwidth == BandwidthWideband {
 				predQ8 = int(predictionWeightForWidebandNormalizedLSF[predictionWeightSelectionForWidebandNormalizedLSF[I1][k]][k])
 			} else {
@@ -313,7 +312,7 @@ func (d *Decoder) normalizeLineSpectralFrequencyStageTwo(bandwidth Bandwidth, I1
 		resQ10[k] = int16(firstOperand + secondOperand)
 	}
 
-	return
+	return dLPC, resQ10
 }
 
 // Once the stage-1 index I1 and the stage-2 residual res_Q10[] have
@@ -321,7 +320,7 @@ func (d *Decoder) normalizeLineSpectralFrequencyStageTwo(bandwidth Bandwidth, I1
 // reconstructed.
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.3
-func (d *Decoder) normalizeLineSpectralFrequencyCoefficients(dLPC int, bandwidth Bandwidth, resQ10 []int16, I1 uint32) (nlsfQ15 []int16) {
+func (d *Decoder) normalizeLineSpectralFrequencyCoefficients(dLPC int, bandwidth Bandwidth, resQ10 []int16, I1 uint32) (nlsfQ15 []int16) { //nolint: gocritic
 	nlsfQ15 = make([]int16, dLPC)
 	w2Q18 := make([]uint, dLPC)
 	wQ9 := make([]int16, dLPC)
@@ -344,7 +343,7 @@ func (d *Decoder) normalizeLineSpectralFrequencyCoefficients(dLPC int, bandwidth
 	//
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.3
 	for k := 0; k < dLPC; k++ {
-		kMinusOne, kPlusOne := uint(0), uint(256)
+		kMinusOne, kPlusOne := uint(0), uint(256) //nolint: revive
 		if k != 0 {
 			kMinusOne = cb1Q8[I1][k-1]
 		}
@@ -373,7 +372,7 @@ func (d *Decoder) normalizeLineSpectralFrequencyCoefficients(dLPC int, bandwidth
 			y = 32768
 		}
 
-		y = y >> ((32 - i) >> 1)
+		y >>= ((32 - i) >> 1)
 		wQ9[k] = int16(y + ((213 * f * y) >> 16))
 
 		// Given the stage-1 codebook entry cb1_Q8[], the stage-2 residual
@@ -388,7 +387,7 @@ func (d *Decoder) normalizeLineSpectralFrequencyCoefficients(dLPC int, bandwidth
 			int32((int(cb1Q8[I1][k])<<7)+(int(resQ10[k])<<14)/int(wQ9[k])), 32767))
 	}
 
-	return
+	return nlsfQ15
 }
 
 // The normalized LSF stabilization procedure ensures that
@@ -398,7 +397,6 @@ func (d *Decoder) normalizeLineSpectralFrequencyCoefficients(dLPC int, bandwidth
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.4
 func (d *Decoder) normalizeLSFStabilization(nlsfQ15 []int16) {
-	// TODO
 }
 
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.5
@@ -423,7 +421,7 @@ func (d *Decoder) normalizeLSFInterpolation(n2Q15 []int16) (n1Q15 []int16, wQ2 i
 	return
 }
 
-func (d *Decoder) generateAQ12(Q15 []int16, bandwidth Bandwidth, aQ12 [][]float32) [][]float32 {
+func (d *Decoder) generateAQ12(Q15 []int16, bandwidth Bandwidth, aQ12 [][]float32) [][]float32 { //nolint: gocritic
 	if Q15 == nil {
 		return aQ12
 	}
@@ -544,7 +542,7 @@ func (d *Decoder) convertNormalizedLSFsToLPCCoefficients(n1Q15 []int16, bandwidt
 		a32Q17[k] = -(qQ16[k+1] - qQ16[k]) - (pQ16[k+1] + pQ16[k])
 		a32Q17[dLPC-k-1] = (qQ16[k+1] - qQ16[k]) - (pQ16[k+1] + pQ16[k])
 	}
-	return
+	return a32Q17
 }
 
 // As described in Section 4.2.7.8.6, SILK uses a Linear Congruential
@@ -651,7 +649,7 @@ func (d *Decoder) decodePulseAndLSBCounts(shellblocks int, rateLevel uint32) (pu
 		}
 	}
 
-	return
+	return pulsecounts, lsbcounts
 }
 
 // The locations of the pulses in each shell block follow the pulse
@@ -702,7 +700,7 @@ func (d *Decoder) decodePulseLocation(pulsecounts []uint8) (eRaw []int32) {
 		}
 	}
 
-	return
+	return eRaw
 }
 
 // After the decoder reads the pulse locations for all blocks, it reads
@@ -723,7 +721,7 @@ func (d *Decoder) decodeExcitationLSB(eRaw []int32, lsbcounts []uint8) {
 // the magnitude of each coefficient in the excitation.
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8.5
-func (d *Decoder) decodeExcitationSign(eRaw []int32, signalType frameSignalType, quantizationOffsetType frameQuantizationOffsetType, pulsecounts []uint8) {
+func (d *Decoder) decodeExcitationSign(eRaw []int32, signalType frameSignalType, quantizationOffsetType frameQuantizationOffsetType, pulsecounts []uint8) { //nolint: gocognit
 	for i := 0; i < len(eRaw); i++ {
 		// It then decodes a sign for all coefficients
 		// with a non-zero magnitude
@@ -776,7 +774,6 @@ func (d *Decoder) decodeExcitationSign(eRaw []int32, signalType frameSignalType,
 				default:
 					icdf = icdfExcitationSignInactiveSignalHighQuantization6PlusPulse
 				}
-
 			}
 		case frameSignalTypeUnvoiced:
 			switch quantizationOffsetType {
@@ -814,7 +811,6 @@ func (d *Decoder) decodeExcitationSign(eRaw []int32, signalType frameSignalType,
 				default:
 					icdf = icdfExcitationSignUnvoicedSignalHighQuantization6PlusPulse
 				}
-
 			}
 
 		case frameSignalTypeVoiced:
@@ -862,7 +858,6 @@ func (d *Decoder) decodeExcitationSign(eRaw []int32, signalType frameSignalType,
 			eRaw[i] *= -1
 		}
 	}
-
 }
 
 // SILK codes the excitation using a modified version of the Pyramid
@@ -953,7 +948,7 @@ func (d *Decoder) decodeExcitation(signalType frameSignalType, quantizationOffse
 		seed = (seed + uint32(eRaw[i])) & 0xFFFFFFFF
 	}
 
-	return
+	return eQ23
 }
 
 // The PDF to use is chosen by the size of the current partition (16, 8, 4, or 2) and the
@@ -985,7 +980,6 @@ func (d *Decoder) partitionPulseCount(icdf [][]uint, block uint8, halves []uint8
 func (d *Decoder) limitLPCCoefficientsRange(a32Q17 []int32) {
 	bandwidthExpansionRound := 0
 	for ; bandwidthExpansionRound < 10; bandwidthExpansionRound++ {
-
 		// For each round, the process first finds the index k such that
 		// abs(a32_Q17[k]) is largest, breaking ties by choosing the lowest
 		// value of k.
@@ -1091,7 +1085,7 @@ func (d *Decoder) limitLPCFilterPredictionGain(a32Q17 []int32) (aQ12 []float32) 
 }
 
 // https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.1
-func (d *Decoder) decodePitchLags(signalType frameSignalType, bandwidth Bandwidth) (lagMax uint32, pitchLags []int) {
+func (d *Decoder) decodePitchLags(signalType frameSignalType, bandwidth Bandwidth) (lagMax uint32, pitchLags []int, err error) {
 	if signalType != frameSignalTypeVoiced {
 		return
 	}
@@ -1171,7 +1165,7 @@ func (d *Decoder) decodePitchLags(signalType frameSignalType, bandwidth Bandwidt
 		// Lag" columns of Table 30, respectively.
 		lag = lagHigh*lagScale + lagLow + lagMin
 	} else {
-		// TODO
+		return lagMax, pitchLags, errNonAbsoluteLagsUnsupported
 	}
 
 	// After the primary pitch lag, a "pitch contour", stored as a single
@@ -1239,14 +1233,14 @@ func (d *Decoder) decodePitchLags(signalType frameSignalType, bandwidth Bandwidt
 		)
 	}
 
-	return
+	return lagMax, pitchLags, nil
 }
 
 // This allows the encoder to trade off the prediction gain between
 // packets against the recovery time after packet loss.
 //
 // https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.3
-func (d *Decoder) decodeLTPScalingParamater(signalType frameSignalType) (LTPscaleQ14 float32) {
+func (d *Decoder) decodeLTPScalingParamater(signalType frameSignalType) (LTPscaleQ14 float32) { //nolint:gocritic
 	// An LTP scaling parameter appears after the LTP filter coefficients if
 	// and only if
 	//
@@ -1327,12 +1321,11 @@ func (d *Decoder) decodeLTPFilterCoefficients(signalType frameSignalType) (bQ7 [
 			LTPFilterCodebook = codebookLTPFilterPeriodicityIndex1
 		case 2:
 			LTPFilterCodebook = codebookLTPFilterPeriodicityIndex2
-
 		}
 
 		copy(bQ7[i], LTPFilterCodebook[filterIndex])
 	}
-	return
+	return bQ7
 }
 
 // let n be the number of samples in a subframe (40 for NB, 60 for
@@ -1352,24 +1345,23 @@ func (d *Decoder) samplesInSubframe(bandwidth Bandwidth) int {
 }
 
 // https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.1
+// nolint: gocognit
 func (d *Decoder) ltpSynthesis(
 	out []float32,
-	signalType frameSignalType,
 	bQ7 [][]int8,
 	pitchLags []int,
 	eQ23 []int32,
 	n, j, s, dLPC int,
-	LTPScaleQ14 float32,
-	bandwidth Bandwidth,
+	LTPScaleQ14 float32, //nolint: gocritic
 	wQ2 int16,
-	aQ12, gainQ16, lpc, res, resLag []float32,
+	aQ12, gainQ16, res, resLag []float32,
 ) {
 	// If this is the third or fourth subframe of a 20 ms SILK frame and the LSF
 	// interpolation factor, w_Q2 (see Section 4.2.7.5.5), is less than 4,
 	// then let out_end be set to (j - (s-2)*n) and let LTP_scale_Q14 be set
 	// to 16384.  Otherwise, set out_end to (j - s*n) and set LTP_scale_Q14
 	// to the Q14 LTP scaling value from Section 4.2.7.6.3.
-	var out_end int
+	var out_end int //nolint: revive, stylecheck
 	if s > 2 && wQ2 < 4 {
 		out_end = (j - (s-2)*n)
 		LTPScaleQ14 = 16384.0
@@ -1492,8 +1484,6 @@ func (d *Decoder) ltpSynthesis(
 
 		res[index] = (float32(eQ23[i]) / 8388608.0) + resSum
 	}
-
-	return
 }
 
 // LPC synthesis uses the short-term LPC filter to predict the next
@@ -1503,7 +1493,7 @@ func (d *Decoder) ltpSynthesis(
 // after either
 //
 // https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.2
-func (d *Decoder) lpcSynthesis(out []float32, bandwidth Bandwidth, n, s, dLPC int, aQ12, res, gainQ16, lpc []float32) {
+func (d *Decoder) lpcSynthesis(out []float32, n, s, dLPC int, aQ12, res, gainQ16, lpc []float32) {
 	// Shift left one subframe of samples
 	for i := 0; i < len(d.finalOutValues)-n; i++ {
 		d.finalOutValues[i] = d.finalOutValues[i+n]
@@ -1513,8 +1503,8 @@ func (d *Decoder) lpcSynthesis(out []float32, bandwidth Bandwidth, n, s, dLPC in
 	// the current subframe.
 	j := 0
 
-	//Then, for i such that j <= i < (j + n), the result of LPC synthesis
-	//for the current subframe is
+	// Then, for i such that j <= i < (j + n), the result of LPC synthesis
+	// for the current subframe is
 	//
 	//                                     d_LPC-1
 	//                gain_Q16[i]            __              a_Q12[k]
@@ -1530,11 +1520,13 @@ func (d *Decoder) lpcSynthesis(out []float32, bandwidth Bandwidth, n, s, dLPC in
 		lpcVal *= res[sampleIndex]
 
 		for k, aQ12 := range aQ12[:dLPC] {
-			if lpcIndex := sampleIndex - k - 1; lpcIndex >= 0 {
+			lpcIndex := sampleIndex - k - 1
+			switch {
+			case lpcIndex >= 0:
 				currentLPCVal = lpc[lpcIndex]
-			} else if i < len(d.previousFrameLPCValues) && s == 0 {
+			case i < len(d.previousFrameLPCValues) && s == 0:
 				currentLPCVal = d.previousFrameLPCValues[len(d.previousFrameLPCValues)-1+(i-k)]
-			} else {
+			default:
 				currentLPCVal = 0
 			}
 
@@ -1576,7 +1568,7 @@ func (d *Decoder) silkFrameReconstruction(
 	bQ7 [][]int8,
 	pitchLags []int,
 	eQ23 []int32,
-	LTPscaleQ14 float32,
+	LTPscaleQ14 float32, //nolint:gocritic
 	wQ2 int16,
 	aQ12 [][]float32,
 	gainQ16, out []float32,
@@ -1606,7 +1598,6 @@ func (d *Decoder) silkFrameReconstruction(
 	// s be the index of the current subframe in this SILK frame
 	// (0 or 1 for 10 ms frames, or 0 to 3 for 20 ms frames)
 	for s := 0; s < subframeCount; s++ {
-
 		// For 20 ms SILK frames, the first half of the frame (i.e., the first
 		// two subframes) may use normalized LSF coefficients that are
 		// interpolated between the decoded LSFs for the most recent coded frame
@@ -1632,17 +1623,16 @@ func (d *Decoder) silkFrameReconstruction(
 		if signalType == frameSignalTypeVoiced {
 			d.ltpSynthesis(
 				out,
-				signalType,
 				bQ7, pitchLags,
 				eQ23, n, j, s, dLPC,
-				LTPscaleQ14, bandwidth,
+				LTPscaleQ14,
 				wQ2,
-				aQ12[aQ12Index], gainQ16, lpc, res, resLag,
+				aQ12[aQ12Index], gainQ16, res, resLag,
 			)
 		}
 
-		//https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.2
-		d.lpcSynthesis(out[n*s:], bandwidth, n, s, dLPC, aQ12[aQ12Index], res, gainQ16, lpc)
+		// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.2
+		d.lpcSynthesis(out[n*s:], n, s, dLPC, aQ12[aQ12Index], res, gainQ16, lpc)
 	}
 }
 
@@ -1728,7 +1718,10 @@ func (d *Decoder) Decode(in []byte, out []float32, isStereo bool, nanoseconds in
 	aQ12 = d.generateAQ12(nlsfQ15, bandwidth, aQ12)
 
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.1
-	lagMax, pitchLags := d.decodePitchLags(signalType, bandwidth)
+	lagMax, pitchLags, err := d.decodePitchLags(signalType, bandwidth)
+	if err != nil {
+		return err
+	}
 
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.2
 	bQ7 := d.decodeLTPFilterCoefficients(signalType)

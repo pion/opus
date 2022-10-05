@@ -1,5 +1,6 @@
 package silk
 
+// nolint: dupl, gochecknoglobals, deadcode, unused, varcheck
 var (
 	// +----------+-----------------------------+
 	// | VAD Flag | PDF                         |
