@@ -31,7 +31,7 @@ This package provides a Pure Go implementation of the [Opus Codec](https://opus-
 * **safety** - Go provides memory safety. Avoids a class of bugs that are devastating in sensitive environments.
 * **maintainability** - Go was designed to build simple, reliable, and efficient software.
 * **inspire** - Go is a power language, but lacking in media libraries. We hope this project inspires the next generation to build
-*               more media libraries for Go.
+                more media libraries for Go.
 
 You can read more [here](https://pion.ly/blog/pion-opus/)
 
