@@ -1469,14 +1469,9 @@ func (d *Decoder) ltpSynthesis(
 
 	var resSum, resVal float32
 	for i := j; i < (j + n); i++ {
-		index := i + j
-		if index >= len(res) {
-			continue
-		}
-
 		resSum = 0
 		for k := 0; k <= 4; k++ {
-			if resIndex := index - pitchLags[s] + 2 - k; resIndex < 0 {
+			if resIndex := i - pitchLags[s] + 2 - k; resIndex < 0 {
 				resVal = resLag[len(resLag)+resIndex]
 			} else {
 				resVal = res[resIndex]
@@ -1485,7 +1480,7 @@ func (d *Decoder) ltpSynthesis(
 			resSum += resVal * (float32(bQ7[s][k]) / 128.0)
 		}
 
-		res[index] = (float32(eQ23[i]) / 8388608.0) + resSum
+		res[i] = (float32(eQ23[i]) / 8388608.0) + resSum
 	}
 }
 
@@ -1533,7 +1528,12 @@ func (d *Decoder) lpcSynthesis(out []float32, n, s, dLPC int, aQ12, res, gainQ16
 				currentLPCVal = 0
 			}
 
-			lpcVal += currentLPCVal * (aQ12 / 4096.0)
+			// Disable fused multiply and add. This can be removed later, but while testing
+			// and fixing bugs disable to make it easier to find issues and compare to libopus
+			//
+			// https://go.dev/ref/spec#Floating_point_operators
+			// nolint: unconvert
+			lpcVal = float32(lpcVal) + float32(currentLPCVal)*float32(aQ12)/float32(4096.0)
 		}
 
 		lpc[sampleIndex] = lpcVal
