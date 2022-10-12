@@ -1384,9 +1384,12 @@ func (d *Decoder) ltpSynthesis(
 	for i := (j - pitchLags[s] - 2); i < out_end; i++ {
 		index := i + j
 
-		var resVal float32
-		var resIndex int
-		var writeToLag bool
+		var (
+			resVal     float32
+			resIndex   int
+			writeToLag bool
+		)
+
 		if index >= 0 {
 			if index >= len(res) {
 				continue
@@ -1766,7 +1769,11 @@ func (d *Decoder) Decode(in []byte, out []float32, isStereo bool, nanoseconds in
 
 	copy(d.n0Q15, nlsfQ15)
 	d.isPreviousFrameVoiced = signalType == frameSignalTypeVoiced
-	d.haveDecoded = true
+
+	if !d.haveDecoded {
+		d.haveDecoded = true
+		return d.Decode(in, out, isStereo, nanoseconds, bandwidth)
+	}
 
 	return nil
 }
