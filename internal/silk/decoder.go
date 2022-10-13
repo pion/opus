@@ -1442,10 +1442,10 @@ func (d *Decoder) ltpSynthesis(
 	// lpc[i] in Section 4.2.7.9.2, the output of this latter equation is
 	// merely a scaled version of the values of res[i] from previous
 	// subframes.
-	if s > 1 {
+	if s > 0 {
 		scaledGain := gainQ16[s-1] / gainQ16[s]
-		for i := out_end; i < 0; i++ {
-			index := i + j
+		for i := j; i >= out_end; i-- {
+			index := j - i
 			if index < 0 {
 				resLag[len(resLag)+index] *= scaledGain
 			} else {
@@ -1469,7 +1469,7 @@ func (d *Decoder) ltpSynthesis(
 
 	var resSum, resVal float32
 	for i := j; i < (j + n); i++ {
-		resSum = 0
+		resSum = res[i]
 		for k := 0; k <= 4; k++ {
 			if resIndex := i - pitchLags[s] + 2 - k; resIndex < 0 {
 				resVal = resLag[len(resLag)+resIndex]
@@ -1480,8 +1480,9 @@ func (d *Decoder) ltpSynthesis(
 			resSum += resVal * (float32(bQ7[s][k]) / 128.0)
 		}
 
-		res[i] = (float32(eQ23[i]) / 8388608.0) + resSum
+		res[i] = resSum
 	}
+
 }
 
 // LPC synthesis uses the short-term LPC filter to predict the next
@@ -1593,7 +1594,7 @@ func (d *Decoder) silkFrameReconstruction(
 	//     res[i] = ---------
 	//               2.0**23
 	res := make([]float32, len(eQ23))
-	resLag := make([]float32, lagMax+1)
+	resLag := make([]float32, lagMax+2)
 	for i := range res {
 		res[i] = float32(eQ23[i]) / 8388608.0
 	}
