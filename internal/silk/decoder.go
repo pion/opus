@@ -1362,11 +1362,11 @@ func (d *Decoder) ltpSynthesis(
 	// to 16384.  Otherwise, set out_end to (j - s*n) and set LTP_scale_Q14
 	// to the Q14 LTP scaling value from Section 4.2.7.6.3.
 	var out_end int //nolint: revive, stylecheck
-	if s > 2 && wQ2 < 4 {
-		out_end = (j - (s-2)*n)
-		LTPScaleQ14 = 16384.0
+	if s < 2 || wQ2 == 4 {
+		out_end = -s * n
 	} else {
-		out_end = (j - s*n)
+		out_end = -(s - 2) * n
+		LTPScaleQ14 = 16384.0
 	}
 
 	// out[i] and lpc[i] are initially cleared to all zeros. Then, for i
@@ -1381,7 +1381,7 @@ func (d *Decoder) ltpSynthesis(
 	//                                 out[i] - \  out[i-k-1] * --------, 1.0)
 	//                                          /_               4096.0
 	//                                          k=0
-	for i := (j - pitchLags[s] - 2); i < out_end; i++ {
+	for i := (-pitchLags[s]) - 2; i < out_end; i++ {
 		index := i + j
 
 		var (
@@ -1390,13 +1390,13 @@ func (d *Decoder) ltpSynthesis(
 			writeToLag bool
 		)
 
-		if index >= 0 {
-			if index >= len(res) {
-				continue
-			}
+		switch {
+		case index >= len(res):
+			continue
+		case index >= 0:
 			resVal = out[index]
 			resIndex = index
-		} else {
+		default:
 			resIndex = len(resLag) + index
 			resVal = d.finalOutValues[len(d.finalOutValues)+index]
 			writeToLag = true
@@ -1409,11 +1409,22 @@ func (d *Decoder) ltpSynthesis(
 			} else {
 				outVal = d.finalOutValues[len(d.finalOutValues)+outIndex]
 			}
-			resVal -= outVal * (aQ12[k] / 4096.0)
+			// Disable fused multiply and add. This can be removed later, but while testing
+			// and fixing bugs disable to make it easier to find issues and compare to libopus
+			//
+			// https://go.dev/ref/spec#Floating_point_operators
+			// nolint: unconvert
+			resVal = float32(resVal) - float32(float32(outVal)*float32(float32(aQ12[k])/float32(4096.0)))
 		}
 
 		resVal = clampNegativeOneToOne(resVal)
-		resVal *= (4.0 * LTPScaleQ14) / gainQ16[s]
+
+		// Disable fused multiply and add. This can be removed later, but while testing
+		// and fixing bugs disable to make it easier to find issues and compare to libopus
+		//
+		// https://go.dev/ref/spec#Floating_point_operators
+		// nolint: unconvert
+		resVal = float32(resVal) * (float32(4.0) * float32(LTPScaleQ14)) / float32(gainQ16[s])
 
 		if !writeToLag {
 			res[resIndex] = resVal
@@ -1443,13 +1454,28 @@ func (d *Decoder) ltpSynthesis(
 	// merely a scaled version of the values of res[i] from previous
 	// subframes.
 	if s > 0 {
-		scaledGain := gainQ16[s-1] / gainQ16[s]
-		for i := j; i >= out_end; i-- {
-			index := j - i
+		// Disable fused multiply and add. This can be removed later, but while testing
+		// and fixing bugs disable to make it easier to find issues and compare to libopus
+		//
+		// https://go.dev/ref/spec#Floating_point_operators
+		// nolint: unconvert
+		scaledGain := float32(gainQ16[s-1]) / float32(gainQ16[s])
+		for i := out_end; i < 0; i++ {
+			index := j + i
 			if index < 0 {
-				resLag[len(resLag)+index] *= scaledGain
+				// Disable fused multiply and add. This can be removed later, but while testing
+				// and fixing bugs disable to make it easier to find issues and compare to libopus
+				//
+				// https://go.dev/ref/spec#Floating_point_operators
+				// nolint: unconvert
+				resLag[len(resLag)+index] = float32(resLag[len(resLag)+index]) * float32(scaledGain)
 			} else {
-				res[index] *= scaledGain
+				// Disable fused multiply and add. This can be removed later, but while testing
+				// and fixing bugs disable to make it easier to find issues and compare to libopus
+				//
+				// https://go.dev/ref/spec#Floating_point_operators
+				// nolint: unconvert
+				res[index] = float32(res[index]) * float32(scaledGain)
 			}
 		}
 	}
@@ -1477,12 +1503,11 @@ func (d *Decoder) ltpSynthesis(
 				resVal = res[resIndex]
 			}
 
-			resSum += resVal * (float32(bQ7[s][k]) / 128.0)
+			resSum = float32(resSum) + float32(resVal)*(float32(bQ7[s][k])/float32(128.0))
 		}
 
 		res[i] = resSum
 	}
-
 }
 
 // LPC synthesis uses the short-term LPC filter to predict the next
