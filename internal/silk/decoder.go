@@ -1350,7 +1350,6 @@ func (d *Decoder) ltpSynthesis(
 	out []float32,
 	bQ7 [][]int8,
 	pitchLags []int,
-	eQ23 []int32,
 	n, j, s, dLPC int,
 	LTPScaleQ14 float32, //nolint: gocritic
 	wQ2 int16,
@@ -1669,7 +1668,7 @@ func (d *Decoder) silkFrameReconstruction(
 			d.ltpSynthesis(
 				out,
 				bQ7, pitchLags,
-				eQ23, n, j, s, dLPC,
+				n, j, s, dLPC,
 				LTPscaleQ14,
 				wQ2,
 				aQ12[aQ12Index], gainQ16, res, resLag,
