@@ -1503,6 +1503,11 @@ func (d *Decoder) ltpSynthesis(
 				resVal = res[resIndex]
 			}
 
+			// Disable fused multiply and add. This can be removed later, but while testing
+			// and fixing bugs disable to make it easier to find issues and compare to libopus
+			//
+			// https://go.dev/ref/spec#Floating_point_operators
+			// nolint: unconvert
 			resSum = float32(resSum) + float32(resVal)*(float32(bQ7[s][k])/float32(128.0))
 		}
 
@@ -1540,8 +1545,19 @@ func (d *Decoder) lpcSynthesis(out []float32, n, s, dLPC int, aQ12, res, gainQ16
 	for i := j; i < (j + n); i++ {
 		sampleIndex := i + (n * s)
 
-		lpcVal := gainQ16[s] / 65536.0
-		lpcVal *= res[sampleIndex]
+		// Disable fused multiply and add. This can be removed later, but while testing
+		// and fixing bugs disable to make it easier to find issues and compare to libopus
+		//
+		// https://go.dev/ref/spec#Floating_point_operators
+		// nolint: unconvert
+		lpcVal := float32(gainQ16[s]) / float32(65536.0)
+
+		// Disable fused multiply and add. This can be removed later, but while testing
+		// and fixing bugs disable to make it easier to find issues and compare to libopus
+		//
+		// https://go.dev/ref/spec#Floating_point_operators
+		// nolint: unconvert
+		lpcVal = float32(lpcVal) * float32(res[sampleIndex])
 
 		for k, aQ12 := range aQ12[:dLPC] {
 			lpcIndex := sampleIndex - k - 1
@@ -1797,9 +1813,19 @@ func (d *Decoder) Decode(in []byte, out []float32, isStereo bool, nanoseconds in
 	d.isPreviousFrameVoiced = signalType == frameSignalTypeVoiced
 
 	if !d.haveDecoded {
+		d.reset(out)
 		d.haveDecoded = true
 		return d.Decode(in, out, isStereo, nanoseconds, bandwidth)
 	}
 
 	return nil
+}
+
+func (d *Decoder) reset(out []float32) {
+	for i := range out {
+		out[i] = 0
+	}
+	for i := range d.finalOutValues {
+		d.finalOutValues[i] = 0
+	}
 }
