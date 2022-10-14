@@ -1,6 +1,8 @@
 package silk
 
 import (
+	"math"
+
 	"github.com/pion/opus/internal/rangecoding"
 )
 
@@ -396,7 +398,108 @@ func (d *Decoder) normalizeLineSpectralFrequencyCoefficients(dLPC int, bandwidth
 // percentile of a large training set).
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.4
-func (d *Decoder) normalizeLSFStabilization(nlsfQ15 []int16) {
+func (d *Decoder) normalizeLSFStabilization(nlsfQ15 []int16, dLPC int, bandwidth Bandwidth) {
+	// Let NDeltaMin_Q15[k] be the minimum required spacing for the current
+	// audio bandwidth from Table 25.
+	//
+	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.4
+	NDeltaMinQ15 := codebookMinimumSpacingForNormalizedLSCoefficientsNarrowbandAndMediumband
+	if bandwidth == BandwidthWideband {
+		NDeltaMinQ15 = codebookMinimumSpacingForNormalizedLSCoefficientsWideband
+	}
+
+	// The procedure starts off by trying to make small adjustments that
+	// attempt to minimize the amount of distortion introduced.  After 20
+	// such adjustments, it falls back to a more direct method that
+	// guarantees the constraints are enforced but may require large
+	// adjustments.
+	//
+	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.4
+	for adjustment := 0; adjustment <= 19; adjustment++ {
+		// First, the procedure finds the index
+		// i where NLSF_Q15[i] - NLSF_Q15[i-1] - NDeltaMin_Q15[i] is the
+		// smallest, breaking ties by using the lower value of i.
+		//
+		// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.4
+		i := 0
+		iValue := int(math.MaxInt)
+
+		for j := 0; j <= len(nlsfQ15); j++ {
+			// For the purposes of computing this spacing for the first and last coefficient,
+			// NLSF_Q15[-1] is taken to be 0 and NLSF_Q15[d_LPC] is taken to be 32768
+			//
+			// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.4
+			previousNLSF := 0
+			currentNLSF := 32768
+			if j != 0 {
+				previousNLSF = int(nlsfQ15[j-1])
+			}
+			if j != len(nlsfQ15) {
+				currentNLSF = int(nlsfQ15[j])
+			}
+
+			spacingValue := currentNLSF - previousNLSF - NDeltaMinQ15[j]
+			if spacingValue < iValue {
+				i = j
+				iValue = spacingValue
+			}
+		}
+
+		switch {
+		// If this value is non-negative, then the stabilization stops; the coefficients
+		// satisfy all the constraints.
+		//
+		// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.4
+		case iValue >= 0:
+			return
+		// if i == 0, it sets NLSF_Q15[0] to NDeltaMin_Q15[0]
+		//
+		// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.4
+		case i == 0:
+			nlsfQ15[0] = int16(NDeltaMinQ15[0])
+			continue
+		// if i == d_LPC, it sets
+		//  NLSF_Q15[d_LPC-1] to (32768 - NDeltaMin_Q15[d_LPC])
+		//
+		// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.4
+		case i == dLPC:
+			nlsfQ15[dLPC-1] = int16(32768 - NDeltaMinQ15[dLPC])
+			continue
+		}
+
+		// 	For all other values of i, both NLSF_Q15[i-1] and NLSF_Q15[i] are updated as
+		// follows:
+		//                                              i-1
+		//                                              __
+		//     min_center_Q15 = (NDeltaMin_Q15[i]>>1) + \  NDeltaMin_Q15[k]
+		//                                              /_
+		//                                              k=0
+		//
+		minCenterQ15 := NDeltaMinQ15[i] >> 1
+		for k := 0; k <= i-1; k++ {
+			minCenterQ15 += NDeltaMinQ15[k]
+		}
+
+		// 		                                                d_LPC
+		//                                                      __
+		//     max_center_Q15 = 32768 - (NDeltaMin_Q15[i]>>1) - \  NDeltaMin_Q15[k]
+		//                                                      /_
+		//                                                     k=i+1
+		maxCenterQ15 := 32768 - (NDeltaMinQ15[i] >> 1)
+		for k := i + 1; k <= dLPC; k++ {
+			maxCenterQ15 -= NDeltaMinQ15[k]
+		}
+
+		//     center_freq_Q15 = clamp(min_center_Q15[i],
+		//                     (NLSF_Q15[i-1] + NLSF_Q15[i] + 1)>>1
+		//                     max_center_Q15[i])
+		centerFreqQ15 := int(clamp(int32(minCenterQ15), int32((nlsfQ15[i-1]+nlsfQ15[i]+1)>>1), int32(maxCenterQ15)))
+
+		//    NLSF_Q15[i-1] = center_freq_Q15 - (NDeltaMin_Q15[i]>>1)
+		//    NLSF_Q15[i] = NLSF_Q15[i-1] + NDeltaMin_Q15[i]
+		nlsfQ15[i-1] = int16(centerFreqQ15 - (NDeltaMinQ15[i] >> 1))
+		nlsfQ15[i] = nlsfQ15[i-1] + int16(NDeltaMinQ15[i])
+	}
 }
 
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.5
@@ -1746,7 +1849,7 @@ func (d *Decoder) Decode(in []byte, out []float32, isStereo bool, nanoseconds in
 	nlsfQ15 := d.normalizeLineSpectralFrequencyCoefficients(dLPC, bandwidth, resQ10, I1)
 
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.4
-	d.normalizeLSFStabilization(nlsfQ15)
+	d.normalizeLSFStabilization(nlsfQ15, dLPC, bandwidth)
 
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.5
 	n1Q15, wQ2 := d.normalizeLSFInterpolation(nlsfQ15)

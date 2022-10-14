@@ -82,6 +82,29 @@ func TestNormalizeLineSpectralFrequencyStageOne(t *testing.T) {
 	}
 }
 
+func TestNormalizeLSFStabilization(t *testing.T) {
+	d := &Decoder{}
+
+	in := []int16{
+		856, 2310, 3452, 4865, 4852,
+		7547, 9662, 11512, 13884, 15919,
+		18467, 20487, 23559, 25900, 28222,
+		30700,
+	}
+
+	expectedOut := []int16{
+		856, 2310, 3452, 4858, 4861,
+		7547, 9662, 11512, 13884, 15919,
+		18467, 20487, 23559, 25900, 28222,
+		30700,
+	}
+
+	d.normalizeLSFStabilization(in, 16, BandwidthWideband)
+	if !reflect.DeepEqual(in, expectedOut) {
+		t.Fatal()
+	}
+}
+
 func TestNormalizeLineSpectralFrequencyStageTwo(t *testing.T) {
 	d := &Decoder{rangeDecoder: createRangeDecoder(testSilkFrame(), 47, 50822640, 5895957)}
 
