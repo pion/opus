@@ -2,6 +2,7 @@ package silk
 
 import (
 	"math"
+	"sort"
 
 	"github.com/pion/opus/internal/rangecoding"
 )
@@ -493,12 +494,49 @@ func (d *Decoder) normalizeLSFStabilization(nlsfQ15 []int16, dLPC int, bandwidth
 		//     center_freq_Q15 = clamp(min_center_Q15[i],
 		//                     (NLSF_Q15[i-1] + NLSF_Q15[i] + 1)>>1
 		//                     max_center_Q15[i])
-		centerFreqQ15 := int(clamp(int32(minCenterQ15), int32((nlsfQ15[i-1]+nlsfQ15[i]+1)>>1), int32(maxCenterQ15)))
+		centerFreqQ15 := int(clamp(
+			int32(minCenterQ15),
+			int32((int(nlsfQ15[i-1])+int(nlsfQ15[i])+1)>>1),
+			int32(maxCenterQ15)),
+		)
 
 		//    NLSF_Q15[i-1] = center_freq_Q15 - (NDeltaMin_Q15[i]>>1)
 		//    NLSF_Q15[i] = NLSF_Q15[i-1] + NDeltaMin_Q15[i]
-		nlsfQ15[i-1] = int16(centerFreqQ15 - (NDeltaMinQ15[i] >> 1))
+		nlsfQ15[i-1] = int16(centerFreqQ15 - NDeltaMinQ15[i]>>1)
 		nlsfQ15[i] = nlsfQ15[i-1] + int16(NDeltaMinQ15[i])
+	}
+
+	// After the 20th repetition of the above procedure, the following
+	// fallback procedure executes once.  First, the values of NLSF_Q15[k]
+	// for 0 <= k < d_LPC are sorted in ascending order.  Then, for each
+	// value of k from 0 to d_LPC-1, NLSF_Q15[k] is set to
+	sort.Slice(nlsfQ15, func(i, j int) bool {
+		return nlsfQ15[i] < nlsfQ15[j]
+	})
+
+	// Then, for each value of k from 0 to d_LPC-1, NLSF_Q15[k] is set to
+	//
+	//   max(NLSF_Q15[k], NLSF_Q15[k-1] + NDeltaMin_Q15[k])
+	for k := 0; k <= dLPC-1; k++ {
+		prevNLSF := int16(0)
+		if k != 0 {
+			prevNLSF = nlsfQ15[k-1]
+		}
+
+		nlsfQ15[k] = maxInt16(nlsfQ15[k], prevNLSF+int16(NDeltaMinQ15[k]))
+	}
+
+	// Next, for each value of k from d_LPC-1 down to 0, NLSF_Q15[k] is set
+	// to
+	//
+	//   min(NLSF_Q15[k], NLSF_Q15[k+1] - NDeltaMin_Q15[k+1])
+	for k := dLPC - 1; k >= 0; k-- {
+		nextNLSF := 32768
+		if k != dLPC-1 {
+			nextNLSF = int(nlsfQ15[k+1])
+		}
+
+		nlsfQ15[k] = minInt16(nlsfQ15[k], int16(nextNLSF-NDeltaMinQ15[k+1]))
 	}
 }
 

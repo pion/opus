@@ -103,6 +103,21 @@ func TestNormalizeLSFStabilization(t *testing.T) {
 	if !reflect.DeepEqual(in, expectedOut) {
 		t.Fatal()
 	}
+
+	in = []int16{
+		1533, 1674, 2506, 4374, 6630,
+		9867, 10260, 10691, 14397, 16969,
+		19355, 21645, 25228, 26972, 30514, 30208,
+	}
+	expectedOut = []int16{
+		1533, 1674, 2506, 4374, 6630,
+		9867, 10260, 10691, 14397, 16969,
+		19355, 21645, 25228, 26972, 30360, 30363,
+	}
+	d.normalizeLSFStabilization(in, 16, BandwidthWideband)
+	if !reflect.DeepEqual(in, expectedOut) {
+		t.Fatal()
+	}
 }
 
 func TestNormalizeLineSpectralFrequencyStageTwo(t *testing.T) {

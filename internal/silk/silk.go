@@ -41,7 +41,22 @@ func maxInt32(a, b int32) int32 {
 	return b
 }
 
+func maxInt16(a, b int16) int16 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 func minUint(a, b uint) uint {
+	if a > b {
+		return b
+	}
+
+	return a
+}
+
+func minInt16(a, b int16) int16 {
 	if a > b {
 		return b
 	}
