@@ -1045,7 +1045,7 @@ func (d *Decoder) decodeExcitation(signalType frameSignalType, quantizationOffse
 	case signalType == frameSignalTypeUnvoiced && quantizationOffsetType == frameQuantizationOffsetTypeLow:
 		offsetQ23 = 25
 	case signalType == frameSignalTypeUnvoiced && quantizationOffsetType == frameQuantizationOffsetTypeHigh:
-		offsetQ23 = 25
+		offsetQ23 = 60
 	case signalType == frameSignalTypeVoiced && quantizationOffsetType == frameQuantizationOffsetTypeLow:
 		offsetQ23 = 8
 	case signalType == frameSignalTypeVoiced && quantizationOffsetType == frameQuantizationOffsetTypeHigh:
