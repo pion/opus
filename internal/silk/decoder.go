@@ -282,7 +282,7 @@ func (d *Decoder) normalizeLineSpectralFrequencyStageTwo(bandwidth Bandwidth, I1
 	dLPC = len(I2)
 
 	// for 0 <= k < d_LPC-1
-	for k := dLPC - 2; k >= 0; k-- {
+	for k := dLPC - 1; k >= 0; k-- {
 		// The stage-2 residual for each coefficient is computed via
 		//
 		//     res_Q10[k] = (k+1 < d_LPC ? (res_Q10[k+1]*pred_Q8[k])>>8 : 0) + ((((I2[k]<<10) - sign(I2[k])*102)*qstep)>>16) ,
