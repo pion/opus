@@ -1903,19 +1903,7 @@ func (d *Decoder) Decode(in []byte, out []float32, isStereo bool, nanoseconds in
 	// Save the final values of out
 	copy(d.finalOutValues, out[len(out)-len(d.finalOutValues):])
 
-	if !d.haveDecoded {
-		d.reset(out)
-		d.haveDecoded = true
-		return d.Decode(in, out, isStereo, nanoseconds, bandwidth)
-	}
-	return nil
-}
+	d.haveDecoded = true
 
-func (d *Decoder) reset(out []float32) {
-	for i := range out {
-		out[i] = 0
-	}
-	for i := range d.finalOutValues {
-		d.finalOutValues[i] = 0
-	}
+	return nil
 }
