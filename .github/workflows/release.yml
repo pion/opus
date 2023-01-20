@@ -9,13 +9,14 @@
 # https://github.com/pion/.goassets instead of this repository.
 #
 
-name: Generate Authors
-
+name: Release
 on:
-  pull_request:
+  push:
+    tags:
+      - 'v*'
 
 jobs:
-  generate:
-    uses: pion/.goassets/.github/workflows/generate-authors.reusable.yml@master
+  release:
+    uses: pion/.goassets/.github/workflows/release.reusable.yml@master
     with:
-      token: ${{ secrets.PIONBOT_PRIVATE_KEY }}
+      go-version: '1.19' # auto-update/latest-go-version
