@@ -1,6 +1,6 @@
 <h1 align="center">
   <br>
-  Opus
+  Pion Opus
   <br>
 </h1>
 <h4 align="center">Pure Go implementation of the Opus Codec</h4>
