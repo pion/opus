@@ -39,8 +39,21 @@ You can read more [here](https://pion.ly/blog/pion-opus/)
 ### Running
 See our [examples](examples) for demonstrations of how to use this package.
 
-### Get Involved!
-We would love to have you involved! This project needs a lot of help before it can be useful to everyone. See the Roadmap for open issues and join us on [Slack](https://pion.ly/slack)
-
 ### Roadmap
-See [Issue 9](https://github.com/pion/opus/issues/9)
+The library is used as a part of our WebRTC implementation. Please refer to that [roadmap](https://github.com/pion/webrtc/issues/9) to track our major milestones.
+
+See also [Issue 9](https://github.com/pion/opus/issues/9)
+
+### Community
+Pion has an active community on the [Slack](https://pion.ly/slack).
+
+Follow the [Pion Twitter](https://twitter.com/_pion) for project updates and important WebRTC news.
+
+We are always looking to support **your projects**. Please reach out if you have something to build!
+If you need commercial support or don't want to use public methods you can contact us at [team@pion.ly](mailto:team@pion.ly)
+
+### Contributing
+Check out the **[contributing wiki](https://github.com/pion/webrtc/wiki/Contributing)** to join the group of amazing people making this project possible: [AUTHORS.txt](./AUTHORS.txt)
+
+### License
+MIT License - see [LICENSE](LICENSE) for full text
