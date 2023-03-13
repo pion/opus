@@ -28,13 +28,19 @@ This package provides a Pure Go implementation of the [Opus Codec](https://opus-
 
 * **empower interesting use cases** - This project also exports the internals of the Encoder and Decoder.
                                       Allowing for things like analysis of a Opus bitstream without decoding the entire thing.
-* **learning** - This project was written to be read by others. It includes excerpts and links to [RFC 6716](https://datatracker.ietf.org/doc/rfc6716/)
+* **learning** - This project was written to be read by others. It includes excerpts and links to [RFC 6716][rfc6716]
 * **safety** - Go provides memory safety. Avoids a class of bugs that are devastating in sensitive environments.
 * **maintainability** - Go was designed to build simple, reliable, and efficient software.
 * **inspire** - Go is a power language, but lacking in media libraries. We hope this project inspires the next generation to build
                 more media libraries for Go.
 
 You can read more [here](https://pion.ly/blog/pion-opus/)
+
+### RFCs
+#### Implemented
+- **RFC 6716**: [Definition of the Opus Audio Codec][rfc6716]
+
+[rfc6716]: https://tools.ietf.org/html/rfc6716
 
 ### Running
 See our [examples](examples) for demonstrations of how to use this package.
