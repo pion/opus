@@ -7,6 +7,7 @@ Egon Elbre <egonelbre@gmail.com>
 Sean DuBois <duboisea@justin.tv>
 Sean DuBois <duboisea@twitch.tv>
 Sean DuBois <sean@siobud.com>
+Steffen Vogel <post@steffenvogel.de>
 
 # List of contributors not appearing in Git history
 
