@@ -1,6 +1,6 @@
 <h1 align="center">
   <br>
-  Opus
+  Pion Opus
   <br>
 </h1>
 <h4 align="center">Pure Go implementation of the Opus Codec</h4>
@@ -8,7 +8,8 @@
   <a href="https://pion.ly"><img src="https://img.shields.io/badge/pion-opus-gray.svg?longCache=true&colorB=brightgreen" alt="Opus"></a>
   <a href="https://pion.ly/slack"><img src="https://img.shields.io/badge/join-us%20on%20slack-gray.svg?longCache=true&logo=slack&colorB=brightgreen" alt="Slack Widget"></a>
   <br>
-  <a href="https://pkg.go.dev/github.com/pion/opus"><img src="https://godoc.org/github.com/pion/opus?status.svg" alt="GoDoc"></a>
+  <img alt="GitHub Workflow Status" src="https://img.shields.io/github/actions/workflow/status/pion/opus/test.yaml">
+  <a href="https://pkg.go.dev/github.com/pion/opus"><img src="https://pkg.go.dev/badge/github.com/pion/opus.svg" alt="Go Reference"></a>
   <a href="https://codecov.io/gh/pion/opus"><img src="https://codecov.io/gh/pion/opus/branch/master/graph/badge.svg" alt="Coverage Status"></a>
   <a href="https://goreportcard.com/report/github.com/pion/opus"><img src="https://goreportcard.com/badge/github.com/pion/opus" alt="Go Report Card"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
@@ -27,7 +28,7 @@ This package provides a Pure Go implementation of the [Opus Codec](https://opus-
 
 * **empower interesting use cases** - This project also exports the internals of the Encoder and Decoder.
                                       Allowing for things like analysis of a Opus bitstream without decoding the entire thing.
-* **learning** - This project was written to be read by others. It includes excerpts and links to [RFC 6716](https://datatracker.ietf.org/doc/rfc6716/)
+* **learning** - This project was written to be read by others. It includes excerpts and links to [RFC 6716][rfc6716]
 * **safety** - Go provides memory safety. Avoids a class of bugs that are devastating in sensitive environments.
 * **maintainability** - Go was designed to build simple, reliable, and efficient software.
 * **inspire** - Go is a power language, but lacking in media libraries. We hope this project inspires the next generation to build
@@ -35,11 +36,30 @@ This package provides a Pure Go implementation of the [Opus Codec](https://opus-
 
 You can read more [here](https://pion.ly/blog/pion-opus/)
 
+### RFCs
+#### Implemented
+- **RFC 6716**: [Definition of the Opus Audio Codec][rfc6716]
+
+[rfc6716]: https://tools.ietf.org/html/rfc6716
+
 ### Running
 See our [examples](examples) for demonstrations of how to use this package.
 
-### Get Involved!
-We would love to have you involved! This project needs a lot of help before it can be useful to everyone. See the Roadmap for open issues and join us on [Slack](https://pion.ly/slack)
-
 ### Roadmap
-See [Issue 9](https://github.com/pion/opus/issues/9)
+The library is used as a part of our WebRTC implementation. Please refer to that [roadmap](https://github.com/pion/webrtc/issues/9) to track our major milestones.
+
+See also [Issue 9](https://github.com/pion/opus/issues/9)
+
+### Community
+Pion has an active community on the [Slack](https://pion.ly/slack).
+
+Follow the [Pion Twitter](https://twitter.com/_pion) for project updates and important WebRTC news.
+
+We are always looking to support **your projects**. Please reach out if you have something to build!
+If you need commercial support or don't want to use public methods you can contact us at [team@pion.ly](mailto:team@pion.ly)
+
+### Contributing
+Check out the **[contributing wiki](https://github.com/pion/webrtc/wiki/Contributing)** to join the group of amazing people making this project possible: [AUTHORS.txt](./AUTHORS.txt)
+
+### License
+MIT License - see [LICENSE](LICENSE) for full text
