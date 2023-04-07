@@ -199,8 +199,13 @@ func TestLimitLPCCoefficientsRange(t *testing.T) {
 		12974, 9765, 4176, 3646, -3766, -4429, -2292, -4663,
 		-3441, -3848, -4493, -1614, -1960, -3112, -2153, -2898,
 	}
+	expectedLimited := append([]int32(nil), A32Q17...)
 
 	d.limitLPCCoefficientsRange(A32Q17)
+
+	if !reflect.DeepEqual(A32Q17, expectedLimited) {
+		t.Fatal()
+	}
 }
 
 func TestExcitation(t *testing.T) {

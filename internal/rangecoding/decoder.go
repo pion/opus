@@ -109,6 +109,7 @@ func (r *Decoder) DecodeSymbolWithICDF(cumulativeDistributionTable []uint) uint3
 	symbol = r.highAndCodedDifference/scale + 1
 	symbol = total - uint32(min(uint(symbol), uint(total)))
 
+	// nolint: revive
 	for k = 0; uint32(cumulativeDistributionTable[k]) <= symbol; k++ {
 	}
 
