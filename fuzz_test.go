@@ -20,7 +20,7 @@ func FuzzDecoder(f *testing.F) {
 	f.Add([]byte{})
 	f.Add(tinyogg)
 
-	f.Fuzz(func(t *testing.T, data []byte) {
+	f.Fuzz(func(_ *testing.T, data []byte) {
 		var out [1920]byte
 
 		ogg, _, err := oggreader.NewWith(bytes.NewReader(data))
