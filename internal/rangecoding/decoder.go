@@ -110,7 +110,7 @@ func (r *Decoder) DecodeSymbolWithICDF(cumulativeDistributionTable []uint) uint3
 
 	scale = r.rangeSize / total
 	symbol = r.highAndCodedDifference/scale + 1
-	symbol = total - uint32(min(uint(symbol), uint(total)))
+	symbol = total - uint32(localMin(uint(symbol), uint(total)))
 
 	// nolint: revive
 	for k = 0; uint32(cumulativeDistributionTable[k]) <= symbol; k++ {
@@ -221,7 +221,7 @@ func (r *Decoder) SetInternalValues(data []byte, bitsRead uint, rangeSize uint32
 	r.highAndCodedDifference = highAndCodedDifference
 }
 
-func min(a, b uint) uint {
+func localMin(a, b uint) uint {
 	if a < b {
 		return a
 	}
