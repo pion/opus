@@ -101,16 +101,16 @@ type (
 
 	// The remaining two bits of the TOC byte, labeled "c", code the number
 	// of frames per packet (codes 0 to 3) as follows:
-
-	// o  0: 1 frame in the packet
-
-	// o  1: 2 frames in the packet, each with equal compressed size
-
-	// o  2: 2 frames in the packet, with different compressed sizes
-
+	//
+	// o  0: 1 frame in the packet.
+	//
+	// o  1: 2 frames in the packet, each with equal compressed size.
+	//
+	// o  2: 2 frames in the packet, with different compressed sizes.
+	//
 	// o  3: an arbitrary number of frames in the packet
 	//
-	// https://datatracker.ietf.org/doc/html/rfc6716#section-3.1
+	// https://datatracker.ietf.org/doc/html/rfc6716#section-3.1.
 	frameCode byte
 )
 
@@ -149,6 +149,7 @@ func (c configurationMode) String() string {
 	case configurationModeHybrid:
 		return "Hybrid"
 	}
+
 	return "Invalid Configuration Mode"
 }
 
@@ -235,7 +236,7 @@ func (c Configuration) frameDuration() frameDuration {
 	return 0
 }
 
-// Bandwidth constants
+// Bandwidth constants.
 const (
 	BandwidthNarrowband Bandwidth = iota + 1
 	BandwidthMediumband
@@ -284,10 +285,11 @@ func (b Bandwidth) String() string {
 	case BandwidthFullband:
 		return "Fullband"
 	}
+
 	return "Invalid Bandwidth"
 }
 
-// SampleRate returns the effective SampleRate for a given bandwidth
+// SampleRate returns the effective SampleRate for a given bandwidth.
 func (b Bandwidth) SampleRate() int {
 	switch b {
 	case BandwidthNarrowband:
@@ -301,6 +303,7 @@ func (b Bandwidth) SampleRate() int {
 	case BandwidthFullband:
 		return 48000
 	}
+
 	return 0
 }
 
@@ -326,5 +329,6 @@ func parseFrameCountByte(in byte) (isVBR bool, hasPadding bool, frameCount byte)
 	isVBR = (in & 0b10000000) == 1
 	hasPadding = (in & 0b01000000) == 1
 	frameCount = in & 0b00111111
+
 	return
 }

@@ -27,6 +27,8 @@ var (
 )
 
 func loadTestOgg(tb testing.TB) []byte {
+	tb.Helper()
+
 	if *testoggfile == "" {
 		tb.Skip("-oggfile not specified")
 	}
@@ -37,6 +39,7 @@ func loadTestOgg(tb testing.TB) []byte {
 	if _testogg.err != nil {
 		tb.Fatal("unable to load -oggfile", _testogg.err)
 	}
+
 	return _testogg.data
 }
 
@@ -49,6 +52,8 @@ func BenchmarkDecode(b *testing.B) {
 }
 
 func benchmarkData(b *testing.B, data []byte) {
+	b.Helper()
+
 	var out [1920]byte
 	ogg, _, err := oggreader.NewWith(bytes.NewReader(data))
 	if err != nil {

@@ -7,7 +7,7 @@ package silk
 import "math"
 
 type (
-	// Bandwidth for Silk can be NB (narrowband) MB (medium-band) or WB (wideband)
+	// Bandwidth for Silk can be NB (narrowband) MB (medium-band) or WB (wideband).
 	Bandwidth byte
 
 	frameSignalType             byte
@@ -30,7 +30,7 @@ const (
 	frameQuantizationOffsetTypeHigh
 )
 
-// Bandwidth constants
+// Bandwidth constants.
 const (
 	BandwidthNarrowband Bandwidth = iota + 1
 	BandwidthMediumband
@@ -41,6 +41,7 @@ func maxInt32(a, b int32) int32 {
 	if a > b {
 		return a
 	}
+
 	return b
 }
 
@@ -48,6 +49,7 @@ func maxInt16(a, b int16) int16 {
 	if a > b {
 		return a
 	}
+
 	return b
 }
 
@@ -83,6 +85,7 @@ func clampNegativeOneToOne(v float32) float32 {
 	} else if v >= 1 {
 		return 1
 	}
+
 	return v
 }
 
@@ -114,5 +117,6 @@ func ilog(n int) int {
 	if n <= 0 {
 		return 0
 	}
+
 	return int(math.Floor(math.Log2(float64(n)))) + 1
 }

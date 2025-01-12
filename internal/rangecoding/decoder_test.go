@@ -128,152 +128,152 @@ var (
 	}
 )
 
-func TestDecoder(t *testing.T) {
-	d := &Decoder{}
-	d.Init([]byte{0x0b, 0xe4, 0xc1, 0x36, 0xec, 0xc5, 0x80})
+func TestDecoder(t *testing.T) { // nolint:cyclop,gocyclo
+	decoder := &Decoder{}
+	decoder.Init([]byte{0x0b, 0xe4, 0xc1, 0x36, 0xec, 0xc5, 0x80})
 
-	if result := d.DecodeSymbolLogP(0x1); result != 0 {
+	if result := decoder.DecodeSymbolLogP(0x1); result != 0 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolLogP(0x1); result != 0 {
+	if result := decoder.DecodeSymbolLogP(0x1); result != 0 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelFrameTypeInactive); result != 1 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelFrameTypeInactive); result != 1 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelGainHighbits[0]); result != 0 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelGainHighbits[0]); result != 0 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelGainLowbits); result != 6 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelGainLowbits); result != 6 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelGainDelta); result != 0 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelGainDelta); result != 0 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelGainDelta); result != 3 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelGainDelta); result != 3 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelGainDelta); result != 4 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelGainDelta); result != 4 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelLsfS1[1][0]); result != 9 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelLsfS1[1][0]); result != 9 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelLsfS2[10]); result != 5 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelLsfS2[10]); result != 5 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelLsfS2[9]); result != 4 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelLsfS2[9]); result != 4 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelLsfInterpolationOffset); result != 4 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelLsfInterpolationOffset); result != 4 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelLcgSeed); result != 2 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelLcgSeed); result != 2 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelExcRate[0]); result != 0 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelExcRate[0]); result != 0 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
 		t.Fatal("")
 	}
-	if result := d.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
+	if result := decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
 		t.Fatal("")
 	}
 }

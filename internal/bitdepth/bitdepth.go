@@ -8,7 +8,7 @@ import (
 	"math"
 )
 
-// ConvertFloat32LittleEndianToSigned16LittleEndian converts a f32le to s16le
+// ConvertFloat32LittleEndianToSigned16LittleEndian converts a f32le to s16le.
 func ConvertFloat32LittleEndianToSigned16LittleEndian(in []float32, out []byte, resampleCount int) error {
 	currIndex := 0
 	for i := range in {
