@@ -103,27 +103,28 @@ func (r *Decoder) Init(data []byte) {
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.1.3.3
 func (r *Decoder) DecodeSymbolWithICDF(cumulativeDistributionTable []uint) uint32 {
-	var k, scale, total, symbol, low, high uint32
+	var k, scale, total, symbol, low, high uint32 //nolint:varnamelen
 
-	total = uint32(cumulativeDistributionTable[0])
+	total = uint32(cumulativeDistributionTable[0]) //nolint:gosec // G115
 	cumulativeDistributionTable = cumulativeDistributionTable[1:]
 
 	scale = r.rangeSize / total
 	symbol = r.highAndCodedDifference/scale + 1
-	symbol = total - uint32(localMin(uint(symbol), uint(total)))
+	symbol = total - uint32(localMin(uint(symbol), uint(total))) //nolint:gosec // G115
 
 	// nolint: revive
-	for k = 0; uint32(cumulativeDistributionTable[k]) <= symbol; k++ {
+	for k = 0; uint32(cumulativeDistributionTable[k]) <= symbol; k++ { //nolint:gosec // G115
 	}
 
-	high = uint32(cumulativeDistributionTable[k])
+	high = uint32(cumulativeDistributionTable[k]) //nolint:gosec // G115
 	if k != 0 {
-		low = uint32(cumulativeDistributionTable[k-1])
+		low = uint32(cumulativeDistributionTable[k-1]) //nolint:gosec // G115
 	} else {
 		low = 0
 	}
 
 	r.update(scale, low, high, total)
+
 	return k
 }
 
@@ -134,7 +135,7 @@ func (r *Decoder) DecodeSymbolWithICDF(cumulativeDistributionTable []uint) uint3
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.1.3.2
 func (r *Decoder) DecodeSymbolLogP(logp uint) uint32 {
-	var k uint32
+	var k uint32 //nolint:varnamelen
 	scale := r.rangeSize >> logp
 
 	if r.highAndCodedDifference >= scale {
@@ -154,11 +155,12 @@ func (r *Decoder) getBit() uint32 {
 	index := r.bitsRead / 8
 	offset := r.bitsRead % 8
 
-	if index > uint(len(r.data)-1) {
+	if index > uint(len(r.data)-1) { //nolint:gosec // G115
 		return 0
 	}
 
 	r.bitsRead++
+
 	return uint32((r.data[index] >> (7 - offset)) & 1)
 }
 
@@ -213,7 +215,7 @@ func (r *Decoder) update(scale, low, high, total uint32) {
 	r.normalize()
 }
 
-// SetInternalValues is used when using the RangeDecoder when testing
+// SetInternalValues is used when using the RangeDecoder when testing.
 func (r *Decoder) SetInternalValues(data []byte, bitsRead uint, rangeSize uint32, highAndCodedDifference uint32) {
 	r.data = data
 	r.bitsRead = bitsRead
@@ -225,5 +227,6 @@ func localMin(a, b uint) uint {
 	if a < b {
 		return a
 	}
+
 	return b
 }

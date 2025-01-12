@@ -48,7 +48,7 @@ var (
 	// | 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,       |
 	// | 1}/256                                                            |
 	// +-------------------------------------------------------------------+
-	// PDF for Delta Quantization Gain Coding
+	// PDF for Delta Quantization Gain Coding.
 	icdfDeltaQuantizationGain = []uint{
 		256, 6, 11, 22, 53, 185, 206, 214, 218, 221, 223, 225, 227, 228,
 		229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242,
@@ -75,7 +75,7 @@ var (
 	// |           |          | 13, 14, 14, 6, 14, 12, 2, 6, 1, 12, 12,    |
 	// |           |          | 11, 10, 3, 10, 5, 1, 1, 1, 3}/256          |
 	// +-----------+----------+--------------------------------------------+
-	// PDFs for Normalized LSF Stage-1 Index Decoding
+	// PDFs for Normalized LSF Stage-1 Index Decoding.
 	icdfNormalizedLSFStageOneIndexNarrowbandOrMediumbandUnvoiced = []uint{
 		256, 44, 78, 108, 127, 148, 160, 171, 174, 177, 179, 195, 197, 199, 200,
 		205, 207, 208, 211, 214, 215, 216, 218, 220, 222, 225, 226, 235, 244, 246,
@@ -100,7 +100,7 @@ var (
 	// | {156, 60, 24, 9, 4, 2, 1}/256 |
 	// +-------------------------------+
 	//
-	// Normalized LSF Index Extension Decoding
+	// Normalized LSF Index Extension Decoding.
 	icdfNormalizedLSFStageTwoIndexExtension = []uint{256, 156, 216, 240, 249, 253, 255, 256}
 
 	// +----------+--------------------------------------+
@@ -147,7 +147,7 @@ var (
 	//
 	// NB/MD and WD ICDF are combined because the codebooks
 	// do not overlap
-	//
+	//.
 	icdfNormalizedLSFStageTwoIndex = [][]uint{
 		// Narrowband and Mediumband
 		{256, 1, 2, 3, 18, 242, 253, 254, 255, 256},
@@ -176,7 +176,7 @@ var (
 	// | {13, 22, 29, 11, 181}/256 |
 	// +---------------------------+
 	//
-	// Table 26: PDF for Normalized LSF Interpolation Index
+	// Table 26: PDF for Normalized LSF Interpolation Index.
 	icdfNormalizedLSFInterpolationIndex = []uint{
 		256, 13, 35, 64, 75, 256,
 	}
@@ -187,7 +187,7 @@ var (
 	// | {64, 64, 64, 64}/256 |
 	// +----------------------+
 	//
-	// Table 43: PDF for LCG Seed
+	// Table 43: PDF for LCG Seed.
 	icdfLinearCongruentialGeneratorSeed = []uint{
 		256, 64, 128, 192, 256,
 	}
@@ -200,7 +200,7 @@ var (
 	// | Voiced               | {33, 30, 36, 17, 34, 49, 18, 21, 18}/256 |
 	// +----------------------+------------------------------------------+
 	//
-	// Table 45: PDFs for the Rate Level
+	// Table 45: PDFs for the Rate Level.
 	icdfRateLevelUnvoiced = []uint{256, 15, 66, 78, 124, 169, 182, 215, 242, 256}
 	icdfRateLevelVoiced   = []uint{256, 33, 63, 99, 116, 150, 199, 217, 238, 256}
 
@@ -242,7 +242,7 @@ var (
 	// |          | 1, 2, 0}/256                                           |
 	// +----------+--------------------------------------------------------+
 	//
-	// Table 46: PDFs for the Pulse Count
+	// Table 46: PDFs for the Pulse Count.
 	icdfPulseCount = [][]uint{
 		{256, 131, 205, 230, 238, 241, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256},
 		{256, 58, 151, 211, 234, 241, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256},
@@ -298,7 +298,7 @@ var (
 	// |            | 1, 1, 1}/256                                         |
 	// +------------+------------------------------------------------------+
 	//
-	// Table 47: PDFs for Pulse Count Split, 16 Sample Partitions
+	// Table 47: PDFs for Pulse Count Split, 16 Sample Partitions.
 	icdfPulseCountSplit16SamplePartitions = [][]uint{
 		{256, 126, 256},
 		{256, 56, 198, 256},
@@ -358,7 +358,7 @@ var (
 	// | 16         | {1, 1, 2, 6, 12, 21, 30, 36, 38, 36, 30, 21, 12, 6,  |
 	// |            | 2, 1, 1}/256                                         |
 	// +------------+------------------------------------------------------+
-	// Table 48: PDFs for Pulse Count Split, 8 Sample Partitions
+	// Table 48: PDFs for Pulse Count Split, 8 Sample Partitions.
 	icdfPulseCountSplit8SamplePartitions = [][]uint{
 		{256, 127, 256},
 		{256, 53, 202, 256},
@@ -418,7 +418,7 @@ var (
 	// | 16         | {1, 1, 4, 9, 15, 21, 28, 32, 34, 32, 28, 21, 15, 9,  |
 	// |            | 4, 1, 1}/256                                         |
 	// +------------+------------------------------------------------------+
-	// Table 49: PDFs for Pulse Count Split, 4 Sample Partitions
+	// Table 49: PDFs for Pulse Count Split, 4 Sample Partitions.
 	icdfPulseCountSplit4SamplePartitions = [][]uint{
 		{256, 127, 256},
 		{256, 49, 206, 256},
@@ -478,7 +478,7 @@ var (
 	// | 16         | {1, 2, 4, 7, 13, 21, 28, 34, 36, 34, 28, 21, 13, 7,  |
 	// |            | 4, 2, 1}/256                                         |
 	// +------------+------------------------------------------------------+
-	// Table 50: PDFs for Pulse Count Split, 2 Sample Partitions
+	// Table 50: PDFs for Pulse Count Split, 2 Sample Partitions.
 	icdfPulseCountSplit2SamplePartitions = [][]uint{
 		{256, 128, 256},
 		{256, 42, 214, 256},
@@ -504,7 +504,7 @@ var (
 	// | {136, 120}/256 |
 	// +----------------+
 	//
-	// Table 51: PDF for Excitation LSBs
+	// Table 51: PDF for Excitation LSBs.
 	icdfExcitationLSB = []uint{256, 136, 256}
 
 	// +-------------+-----------------------+-------------+---------------+
@@ -598,7 +598,7 @@ var (
 	// | Voiced      | High                  | 6 or more   | {154,102}/256 |
 	// +-------------+-----------------------+-------------+---------------+
 	//
-	// Table 52: PDFs for Excitation Signs
+	// Table 52: PDFs for Excitation Signs.
 	icdfExcitationSignInactiveSignalLowQuantization0Pulse      = []uint{256, 2, 256}
 	icdfExcitationSignInactiveSignalLowQuantization1Pulse      = []uint{256, 207, 256}
 	icdfExcitationSignInactiveSignalLowQuantization2Pulse      = []uint{256, 189, 256}

@@ -5,7 +5,7 @@ package silk
 
 // nolint: dupl, gochecknoglobals, deadcode, unused, varcheck
 var (
-	// In definition of codebook 'a = 0, b = 1...'
+	// In definition of codebook 'a = 0, b = 1...'.
 
 	//   +----+---------------------+
 	//   | I1 | Coefficient         |
@@ -223,7 +223,7 @@ var (
 	}
 
 	// A+B is Narrowband/Mediumband Prediction Weights
-	// C+D is Wideband Prediction Weights
+	// C+D is Wideband Prediction Weights.
 	//
 	// +-------------+-----+-----+-----+-----+
 	// | Coefficient |   A |   B |   C |   D |
@@ -259,7 +259,7 @@ var (
 	// | 14          |     |     | 182 | 155 |
 	// +-------------+-----+-----+-----+-----+
 	//
-	// Table 20: Prediction Weights for Normalized LSF Decoding
+	// Table 20: Prediction Weights for Normalized LSF Decoding.
 
 	predictionWeightForNarrowbandAndMediumbandNormalizedLSF = [][]uint{
 		{179, 138, 140, 148, 151, 149, 153, 151, 163},
@@ -449,7 +449,7 @@ var (
 	// | 31 | C  C  D  C  C  D  D  D  C  C  D  C  C  D  C |
 	// +----+---------------------------------------------+
 	//
-	// Table 22: Prediction Weight Selection for WB Normalized LSF Decoding
+	// Table 22: Prediction Weight Selection for WB Normalized LSF Decoding.
 	predictionWeightSelectionForWidebandNormalizedLSF = [][]uint{
 		{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
 		{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
@@ -555,7 +555,7 @@ var (
 	// | 31 | 37  48  64  84 104 118 156 177 201 230 |
 	// +----+----------------------------------------+
 	//
-	// Table 23: NB/MB Normalized LSF Stage-1 Codebook Vectors
+	// Table 23: NB/MB Normalized LSF Stage-1 Codebook Vectors.
 	codebookNormalizedLSFStageOneNarrowbandOrMediumband = [][]uint{
 		{12, 35, 60, 83, 108, 132, 157, 180, 206, 228},
 		{15, 32, 55, 77, 101, 125, 151, 175, 201, 225},
@@ -660,7 +660,7 @@ var (
 	// |    |                                                            |
 	// | 31 | 15 21 35 50 61  73  86  97 110 119 129 141 175 198 218 237 |
 	// +----+------------------------------------------------------------+
-	// Table 24: WB Normalized LSF Stage-1 Codebook Vectors
+	// Table 24: WB Normalized LSF Stage-1 Codebook Vectors.
 	codebookNormalizedLSFStageOneWideband = [][]uint{
 		{7, 23, 38, 54, 69, 85, 100, 116, 131, 147, 162, 178, 193, 208, 223, 239},
 		{13, 25, 41, 55, 69, 83, 98, 112, 127, 142, 157, 171, 187, 203, 220, 236},
@@ -734,7 +734,9 @@ var (
 	//  Table 27: LSF Ordering for Polynomial Evaluation
 
 	lsfOrderingForPolynomialEvaluationNarrowbandAndMediumband = []uint8{0, 9, 6, 3, 4, 5, 8, 1, 2, 7}
-	lsfOrderingForPolynomialEvaluationWideband                = []uint8{0, 15, 8, 7, 4, 11, 12, 3, 2, 13, 10, 5, 6, 9, 14, 1}
+	lsfOrderingForPolynomialEvaluationWideband                = []uint8{
+		0, 15, 8, 7, 4, 11, 12, 3, 2, 13, 10, 5, 6, 9, 14, 1,
+	}
 
 	// +-----+-------+-------+-------+-------+
 	// |   i |    +0 |    +1 |    +2 |    +3 |
@@ -806,7 +808,7 @@ var (
 	// | 128 | -4096 |       |       |       |
 	// +-----+-------+-------+-------+-------+
 	//
-	// Table 28: Q12 Cosine Table for LSF Conversion
+	// Table 28: Q12 Cosine Table for LSF Conversion.
 	q12CosineTableForLSFConverion = []int32{
 		4096, 4095, 4091, 4085, 4076, 4065, 4052, 4036, 4017, 3997,
 		3973, 3948, 3920, 3889, 3857, 3822, 3784, 3745, 3703, 3659,

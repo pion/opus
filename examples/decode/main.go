@@ -14,7 +14,7 @@ import (
 	"github.com/pion/opus/pkg/oggreader"
 )
 
-func main() {
+func main() { // nolint:cyclop
 	if len(os.Args) != 3 {
 		panic("Usage: <in-file> <out-file>")
 	}
@@ -30,7 +30,7 @@ func main() {
 	}
 
 	out := make([]byte, 1920)
-	f, err := os.Create(os.Args[2])
+	fd, err := os.Create(os.Args[2])
 	if err != nil {
 		panic(err)
 	}
@@ -54,7 +54,7 @@ func main() {
 				panic(err)
 			}
 
-			if _, err := f.Write(out); err != nil {
+			if _, err := fd.Write(out); err != nil {
 				panic(err)
 			}
 		}

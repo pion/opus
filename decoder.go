@@ -12,13 +12,13 @@ import (
 	"github.com/pion/opus/internal/silk"
 )
 
-// Decoder decodes the Opus bitstream into PCM
+// Decoder decodes the Opus bitstream into PCM.
 type Decoder struct {
 	silkDecoder silk.Decoder
 	silkBuffer  []float32
 }
 
-// NewDecoder creates a new Opus Decoder
+// NewDecoder creates a new Opus Decoder.
 func NewDecoder() Decoder {
 	return Decoder{
 		silkDecoder: silk.NewDecoder(),
@@ -47,7 +47,13 @@ func (d *Decoder) decode(in []byte, out []float32) (bandwidth Bandwidth, isStere
 	}
 
 	for _, encodedFrame := range encodedFrames {
-		err := d.silkDecoder.Decode(encodedFrame, out, tocHeader.isStereo(), cfg.frameDuration().nanoseconds(), silk.Bandwidth(cfg.bandwidth()))
+		err := d.silkDecoder.Decode(
+			encodedFrame,
+			out,
+			tocHeader.isStereo(),
+			cfg.frameDuration().nanoseconds(),
+			silk.Bandwidth(cfg.bandwidth()),
+		)
 		if err != nil {
 			return 0, false, err
 		}
@@ -56,7 +62,7 @@ func (d *Decoder) decode(in []byte, out []float32) (bandwidth Bandwidth, isStere
 	return cfg.bandwidth(), tocHeader.isStereo(), nil
 }
 
-// Decode decodes the Opus bitstream into S16LE PCM
+// Decode decodes the Opus bitstream into S16LE PCM.
 func (d *Decoder) Decode(in, out []byte) (bandwidth Bandwidth, isStereo bool, err error) {
 	bandwidth, isStereo, err = d.decode(in, d.silkBuffer)
 	if err != nil {
@@ -64,10 +70,11 @@ func (d *Decoder) Decode(in, out []byte) (bandwidth Bandwidth, isStereo bool, er
 	}
 
 	err = bitdepth.ConvertFloat32LittleEndianToSigned16LittleEndian(d.silkBuffer, out, 3)
+
 	return
 }
 
-// DecodeFloat32 decodes the Opus bitstream into F32LE PCM
+// DecodeFloat32 decodes the Opus bitstream into F32LE PCM.
 func (d *Decoder) DecodeFloat32(in []byte, out []float32) (bandwidth Bandwidth, isStereo bool, err error) {
 	bandwidth, isStereo, err = d.decode(in, d.silkBuffer)
 	if err != nil {
@@ -75,5 +82,6 @@ func (d *Decoder) DecodeFloat32(in []byte, out []float32) (bandwidth Bandwidth, 
 	}
 
 	resample.Up(d.silkBuffer, out, 3)
+
 	return
 }
