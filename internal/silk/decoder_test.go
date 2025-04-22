@@ -4,11 +4,10 @@
 package silk
 
 import (
-	"errors"
-	"reflect"
 	"testing"
 
 	"github.com/pion/opus/internal/rangecoding"
+	"github.com/stretchr/testify/assert"
 )
 
 const floatEqualityThreshold = 0.000001
@@ -41,56 +40,38 @@ func createRangeDecoder(
 
 func TestDecode20MsOnly(t *testing.T) {
 	d := &Decoder{}
-	err := d.Decode(testSilkFrame(), []float32{}, false, 1, BandwidthWideband)
-	if !errors.Is(err, errUnsupportedSilkFrameDuration) {
-		t.Fatal(err)
-	}
+	assert.ErrorIs(t, errUnsupportedSilkFrameDuration, d.Decode(testSilkFrame(), []float32{}, false, 1, BandwidthWideband))
 }
 
 func TestDecodeStereoTODO(t *testing.T) {
 	d := &Decoder{}
 	err := d.Decode(testSilkFrame(), []float32{}, true, nanoseconds20Ms, BandwidthWideband)
-	if !errors.Is(err, errUnsupportedSilkStereo) {
-		t.Fatal(err)
-	}
+	assert.ErrorIs(t, errUnsupportedSilkStereo, err)
 }
 
 func TestDecodeFrameType(t *testing.T) {
 	d := &Decoder{rangeDecoder: createRangeDecoder(testSilkFrame(), 31, 536870912, 437100388)}
 
 	signalType, quantizationOffsetType := d.determineFrameType(false)
-	if signalType != frameSignalTypeInactive {
-		t.Fatal()
-	}
-	if quantizationOffsetType != frameQuantizationOffsetTypeHigh {
-		t.Fatal()
-	}
+	assert.Equal(t, frameSignalTypeInactive, signalType)
+	assert.Equal(t, frameQuantizationOffsetTypeHigh, quantizationOffsetType)
 }
 
 func TestDecodeSubframeQuantizations(t *testing.T) {
 	d := &Decoder{rangeDecoder: createRangeDecoder(testSilkFrame(), 31, 482344960, 437100388)}
-
-	gainQ16 := d.decodeSubframeQuantizations(frameSignalTypeInactive)
-	if !reflect.DeepEqual(gainQ16, []float32{210944, 112640, 96256, 96256}) {
-		t.Fatal()
-	}
+	assert.Equal(t, []float32{210944, 112640, 96256, 96256}, d.decodeSubframeQuantizations(frameSignalTypeInactive))
 }
 
 func TestDecodeBufferSize(t *testing.T) {
 	d := NewDecoder()
 	err := d.Decode([]byte{}, make([]float32, 50), false, nanoseconds20Ms, BandwidthWideband)
-	if !errors.Is(err, errOutBufferTooSmall) {
-		t.Fatal()
-	}
+	assert.Equal(t, errOutBufferTooSmall, err)
 }
 
 func TestNormalizeLineSpectralFrequencyStageOne(t *testing.T) {
 	d := &Decoder{rangeDecoder: createRangeDecoder(testSilkFrame(), 47, 722810880, 387065757)}
 
-	I1 := d.normalizeLineSpectralFrequencyStageOne(false, BandwidthWideband)
-	if I1 != 9 {
-		t.Fatal()
-	}
+	assert.Equal(t, uint32(9), d.normalizeLineSpectralFrequencyStageOne(false, BandwidthWideband))
 }
 
 func TestNormalizeLSFStabilization(t *testing.T) {
@@ -111,9 +92,7 @@ func TestNormalizeLSFStabilization(t *testing.T) {
 	}
 
 	decoder.normalizeLSFStabilization(in, 16, BandwidthWideband)
-	if !reflect.DeepEqual(in, expectedOut) {
-		t.Fatal()
-	}
+	assert.Equal(t, in, expectedOut)
 
 	in = []int16{
 		1533, 1674, 2506, 4374, 6630,
@@ -126,29 +105,22 @@ func TestNormalizeLSFStabilization(t *testing.T) {
 		19355, 21645, 25228, 26972, 30360, 30363,
 	}
 	decoder.normalizeLSFStabilization(in, 16, BandwidthWideband)
-	if !reflect.DeepEqual(in, expectedOut) {
-		t.Fatal()
-	}
+	assert.Equal(t, in, expectedOut)
 }
 
 func TestNormalizeLineSpectralFrequencyStageTwo(t *testing.T) {
 	d := &Decoder{rangeDecoder: createRangeDecoder(testSilkFrame(), 47, 50822640, 5895957)}
 
 	dLPC, resQ10 := d.normalizeLineSpectralFrequencyStageTwo(BandwidthWideband, 9)
-	if !reflect.DeepEqual(resQ10, testResQ10()) {
-		t.Fatal()
-	} else if dLPC != 16 {
-		t.Fatal()
-	}
+	assert.Equal(t, testResQ10(), resQ10)
+	assert.Equal(t, 16, dLPC)
 }
 
 func TestNormalizeLineSpectralFrequencyCoefficients(t *testing.T) {
 	d := &Decoder{rangeDecoder: createRangeDecoder(testSilkFrame(), 55, 493249168, 174371199)}
 
 	nlsfQ1 := d.normalizeLineSpectralFrequencyCoefficients(16, BandwidthWideband, testResQ10(), 9)
-	if !reflect.DeepEqual(nlsfQ1, testNlsfQ1()) {
-		t.Fatal()
-	}
+	assert.Equal(t, testNlsfQ1(), nlsfQ1)
 }
 
 func TestNormalizeLSFInterpolation(t *testing.T) {
@@ -157,9 +129,7 @@ func TestNormalizeLSFInterpolation(t *testing.T) {
 		var expectedN1Q15 []int16
 
 		actualN1Q15, _ := d.normalizeLSFInterpolation(expectedN1Q15)
-		if !reflect.DeepEqual(actualN1Q15, expectedN1Q15) {
-			t.Fatal()
-		}
+		assert.Equal(t, expectedN1Q15, actualN1Q15)
 	})
 
 	t.Run("wQ2 == 1", func(t *testing.T) {
@@ -185,10 +155,7 @@ func TestNormalizeLSFInterpolation(t *testing.T) {
 		}
 
 		actualN2Q15, _ := decoder.normalizeLSFInterpolation(n2Q15)
-
-		if !reflect.DeepEqual(actualN2Q15, expectedN1Q15) {
-			t.Fatal()
-		}
+		assert.Equal(t, expectedN1Q15, actualN2Q15)
 	})
 }
 
@@ -206,9 +173,7 @@ func TestConvertNormalizedLSFsToLPCCoefficients(t *testing.T) {
 		-3441, -3848, -4493, -1614, -1960, -3112, -2153, -2898,
 	}
 
-	if !reflect.DeepEqual(decoder.convertNormalizedLSFsToLPCCoefficients(nlsfQ15, BandwidthWideband), expectedA32Q17) {
-		t.Fatal()
-	}
+	assert.Equal(t, expectedA32Q17, decoder.convertNormalizedLSFsToLPCCoefficients(nlsfQ15, BandwidthWideband))
 }
 
 func TestLimitLPCCoefficientsRange(t *testing.T) {
@@ -221,9 +186,7 @@ func TestLimitLPCCoefficientsRange(t *testing.T) {
 
 	d.limitLPCCoefficientsRange(A32Q17)
 
-	if !reflect.DeepEqual(A32Q17, expectedLimited) {
-		t.Fatal()
-	}
+	assert.Equal(t, expectedLimited, A32Q17)
 }
 
 func TestExcitation(t *testing.T) {
@@ -261,9 +224,7 @@ func TestExcitation(t *testing.T) {
 	pulsecounts, lsbcounts := d.decodePulseAndLSBCounts(shellblocks, rateLevel)
 
 	eRaw := d.decodeExcitation(frameSignalTypeUnvoiced, frameQuantizationOffsetTypeLow, lcgSeed, pulsecounts, lsbcounts)
-	if !reflect.DeepEqual(expected, eRaw) {
-		t.Fatal()
-	}
+	assert.Equal(t, expected, eRaw)
 }
 
 func TestLimitLPCFilterPredictionGain(t *testing.T) {
@@ -280,9 +241,7 @@ func TestLimitLPCFilterPredictionGain(t *testing.T) {
 	}
 
 	aQ12 := d.limitLPCFilterPredictionGain(a32Q17)
-	if !reflect.DeepEqual(aQ12, expectedAQ12) {
-		t.Fatal()
-	}
+	assert.Equal(t, aQ12, expectedAQ12)
 }
 
 func TestLPCSynthesis(t *testing.T) { //nolint:lll
@@ -446,9 +405,7 @@ func TestLPCSynthesis(t *testing.T) { //nolint:lll
 		out := make([]float32, 80)
 		decoder.lpcSynthesis(out, decoder.samplesInSubframe(BandwidthWideband), i, dLPC, aQ12, res, gainQ16, lpc)
 		for j := range out {
-			if out[j]-expectedOut[i][j] > floatEqualityThreshold {
-				t.Fatalf("run(%d) index(%d) (%f) != (%f)", i, j, out[j], expectedOut[i][j])
-			}
+			assert.Less(t, out[j]-expectedOut[i][j], float32(floatEqualityThreshold))
 		}
 	}
 }
@@ -462,13 +419,8 @@ func TestDecodePitchLags(t *testing.T) {
 	d := &Decoder{rangeDecoder: createRangeDecoder(silkFrame, 73, 30770362, 1380489)}
 
 	lagMax, pitchLags, _ := d.decodePitchLags(frameSignalTypeVoiced, BandwidthWideband)
-	if lagMax != 288 {
-		t.Fatal()
-	}
-
-	if !reflect.DeepEqual(pitchLags, []int{206, 206, 206, 206}) {
-		t.Fatal()
-	}
+	assert.Equal(t, uint32(288), lagMax)
+	assert.Equal(t, []int{206, 206, 206, 206}, pitchLags)
 }
 
 func TestDecodeLTPFilterCoefficients(t *testing.T) {
@@ -480,14 +432,12 @@ func TestDecodeLTPFilterCoefficients(t *testing.T) {
 	d := &Decoder{rangeDecoder: createRangeDecoder(silkFrame, 89, 253853952, 138203876)}
 
 	bQ7 := d.decodeLTPFilterCoefficients(frameSignalTypeVoiced)
-	if !reflect.DeepEqual(bQ7, [][]int8{
+	assert.Equal(t, [][]int8{
 		{1, 1, 8, 1, 1},
 		{2, 0, 77, 11, 9},
 		{1, 1, 8, 1, 1},
 		{-1, 36, 64, 27, -6},
-	}) {
-		t.Fatal()
-	}
+	}, bQ7)
 }
 
 func TestDecodeLTPScalingParameter(t *testing.T) {
@@ -498,17 +448,12 @@ func TestDecodeLTPScalingParameter(t *testing.T) {
 			0x6b, 0x71, 0xa4, 0x03, 0x70, 0xbf,
 		}
 		d := &Decoder{rangeDecoder: createRangeDecoder(silkFrame, 105, 160412192, 164623240)}
-
-		if d.decodeLTPScalingParamater(frameSignalTypeVoiced) != 15565.0 {
-			t.Fatal()
-		}
+		assert.Equal(t, float32(15565.0), d.decodeLTPScalingParamater(frameSignalTypeVoiced))
 	})
 
 	t.Run("Unvoiced", func(t *testing.T) {
 		d := &Decoder{}
-		if d.decodeLTPScalingParamater(frameSignalTypeUnvoiced) != 15565.0 {
-			t.Fatal()
-		}
+		assert.Equal(t, float32(15565.0), d.decodeLTPScalingParamater(frameSignalTypeUnvoiced))
 	})
 }
 
@@ -520,16 +465,12 @@ func TestDecode(t *testing.T) {
 		t.Helper()
 
 		for i := range expectedOut {
-			if out[i]-expectedOut[i] > floatEqualityThreshold {
-				t.Fatalf("%d (%f) != (%f)", i, out[i], expectedOut[i])
-			}
+			assert.Less(t, out[i]-expectedOut[i], float32(floatEqualityThreshold))
 		}
 	}
 
 	t.Run("Unvoiced Single Frame", func(t *testing.T) {
-		if err := decoder.Decode(testSilkFrame(), out, false, nanoseconds20Ms, BandwidthWideband); err != nil {
-			t.Fatal(err)
-		}
+		assert.NoError(t, decoder.Decode(testSilkFrame(), out, false, nanoseconds20Ms, BandwidthWideband))
 
 		// nolint: dupl
 		expectedOut := []float32{
@@ -602,15 +543,13 @@ func TestDecode(t *testing.T) {
 	})
 
 	t.Run("Unvoiced Subsequent Frame", func(t *testing.T) {
-		if err := decoder.Decode(
+		assert.NoError(t, decoder.Decode(
 			[]byte{0x07, 0xc9, 0x72, 0x27, 0xe1, 0x44, 0xea, 0x50},
 			out,
 			false,
 			nanoseconds20Ms,
 			BandwidthWideband,
-		); err != nil {
-			t.Fatal(err)
-		}
+		))
 
 		expectedOut := []float32{
 			0.000011, -0.000009, -0.000011, -0.000012, 0.000009,

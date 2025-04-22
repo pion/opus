@@ -5,10 +5,10 @@ package oggreader
 
 import (
 	"bytes"
-	"errors"
 	"io"
-	"reflect"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 // buildOggFile generates a valid oggfile that can
@@ -28,58 +28,38 @@ func buildOggContainer() []byte {
 
 func TestOggReader_ParseValidHeader(t *testing.T) {
 	reader, header, err := NewWith(bytes.NewReader(buildOggContainer()))
-	switch {
-	case err != nil:
-		t.Fatal()
-	case reader == nil:
-		t.Fatal()
-	case header == nil:
-		t.Fatal()
-	case !reflect.DeepEqual(header.ChannelMap, uint8(0)):
-		t.Fatal()
-	case !reflect.DeepEqual(header.Channels, uint8(2)):
-		t.Fatal()
-	case !reflect.DeepEqual(header.OutputGain, uint16(0)):
-		t.Fatal()
-	case !reflect.DeepEqual(header.PreSkip, uint16(0xf00)):
-		t.Fatal()
-	case !reflect.DeepEqual(header.SampleRate, uint32(48000)):
-		t.Fatal()
-	case !reflect.DeepEqual(header.Version, uint8(1)):
-		t.Fatal()
-	}
+	assert.NoError(t, err)
+	assert.NotNil(t, reader)
+
+	assert.Equal(t, &OggHeader{
+		ChannelMap: 0x0,
+		Channels:   0x2,
+		OutputGain: 0x0,
+		PreSkip:    0xf00,
+		SampleRate: 0xbb80,
+		Version:    0x1,
+	},
+		header)
 }
 
 func TestOggReader_ParseNextPage(t *testing.T) {
 	ogg := bytes.NewReader(buildOggContainer())
 	reader, _, err := NewWith(ogg)
-	switch {
-	case err != nil:
-		t.Fatal()
-	case reader == nil:
-		t.Fatal()
-	}
+	assert.NoError(t, err)
+	assert.NotNil(t, reader)
 
 	payload, _, err := reader.ParseNextPage()
-	switch {
-	case err != nil:
-		t.Fatal()
-	case !reflect.DeepEqual([][]byte{{0x98, 0x36, 0xbe, 0x88, 0x9e}}, payload):
-		t.Fatal()
-	}
+	assert.NoError(t, err)
+	assert.Equal(t, [][]byte{{0x98, 0x36, 0xbe, 0x88, 0x9e}}, payload)
 
 	_, _, err = reader.ParseNextPage()
-	if !errors.Is(err, io.EOF) {
-		t.Fatal()
-	}
+	assert.ErrorIs(t, io.EOF, err)
 }
 
 func TestOggReader_ParseErrors(t *testing.T) {
 	t.Run("Assert that Reader isn't nil", func(t *testing.T) {
 		_, _, err := NewWith(nil)
-		if !errors.Is(err, errNilStream) {
-			t.Fatal()
-		}
+		assert.ErrorIs(t, errNilStream, err)
 	})
 
 	t.Run("Invalid ID Page Header Signature", func(t *testing.T) {
@@ -87,9 +67,7 @@ func TestOggReader_ParseErrors(t *testing.T) {
 		ogg[0] = 0
 
 		_, _, err := newWith(bytes.NewReader(ogg), false)
-		if !errors.Is(err, errBadIDPageSignature) {
-			t.Fatal()
-		}
+		assert.ErrorIs(t, errBadIDPageSignature, err)
 	})
 
 	t.Run("Invalid ID Page Header Type", func(t *testing.T) {
@@ -97,9 +75,7 @@ func TestOggReader_ParseErrors(t *testing.T) {
 		ogg[5] = 0
 
 		_, _, err := newWith(bytes.NewReader(ogg), false)
-		if !errors.Is(err, errBadIDPageType) {
-			t.Fatal()
-		}
+		assert.ErrorIs(t, errBadIDPageType, err)
 	})
 
 	t.Run("Invalid ID Page Payload Length", func(t *testing.T) {
@@ -107,9 +83,7 @@ func TestOggReader_ParseErrors(t *testing.T) {
 		ogg[27] = 0
 
 		_, _, err := newWith(bytes.NewReader(ogg), false)
-		if !errors.Is(err, errBadIDPageLength) {
-			t.Fatal()
-		}
+		assert.ErrorIs(t, errBadIDPageLength, err)
 	})
 
 	t.Run("Invalid ID Page Payload Length", func(t *testing.T) {
@@ -117,9 +91,7 @@ func TestOggReader_ParseErrors(t *testing.T) {
 		ogg[35] = 0
 
 		_, _, err := newWith(bytes.NewReader(ogg), false)
-		if !errors.Is(err, errBadIDPagePayloadSignature) {
-			t.Fatal()
-		}
+		assert.ErrorIs(t, errBadIDPagePayloadSignature, err)
 	})
 
 	t.Run("Invalid Page Checksum", func(t *testing.T) {
@@ -127,8 +99,6 @@ func TestOggReader_ParseErrors(t *testing.T) {
 		ogg[22] = 0
 
 		_, _, err := NewWith(bytes.NewReader(ogg))
-		if !errors.Is(err, errChecksumMismatch) {
-			t.Fatal()
-		}
+		assert.ErrorIs(t, errChecksumMismatch, err)
 	})
 }

@@ -5,6 +5,8 @@ package rangecoding
 
 import (
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 // nolint: gochecknoglobals
@@ -132,148 +134,62 @@ func TestDecoder(t *testing.T) { // nolint:cyclop,gocyclo
 	decoder := &Decoder{}
 	decoder.Init([]byte{0x0b, 0xe4, 0xc1, 0x36, 0xec, 0xc5, 0x80})
 
-	if result := decoder.DecodeSymbolLogP(0x1); result != 0 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolLogP(0x1); result != 0 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelFrameTypeInactive); result != 1 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelGainHighbits[0]); result != 0 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelGainLowbits); result != 6 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelGainDelta); result != 0 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelGainDelta); result != 3 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelGainDelta); result != 4 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelLsfS1[1][0]); result != 9 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelLsfS2[10]); result != 5 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelLsfS2[9]); result != 4 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]); result != 4 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelLsfInterpolationOffset); result != 4 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelLcgSeed); result != 2 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelExcRate[0]); result != 0 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
-		t.Fatal("")
-	}
-	if result := decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]); result != 0 {
-		t.Fatal("")
-	}
+	assert.Equal(t, uint32(0), decoder.DecodeSymbolLogP(0x1))
+	assert.Equal(t, uint32(0), decoder.DecodeSymbolLogP(0x1))
+
+	assert.Equal(t, uint32(1), decoder.DecodeSymbolWithICDF(silkModelFrameTypeInactive))
+
+	assert.Equal(t, uint32(0), decoder.DecodeSymbolWithICDF(silkModelGainHighbits[0]))
+
+	assert.Equal(t, uint32(6), decoder.DecodeSymbolWithICDF(silkModelGainLowbits))
+
+	assert.Equal(t, uint32(0), decoder.DecodeSymbolWithICDF(silkModelGainDelta))
+	assert.Equal(t, uint32(3), decoder.DecodeSymbolWithICDF(silkModelGainDelta))
+	assert.Equal(t, uint32(4), decoder.DecodeSymbolWithICDF(silkModelGainDelta))
+
+	assert.Equal(t, uint32(9), decoder.DecodeSymbolWithICDF(silkModelLsfS1[1][0]))
+	assert.Equal(t, uint32(5), decoder.DecodeSymbolWithICDF(silkModelLsfS2[10]))
+	assert.Equal(t, uint32(4), decoder.DecodeSymbolWithICDF(silkModelLsfS2[9]))
+	assert.Equal(t, uint32(4), decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]))
+
+	assert.Equal(t, uint32(4), decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]))
+	assert.Equal(t, uint32(4), decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]))
+	assert.Equal(t, uint32(4), decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]))
+	assert.Equal(t, uint32(4), decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]))
+	assert.Equal(t, uint32(4), decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]))
+	assert.Equal(t, uint32(4), decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]))
+	assert.Equal(t, uint32(4), decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]))
+	assert.Equal(t, uint32(4), decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]))
+	assert.Equal(t, uint32(4), decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]))
+	assert.Equal(t, uint32(4), decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]))
+	assert.Equal(t, uint32(4), decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]))
+	assert.Equal(t, uint32(4), decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]))
+	assert.Equal(t, uint32(4), decoder.DecodeSymbolWithICDF(silkModelLsfS2[8]))
+
+	assert.Equal(t, uint32(4), decoder.DecodeSymbolWithICDF(silkModelLsfInterpolationOffset))
+
+	assert.Equal(t, uint32(2), decoder.DecodeSymbolWithICDF(silkModelLcgSeed))
+
+	assert.Equal(t, uint32(0), decoder.DecodeSymbolWithICDF(silkModelExcRate[0]))
+
+	assert.Equal(t, uint32(0), decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]))
+	assert.Equal(t, uint32(0), decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]))
+	assert.Equal(t, uint32(0), decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]))
+	assert.Equal(t, uint32(0), decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]))
+	assert.Equal(t, uint32(0), decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]))
+	assert.Equal(t, uint32(0), decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]))
+	assert.Equal(t, uint32(0), decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]))
+	assert.Equal(t, uint32(0), decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]))
+	assert.Equal(t, uint32(0), decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]))
+	assert.Equal(t, uint32(0), decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]))
+	assert.Equal(t, uint32(0), decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]))
+	assert.Equal(t, uint32(0), decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]))
+	assert.Equal(t, uint32(0), decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]))
+	assert.Equal(t, uint32(0), decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]))
+	assert.Equal(t, uint32(0), decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]))
+	assert.Equal(t, uint32(0), decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]))
+	assert.Equal(t, uint32(0), decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]))
+	assert.Equal(t, uint32(0), decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]))
+	assert.Equal(t, uint32(0), decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]))
+	assert.Equal(t, uint32(0), decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]))
 }
