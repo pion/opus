@@ -3,34 +3,18 @@
 
 package silk
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
 
 func TestIlog(t *testing.T) {
-	if ilog(-1) != 0 {
-		t.Fatal()
-	}
-
-	if ilog(0) != 0 {
-		t.Fatal()
-	}
-
-	if ilog(1) != 1 {
-		t.Fatal()
-	}
-
-	if ilog(2) != 2 {
-		t.Fatal()
-	}
-
-	if ilog(3) != 2 {
-		t.Fatal()
-	}
-
-	if ilog(4) != 3 {
-		t.Fatal()
-	}
-
-	if ilog(7) != 3 {
-		t.Fatal()
-	}
+	assert.Equal(t, 0, ilog(-1))
+	assert.Equal(t, 0, ilog(0))
+	assert.Equal(t, 1, ilog(1))
+	assert.Equal(t, 2, ilog(2))
+	assert.Equal(t, 2, ilog(3))
+	assert.Equal(t, 3, ilog(4))
+	assert.Equal(t, 3, ilog(7))
 }

@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/pion/opus/pkg/oggreader"
+	"github.com/stretchr/testify/assert"
 )
 
 // nolint: gochecknoglobals
@@ -89,9 +90,7 @@ func TestTinyOgg(t *testing.T) {
 	var out [1920]byte
 
 	ogg, _, err := oggreader.NewWith(bytes.NewReader(tinyogg))
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.NoError(t, err)
 
 	decoder := NewDecoder()
 	for {
@@ -101,9 +100,7 @@ func TestTinyOgg(t *testing.T) {
 		} else if bytes.HasPrefix(segments[0], []byte("OpusTags")) {
 			continue
 		}
-		if err != nil {
-			t.Fatal(err)
-		}
+		assert.NoError(t, err)
 
 		for i := range segments {
 			if _, _, err = decoder.Decode(segments[i], out[:]); err != nil {
