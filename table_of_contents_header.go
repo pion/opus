@@ -122,7 +122,6 @@ func (t tableOfContentsHeader) isStereo() bool {
 	return (t & 0b00000100) != 0
 }
 
-// nolint: deadcode, varcheck
 const (
 	frameCodeOneFrame           frameCode = 0
 	frameCodeTwoEqualFrames     frameCode = 1
@@ -324,7 +323,7 @@ func (b Bandwidth) SampleRate() int {
 //
 //	Figure 5: The frame count byte
 //
-// nolint: deadcode, unused
+// nolint:unused
 func parseFrameCountByte(in byte) (isVBR bool, hasPadding bool, frameCount byte) {
 	isVBR = (in & 0b10000000) == 1
 	hasPadding = (in & 0b01000000) == 1

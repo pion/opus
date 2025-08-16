@@ -1555,7 +1555,7 @@ func (d *Decoder) ltpSynthesis(
 	// then let out_end be set to (j - (s-2)*n) and let LTP_scale_Q14 be set
 	// to 16384.  Otherwise, set out_end to (j - s*n) and set LTP_scale_Q14
 	// to the Q14 LTP scaling value from Section 4.2.7.6.3.
-	var out_end int //nolint: revive, stylecheck
+	var out_end int //nolint:staticcheck
 	if s < 2 || wQ2 == 4 {
 		out_end = -s * n
 	} else {

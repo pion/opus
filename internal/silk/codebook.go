@@ -3,7 +3,7 @@
 
 package silk
 
-// nolint: dupl, gochecknoglobals, deadcode, unused, varcheck
+// nolint: dupl, gochecknoglobals, unused
 var (
 	// In definition of codebook 'a = 0, b = 1...'.
 
