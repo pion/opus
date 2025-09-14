@@ -5,7 +5,7 @@ package silk
 
 import (
 	"math"
-	"sort"
+	"slices"
 
 	"github.com/pion/opus/internal/rangecoding"
 )
@@ -545,9 +545,7 @@ func (d *Decoder) normalizeLSFStabilization(nlsfQ15 []int16, dLPC int, bandwidth
 	// fallback procedure executes once.  First, the values of NLSF_Q15[k]
 	// for 0 <= k < d_LPC are sorted in ascending order.  Then, for each
 	// value of k from 0 to d_LPC-1, NLSF_Q15[k] is set to
-	sort.Slice(nlsfQ15, func(i, j int) bool {
-		return nlsfQ15[i] < nlsfQ15[j]
-	})
+	slices.Sort(nlsfQ15)
 
 	// Then, for each value of k from 0 to d_LPC-1, NLSF_Q15[k] is set to
 	//
