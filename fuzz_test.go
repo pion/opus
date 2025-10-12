@@ -33,7 +33,7 @@ func FuzzDecoder(f *testing.F) {
 			segments, _, err := ogg.ParseNextPage()
 			if errors.Is(err, io.EOF) {
 				break
-			} else if bytes.HasPrefix(segments[0], []byte("OpusTags")) {
+			} else if len(segments) > 0 && bytes.HasPrefix(segments[0], []byte("OpusTags")) {
 				continue
 			}
 			if err != nil {
