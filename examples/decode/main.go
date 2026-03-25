@@ -19,7 +19,7 @@ func main() { // nolint:cyclop
 		panic("Usage: <in-file> <out-file>")
 	}
 
-	file, err := os.Open(os.Args[1])
+	file, err := os.Open(os.Args[1]) // #nosec G703
 	if err != nil {
 		panic(err)
 	}
@@ -30,7 +30,7 @@ func main() { // nolint:cyclop
 	}
 
 	out := make([]byte, 1920)
-	fd, err := os.Create(os.Args[2])
+	fd, err := os.Create(os.Args[2]) // #nosec G703
 	if err != nil {
 		panic(err)
 	}

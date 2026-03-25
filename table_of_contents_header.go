@@ -156,7 +156,7 @@ func (c configurationMode) String() string {
 // https://datatracker.ietf.org/doc/html/rfc6716#section-3.1
 func (c Configuration) mode() configurationMode {
 	switch {
-	case c > 0 && c <= 11:
+	case c <= 11:
 		return configurationModeSilkOnly
 	case c >= 12 && c <= 15:
 		return configurationModeHybrid
@@ -198,7 +198,7 @@ func (f frameDuration) String() string {
 func (f frameDuration) nanoseconds() int {
 	switch f {
 	case frameDuration2500us:
-		return 2500
+		return 2500000
 	case frameDuration5ms:
 		return 5000000
 	case frameDuration10ms:
@@ -226,7 +226,7 @@ func (c Configuration) frameDuration() frameDuration {
 		return frameDuration10ms
 	case 1, 5, 9, 13, 15, 19, 23, 27, 31:
 		return frameDuration20ms
-	case 2, 6:
+	case 2, 6, 10:
 		return frameDuration40ms
 	case 3, 7, 11:
 		return frameDuration60ms
@@ -325,8 +325,8 @@ func (b Bandwidth) SampleRate() int {
 //
 // nolint:unused
 func parseFrameCountByte(in byte) (isVBR bool, hasPadding bool, frameCount byte) {
-	isVBR = (in & 0b10000000) == 1
-	hasPadding = (in & 0b01000000) == 1
+	isVBR = (in & 0b10000000) != 0
+	hasPadding = (in & 0b01000000) != 0
 	frameCount = in & 0b00111111
 
 	return

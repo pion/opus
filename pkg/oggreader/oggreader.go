@@ -217,7 +217,7 @@ func generateChecksumTable() *[256]uint32 {
 			} else {
 				r <<= 1
 			}
-			table[i] = (r & 0xffffffff)
+			table[i] = (r & 0xffffffff) // #nosec G602
 		}
 	}
 

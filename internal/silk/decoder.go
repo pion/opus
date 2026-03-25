@@ -466,7 +466,7 @@ func (d *Decoder) normalizeLSFStabilization(nlsfQ15 []int16, dLPC int, bandwidth
 			previousNLSF := 0
 			currentNLSF := 32768
 			if nlsfIndex != 0 {
-				previousNLSF = int(nlsfQ15[nlsfIndex-1])
+				previousNLSF = int(nlsfQ15[nlsfIndex-1]) // #nosec G602
 			}
 			if nlsfIndex != len(nlsfQ15) {
 				currentNLSF = int(nlsfQ15[nlsfIndex])
@@ -553,7 +553,7 @@ func (d *Decoder) normalizeLSFStabilization(nlsfQ15 []int16, dLPC int, bandwidth
 	for k := 0; k <= dLPC-1; k++ {
 		prevNLSF := int16(0)
 		if k != 0 {
-			prevNLSF = nlsfQ15[k-1]
+			prevNLSF = nlsfQ15[k-1] // #nosec G602
 		}
 
 		nlsfQ15[k] = maxInt16(nlsfQ15[k], prevNLSF+int16(NDeltaMinQ15[k])) //nolint:gosec // G115
