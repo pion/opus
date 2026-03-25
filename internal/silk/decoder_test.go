@@ -60,10 +60,43 @@ func TestDecodeNon20MsDurations(t *testing.T) {
 	}
 }
 
-func TestDecodeStereoTODO(t *testing.T) {
-	d := &Decoder{}
-	err := d.Decode(testSilkFrame(), []float32{}, true, nanoseconds20Ms, BandwidthWideband)
-	assert.ErrorIs(t, errUnsupportedSilkStereo, err)
+func TestDecodeStereo(t *testing.T) {
+	d := NewDecoder()
+	err := d.Decode(testSilkFrame(), make([]float32, 640), true, nanoseconds20Ms, BandwidthWideband)
+	assert.NotErrorIs(t, err, errUnsupportedSilkStereo)
+}
+
+func TestStereoPredictionWeights(t *testing.T) {
+	w0Q13, w1Q13 := stereoPredictionWeights(0, 0, 0, 0, 0)
+	assert.Equal(t, int32(0), w0Q13)
+	assert.Equal(t, int32(-13364), w1Q13)
+}
+
+func TestStereoUnmix(t *testing.T) {
+	d := NewDecoder()
+	mid := []float32{1, 0}
+	side := []float32{0, 0}
+	out := make([]float32, 4)
+
+	d.stereoUnmix(mid, side, out, 0, 0, BandwidthNarrowband)
+
+	assert.Equal(t, []float32{0, 0, 1, 1}, out)
+	assert.Equal(t, [2]float32{1, 0}, d.previousMidValues)
+	assert.Equal(t, float32(0), d.previousSideValue)
+	assert.True(t, d.wasStereo)
+}
+
+func TestDelayMono(t *testing.T) {
+	d := NewDecoder()
+	d.previousMidValues = [2]float32{0.25, 0.5}
+	out := []float32{1, 2, 3}
+
+	d.delayMono(out)
+
+	assert.Equal(t, []float32{0.5, 1, 2}, out)
+	assert.Equal(t, [2]float32{2, 3}, d.previousMidValues)
+	assert.Equal(t, float32(0), d.previousSideValue)
+	assert.False(t, d.wasStereo)
 }
 
 func TestDecodeFrameType(t *testing.T) {
@@ -496,13 +529,20 @@ func TestDecodeLTPScalingParameter(t *testing.T) {
 func TestDecode(t *testing.T) {
 	decoder := NewDecoder()
 	out := make([]float32, 320)
+	previousSample := float32(0)
 
 	compareBuffer := func(t *testing.T, out, expectedOut []float32) {
 		t.Helper()
 
 		for i := range expectedOut {
-			assert.Less(t, out[i]-expectedOut[i], float32(floatEqualityThreshold))
+			expectedSample := previousSample
+			if i > 0 {
+				expectedSample = expectedOut[i-1]
+			}
+			assert.InDelta(t, expectedSample, out[i], floatEqualityThreshold)
 		}
+
+		previousSample = expectedOut[len(expectedOut)-1]
 	}
 
 	t.Run("Unvoiced Single Frame", func(t *testing.T) {

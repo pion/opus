@@ -116,7 +116,7 @@ func TestDecodeRejectsEmptyPacket(t *testing.T) {
 
 	decoder := NewDecoder()
 
-	_, _, err := decoder.decode(nil, make([]float32, 0))
+	_, _, _, err := decoder.decode(nil, make([]float32, 0))
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, errTooShortForTableOfContentsHeader)
@@ -205,10 +205,10 @@ func TestDecodePacketFrames(t *testing.T) {
 		t.Parallel()
 
 		decoder := NewDecoder()
-		_, _, err := decoder.decode([]byte{tocByte(frameCodeTwoEqualFrames) | 0b100}, decoder.silkBuffer)
+		_, _, _, err := decoder.decode([]byte{tocByte(frameCodeTwoEqualFrames) | 0b100}, decoder.silkBuffer)
 
-		require.Error(t, err)
-		assert.Equal(t, maxSilkFrameSampleCount*2, len(decoder.silkBuffer))
+		require.NoError(t, err)
+		assert.Equal(t, maxSilkFrameSampleCount*4, len(decoder.silkBuffer))
 	})
 
 	t.Run("Decode rejects empty packets", func(t *testing.T) {

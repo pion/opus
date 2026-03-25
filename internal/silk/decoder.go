@@ -14,6 +14,7 @@ import (
 // of Silk frames.
 type Decoder struct {
 	rangeDecoder rangecoding.Decoder
+	sideDecoder  *Decoder
 
 	// Have we decoded a frame yet?
 	haveDecoded bool
@@ -38,11 +39,23 @@ type Decoder struct {
 	// n0Q15 are the LSF coefficients decoded for the prior frame
 	// see normalizeLSFInterpolation
 	n0Q15 []int16
+
+	previousStereoWeights [2]int32
+	previousMidValues     [2]float32
+	previousSideValue     float32
+	wasStereo             bool
 }
 
 // NewDecoder creates a new Silk Decoder.
 func NewDecoder() Decoder {
 	return Decoder{
+		sideDecoder:    newChannelDecoder(),
+		finalOutValues: make([]float32, 306),
+	}
+}
+
+func newChannelDecoder() *Decoder {
+	return &Decoder{
 		finalOutValues: make([]float32, 306),
 	}
 }
@@ -60,6 +73,38 @@ func (d *Decoder) decodeHeaderBits(frameCount int) (voiceActivityDetected []bool
 	lowBitRateRedundancy = d.rangeDecoder.DecodeSymbolLogP(1) == 1
 
 	return
+}
+
+var stereoWeightsQ13 = []int32{ // nolint:gochecknoglobals
+	-13732, -10050, -8266, -7526, -6500, -5000, -2950, -820,
+	820, 2950, 5000, 6500, 7526, 8266, 10050, 13732,
+}
+
+func (d *Decoder) decodeStereoPredictionWeights() (w0Q13, w1Q13 int32) {
+	n := d.rangeDecoder.DecodeSymbolWithICDF(icdfStereoWeightsStageOne)
+	i0 := d.rangeDecoder.DecodeSymbolWithICDF(icdfStereoWeightsStageTwo)
+	i1 := d.rangeDecoder.DecodeSymbolWithICDF(icdfStereoWeightsStageThree)
+	i2 := d.rangeDecoder.DecodeSymbolWithICDF(icdfStereoWeightsStageTwo)
+	i3 := d.rangeDecoder.DecodeSymbolWithICDF(icdfStereoWeightsStageThree)
+
+	return stereoPredictionWeights(n, i0, i1, i2, i3)
+}
+
+func stereoPredictionWeights(n, i0, i1, i2, i3 uint32) (w0Q13, w1Q13 int32) {
+	wi0 := i0 + 3*(n/5)
+	wi1 := i2 + 3*(n%5)
+
+	w1Q13 = stereoWeightsQ13[wi1] +
+		(((stereoWeightsQ13[wi1+1]-stereoWeightsQ13[wi1])*6554)>>16)*(2*int32(i3)+1)
+	w0Q13 = stereoWeightsQ13[wi0] +
+		(((stereoWeightsQ13[wi0+1]-stereoWeightsQ13[wi0])*6554)>>16)*(2*int32(i1)+1) -
+		w1Q13
+
+	return w0Q13, w1Q13
+}
+
+func (d *Decoder) decodeMidOnlyFlag() bool {
+	return d.rangeDecoder.DecodeSymbolWithICDF(icdfStereoMidOnly) == 1
 }
 
 // Each SILK frame contains a single "frame type" symbol that jointly
@@ -1996,7 +2041,81 @@ func (d *Decoder) saveFinalOutValues(out []float32) {
 //	  6: Decoded signal (mono or mid-side stereo)
 //	  7: Unmixed signal (mono or left-right stereo)
 //	  8: Resampled signal
-//
+func (d *Decoder) stereoPhaseOneSampleCount(bandwidth Bandwidth) int {
+	switch bandwidth {
+	case BandwidthNarrowband:
+		return 64
+	case BandwidthMediumband:
+		return 96
+	case BandwidthWideband:
+		return 128
+	}
+
+	return 0
+}
+
+func (d *Decoder) delayMono(out []float32) {
+	if len(out) == 0 {
+		return
+	}
+
+	previousSample := d.previousMidValues[1]
+	previousMidValues := d.previousMidValues
+	if len(out) == 1 {
+		previousMidValues[0] = previousMidValues[1]
+		previousMidValues[1] = out[0]
+	} else {
+		previousMidValues[0] = out[len(out)-2]
+		previousMidValues[1] = out[len(out)-1]
+	}
+
+	for i := range out {
+		currentSample := out[i]
+		out[i] = previousSample
+		previousSample = currentSample
+	}
+
+	d.previousMidValues = previousMidValues
+	d.previousSideValue = 0
+	d.wasStereo = false
+}
+
+func (d *Decoder) stereoUnmix(mid, side, out []float32, w0Q13, w1Q13 int32, bandwidth Bandwidth) {
+	phaseOneSampleCount := d.stereoPhaseOneSampleCount(bandwidth)
+	previousW0Q13 := d.previousStereoWeights[0]
+	previousW1Q13 := d.previousStereoWeights[1]
+	midPrev2 := d.previousMidValues[0]
+	midPrev1 := d.previousMidValues[1]
+	sidePrev := d.previousSideValue
+
+	for i := range mid {
+		interpSample := i
+		if interpSample > phaseOneSampleCount {
+			interpSample = phaseOneSampleCount
+		}
+
+		w0 := float32(previousW0Q13)/8192.0 +
+			float32(interpSample)*float32(w0Q13-previousW0Q13)/(8192.0*float32(phaseOneSampleCount))
+		w1 := float32(previousW1Q13)/8192.0 +
+			float32(interpSample)*float32(w1Q13-previousW1Q13)/(8192.0*float32(phaseOneSampleCount))
+		p0 := (midPrev2 + 2*midPrev1 + mid[i]) / 4.0
+
+		out[i*2] = clampNegativeOneToOne((1+w1)*midPrev1 + sidePrev + w0*p0)
+		out[i*2+1] = clampNegativeOneToOne((1-w1)*midPrev1 - sidePrev - w0*p0)
+
+		midPrev2 = midPrev1
+		midPrev1 = mid[i]
+		sidePrev = side[i]
+	}
+
+	d.previousStereoWeights[0] = w0Q13
+	d.previousStereoWeights[1] = w1Q13
+	d.previousMidValues[0] = midPrev2
+	d.previousMidValues[1] = midPrev1
+	d.previousSideValue = sidePrev
+	d.wasStereo = true
+}
+
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.1
 func (d *Decoder) Decode(in []byte, out []float32, isStereo bool, nanoseconds int, bandwidth Bandwidth) error { // nolint:lll
 	silkFrameCount := silkFrameCount(nanoseconds)
@@ -2007,29 +2126,80 @@ func (d *Decoder) Decode(in []byte, out []float32, isStereo bool, nanoseconds in
 
 	subframeCount := subframeCount(silkFrameNanoseconds)
 	subframeSize := d.samplesInSubframe(bandwidth)
+	channelCount := 1
+	if isStereo {
+		channelCount = 2
+	}
 	switch {
 	case silkFrameCount == 0 || subframeCount == 0:
 		return errUnsupportedSilkFrameDuration
-	case isStereo:
-		return errUnsupportedSilkStereo
-	case (subframeSize * subframeCount * silkFrameCount) > len(out):
+	case (subframeSize * subframeCount * silkFrameCount * channelCount) > len(out):
 		return errOutBufferTooSmall
 	}
 
 	d.rangeDecoder.Init(in)
 
-	voiceActivityDetected, lowBitRateRedundancy := d.decodeHeaderBits(silkFrameCount)
-	if lowBitRateRedundancy {
+	midVoiceActivityDetected, midLowBitRateRedundancy := d.decodeHeaderBits(silkFrameCount)
+	if midLowBitRateRedundancy {
 		return errUnsupportedSilkLowBitrateRedundancy
 	}
 
 	frameSampleCount := subframeSize * subframeCount
+	if !isStereo {
+		for i := 0; i < silkFrameCount; i++ {
+			frameOut := out[i*frameSampleCount : (i+1)*frameSampleCount]
+			if err := d.decodeFrame(frameOut, midVoiceActivityDetected[i], silkFrameNanoseconds, bandwidth, i == 0); err != nil {
+				return err
+			}
+		}
+
+		d.delayMono(out[:frameSampleCount*silkFrameCount])
+
+		return nil
+	}
+
+	if d.sideDecoder == nil {
+		d.sideDecoder = newChannelDecoder()
+	}
+	if !d.wasStereo {
+		d.previousStereoWeights = [2]int32{}
+		d.previousSideValue = 0
+		d.sideDecoder = newChannelDecoder()
+	}
+
+	sideVoiceActivityDetected, sideLowBitRateRedundancy := d.decodeHeaderBits(silkFrameCount)
+	if sideLowBitRateRedundancy {
+		return errUnsupportedSilkLowBitrateRedundancy
+	}
+
+	isFirstSideFrame := true
 	for i := 0; i < silkFrameCount; i++ {
-		frameOut := out[i*frameSampleCount : (i+1)*frameSampleCount]
-		if err := d.decodeFrame(frameOut, voiceActivityDetected[i], silkFrameNanoseconds, bandwidth, i == 0); err != nil {
+		w0Q13, w1Q13 := d.decodeStereoPredictionWeights()
+		midOnly := !sideVoiceActivityDetected[i] && d.decodeMidOnlyFlag()
+
+		mid := make([]float32, frameSampleCount)
+		if err := d.decodeFrame(mid, midVoiceActivityDetected[i], silkFrameNanoseconds, bandwidth, i == 0); err != nil {
 			return err
 		}
+
+		side := make([]float32, frameSampleCount)
+		if !midOnly {
+			d.sideDecoder.rangeDecoder = d.rangeDecoder
+			if err := d.sideDecoder.decodeFrame(side, sideVoiceActivityDetected[i], silkFrameNanoseconds, bandwidth, isFirstSideFrame); err != nil {
+				return err
+			}
+			d.rangeDecoder = d.sideDecoder.rangeDecoder
+			isFirstSideFrame = false
+		}
+
+		frameOut := out[i*frameSampleCount*2 : (i+1)*frameSampleCount*2]
+		d.stereoUnmix(mid, side, frameOut, w0Q13, w1Q13, bandwidth)
 	}
 
 	return nil
+}
+
+// Tell returns the number of range-coded bits consumed by the current frame.
+func (d *Decoder) Tell() int {
+	return d.rangeDecoder.Tell()
 }

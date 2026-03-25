@@ -3,6 +3,8 @@
 
 package rangecoding
 
+import "math/bits"
+
 // Decoder implements rfc6716#section-4.1
 // Opus uses an entropy coder based on range coding [RANGE-CODING]
 // [MARTIN79], which is itself a rediscovery of the FIFO arithmetic code
@@ -69,8 +71,9 @@ package rangecoding
 // the current range.  Both val and rng are 32-bit unsigned integer
 // values.
 type Decoder struct {
-	data     []byte
-	bitsRead uint
+	data       []byte
+	bitsRead   uint
+	nbitsTotal int
 
 	rangeSize              uint32 // rng in RFC 6716
 	highAndCodedDifference uint32 // val in RFC 6716
@@ -92,10 +95,18 @@ type Decoder struct {
 func (r *Decoder) Init(data []byte) {
 	r.data = data
 	r.bitsRead = 0
+	r.nbitsTotal = 9
 
 	r.rangeSize = 128
 	r.highAndCodedDifference = 127 - r.getBits(7)
 	r.normalize()
+}
+
+// Tell returns the number of bits decoded so far.
+//
+// https://datatracker.ietf.org/doc/html/rfc6716#section-4.1.2
+func (r *Decoder) Tell() int {
+	return r.nbitsTotal - bits.Len32(r.rangeSize)
 }
 
 // DecodeSymbolWithICDF decodes a single symbol
@@ -199,6 +210,7 @@ const minRangeSize = 1 << 23
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.1.2.1
 func (r *Decoder) normalize() {
 	for r.rangeSize <= minRangeSize {
+		r.nbitsTotal += 8
 		r.rangeSize <<= 8
 		r.highAndCodedDifference = ((r.highAndCodedDifference << 8) + (255 - r.getBits(8))) & 0x7FFFFFFF
 	}
@@ -219,6 +231,7 @@ func (r *Decoder) update(scale, low, high, total uint32) {
 func (r *Decoder) SetInternalValues(data []byte, bitsRead uint, rangeSize uint32, highAndCodedDifference uint32) {
 	r.data = data
 	r.bitsRead = bitsRead
+	r.nbitsTotal = int(bitsRead) + 2
 	r.rangeSize = rangeSize
 	r.highAndCodedDifference = highAndCodedDifference
 }

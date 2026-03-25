@@ -32,6 +32,15 @@ func NewDecoder() Decoder {
 	}
 }
 
+func (b Bandwidth) resampleCount() int {
+	sampleRate := b.SampleRate()
+	if sampleRate == 0 {
+		return 0
+	}
+
+	return BandwidthFullband.SampleRate() / sampleRate
+}
+
 func (c Configuration) silkFrameSampleCount() int {
 	switch c.bandwidth() {
 	case BandwidthNarrowband:
@@ -259,9 +268,9 @@ func parsePacketFrames(in []byte, tocHeader tableOfContentsHeader) ([][]byte, er
 	}
 }
 
-func (d *Decoder) decode(in []byte, out []float32) (bandwidth Bandwidth, isStereo bool, err error) {
+func (d *Decoder) decode(in []byte, out []float32) (bandwidth Bandwidth, isStereo bool, sampleCount int, err error) {
 	if len(in) < 1 {
-		return 0, false, errTooShortForTableOfContentsHeader
+		return 0, false, 0, errTooShortForTableOfContentsHeader
 	}
 
 	tocHeader := tableOfContentsHeader(in[0])
@@ -269,14 +278,17 @@ func (d *Decoder) decode(in []byte, out []float32) (bandwidth Bandwidth, isStere
 
 	encodedFrames, err := parsePacketFrames(in, tocHeader)
 	if err != nil {
-		return 0, false, err
+		return 0, false, 0, err
 	}
 
 	if cfg.mode() != configurationModeSilkOnly {
-		return 0, false, fmt.Errorf("%w: %d", errUnsupportedConfigurationMode, cfg.mode())
+		return 0, false, 0, fmt.Errorf("%w: %d", errUnsupportedConfigurationMode, cfg.mode())
 	}
 
 	frameSampleCount := cfg.silkFrameSampleCount()
+	if tocHeader.isStereo() {
+		frameSampleCount *= 2
+	}
 	requiredSamples := frameSampleCount * len(encodedFrames)
 	if cap(out) < requiredSamples {
 		d.silkBuffer = make([]float32, requiredSamples)
@@ -297,33 +309,51 @@ func (d *Decoder) decode(in []byte, out []float32) (bandwidth Bandwidth, isStere
 			silk.Bandwidth(cfg.bandwidth()),
 		)
 		if err != nil {
-			return 0, false, err
+			return 0, false, 0, err
+		}
+
+		// RFC 6716 allows SILK-only frames to carry a trailing redundant
+		// low-band CELT frame when at least 17 bits remain after SILK decode.
+		if d.silkDecoder.Tell()+17 <= len(encodedFrame)*8 {
+			return 0, false, 0, errUnsupportedSilkRedundancy
 		}
 	}
 
-	return cfg.bandwidth(), tocHeader.isStereo(), nil
+	sampleCount = requiredSamples
+
+	return cfg.bandwidth(), tocHeader.isStereo(), sampleCount, nil
 }
 
 // Decode decodes the Opus bitstream into S16LE PCM.
 func (d *Decoder) Decode(in, out []byte) (bandwidth Bandwidth, isStereo bool, err error) {
-	bandwidth, isStereo, err = d.decode(in, d.silkBuffer)
+	var sampleCount int
+	bandwidth, isStereo, sampleCount, err = d.decode(in, d.silkBuffer)
 	if err != nil {
 		return
 	}
 
-	err = bitdepth.ConvertFloat32LittleEndianToSigned16LittleEndian(d.silkBuffer, out, 3)
+	channelCount := 1
+	if isStereo {
+		channelCount = 2
+	}
+	err = bitdepth.ConvertFloat32LittleEndianToSigned16LittleEndian(d.silkBuffer[:sampleCount], out, channelCount, bandwidth.resampleCount())
 
 	return
 }
 
 // DecodeFloat32 decodes the Opus bitstream into F32LE PCM.
 func (d *Decoder) DecodeFloat32(in []byte, out []float32) (bandwidth Bandwidth, isStereo bool, err error) {
-	bandwidth, isStereo, err = d.decode(in, d.silkBuffer)
+	var sampleCount int
+	bandwidth, isStereo, sampleCount, err = d.decode(in, d.silkBuffer)
 	if err != nil {
 		return
 	}
 
-	resample.Up(d.silkBuffer, out, 3)
+	channelCount := 1
+	if isStereo {
+		channelCount = 2
+	}
+	err = resample.Up(d.silkBuffer[:sampleCount], out, channelCount, bandwidth.resampleCount())
 
 	return
 }

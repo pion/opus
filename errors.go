@@ -12,5 +12,7 @@ var (
 
 	errUnsupportedConfigurationMode = errors.New("unsupported configuration mode")
 
+	errUnsupportedSilkRedundancy = errors.New("unsupported silk redundancy")
+
 	errMalformedPacket = errors.New("malformed packet")
 )

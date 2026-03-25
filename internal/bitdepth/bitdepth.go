@@ -9,24 +9,39 @@ import (
 	"math"
 )
 
-var errOutBufferTooSmall = errors.New("out isn't large enough")
+var (
+	errInvalidChannelCount  = errors.New("channel count must be positive")
+	errInvalidResampleCount = errors.New("resample count must be positive")
+	errOutBufferTooSmall    = errors.New("out isn't large enough")
+)
 
 // ConvertFloat32LittleEndianToSigned16LittleEndian converts a f32le to s16le.
-func ConvertFloat32LittleEndianToSigned16LittleEndian(in []float32, out []byte, resampleCount int) error {
+func ConvertFloat32LittleEndianToSigned16LittleEndian(in []float32, out []byte, channelCount, resampleCount int) error {
+	if channelCount <= 0 {
+		return errInvalidChannelCount
+	}
+	if resampleCount <= 0 {
+		return errInvalidResampleCount
+	}
+	if len(in)%channelCount != 0 {
+		return errOutBufferTooSmall
+	}
 	if len(in)*resampleCount*2 > len(out) {
 		return errOutBufferTooSmall
 	}
 
 	currIndex := 0
-	for i := range in {
-		res := int16(math.Floor(float64(in[i] * 32767)))
-
+	for i := 0; i < len(in); i += channelCount {
 		for j := resampleCount; j > 0; j-- {
-			out[currIndex] = byte(res & 0b11111111)
-			currIndex++
+			for k := 0; k < channelCount; k++ {
+				res := int16(math.Floor(float64(in[i+k] * 32767)))
 
-			out[currIndex] = byte(uint16(res) >> 8) // #nosec G115
-			currIndex++
+				out[currIndex] = byte(res & 0b11111111)
+				currIndex++
+
+				out[currIndex] = byte(uint16(res) >> 8) // #nosec G115
+				currIndex++
+			}
 		}
 	}
 

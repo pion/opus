@@ -200,3 +200,9 @@ func TestDecoderInitEmptyInput(t *testing.T) {
 		decoder.Init(nil)
 	})
 }
+
+func TestDecoderTell(t *testing.T) {
+	decoder := &Decoder{}
+	decoder.Init([]byte{0x0b, 0xe4, 0xc1, 0x36, 0xec, 0xc5, 0x80})
+	assert.Equal(t, 1, decoder.Tell())
+}
