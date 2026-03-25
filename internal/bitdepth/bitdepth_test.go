@@ -16,3 +16,7 @@ func TestConvertFloat32LittleEndianToSigned16LittleEndian(t *testing.T) {
 	assert.NoError(t, ConvertFloat32LittleEndianToSigned16LittleEndian(in, out, 1))
 	assert.Equal(t, []byte{0x66, 0x26, 0x00, 0x00, 0x65, 0x46, 0x28, 0x5c, 0x99, 0xf9}, out)
 }
+
+func TestConvertFloat32LittleEndianToSigned16LittleEndianOutTooSmall(t *testing.T) {
+	assert.ErrorIs(t, errOutBufferTooSmall, ConvertFloat32LittleEndianToSigned16LittleEndian([]float32{0}, nil, 1))
+}

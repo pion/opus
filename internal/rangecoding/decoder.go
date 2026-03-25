@@ -155,7 +155,7 @@ func (r *Decoder) getBit() uint32 {
 	index := r.bitsRead / 8
 	offset := r.bitsRead % 8
 
-	if index > uint(len(r.data)-1) { //nolint:gosec // G115
+	if index >= uint(len(r.data)) {
 		return 0
 	}
 

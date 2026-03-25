@@ -109,3 +109,23 @@ func TestTinyOgg(t *testing.T) {
 		}
 	}
 }
+
+func TestDecodeSilkFrameDurations(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		configuration Configuration
+		sampleCount   int
+	}{
+		{name: "10ms", configuration: 8, sampleCount: 160},
+		{name: "20ms", configuration: 9, sampleCount: 320},
+		{name: "40ms", configuration: 10, sampleCount: 640},
+		{name: "60ms", configuration: 11, sampleCount: 960},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			decoder := NewDecoder()
+			_, _, err := decoder.decode([]byte{byte(test.configuration<<3) | byte(frameCodeOneFrame)}, nil)
+			assert.NoError(t, err)
+			assert.Len(t, decoder.silkBuffer, test.sampleCount)
+		})
+	}
+}

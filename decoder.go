@@ -32,6 +32,19 @@ func NewDecoder() Decoder {
 	}
 }
 
+func (c Configuration) silkFrameSampleCount() int {
+	switch c.bandwidth() {
+	case BandwidthNarrowband:
+		return 8 * c.frameDuration().nanoseconds() / 1000000
+	case BandwidthMediumband:
+		return 12 * c.frameDuration().nanoseconds() / 1000000
+	case BandwidthWideband:
+		return 16 * c.frameDuration().nanoseconds() / 1000000
+	}
+
+	return 0
+}
+
 func parseFrameLength(in []byte) (frameLength int, bytesRead int, err error) {
 	if len(in) < 1 {
 		return 0, 0, fmt.Errorf("%w: missing frame length", errMalformedPacket)
@@ -263,7 +276,8 @@ func (d *Decoder) decode(in []byte, out []float32) (bandwidth Bandwidth, isStere
 		return 0, false, fmt.Errorf("%w: %d", errUnsupportedConfigurationMode, cfg.mode())
 	}
 
-	requiredSamples := maxSilkFrameSampleCount * len(encodedFrames)
+	frameSampleCount := cfg.silkFrameSampleCount()
+	requiredSamples := frameSampleCount * len(encodedFrames)
 	if cap(out) < requiredSamples {
 		d.silkBuffer = make([]float32, requiredSamples)
 		out = d.silkBuffer
@@ -274,7 +288,7 @@ func (d *Decoder) decode(in []byte, out []float32) (bandwidth Bandwidth, isStere
 	}
 
 	for i, encodedFrame := range encodedFrames {
-		frameOut := out[i*maxSilkFrameSampleCount : (i+1)*maxSilkFrameSampleCount]
+		frameOut := out[i*frameSampleCount : (i+1)*frameSampleCount]
 		err := d.silkDecoder.Decode(
 			encodedFrame,
 			frameOut,
