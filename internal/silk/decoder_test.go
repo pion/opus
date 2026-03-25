@@ -76,7 +76,10 @@ func TestDecodeFrameType(t *testing.T) {
 
 func TestDecodeSubframeQuantizations(t *testing.T) {
 	d := &Decoder{rangeDecoder: createRangeDecoder(testSilkFrame(), 31, 482344960, 437100388)}
-	assert.Equal(t, []float32{210944, 112640, 96256, 96256}, d.decodeSubframeQuantizations(frameSignalTypeInactive, 4, true))
+	assert.Equal(t,
+		[]float32{210944, 112640, 96256, 96256},
+		d.decodeSubframeQuantizations(frameSignalTypeInactive, 4, true),
+	)
 }
 
 func TestDecodeBufferSize(t *testing.T) {
@@ -435,7 +438,7 @@ func TestDecodePitchLags(t *testing.T) {
 	}
 	d := &Decoder{rangeDecoder: createRangeDecoder(silkFrame, 73, 30770362, 1380489)}
 
-	lagMax, pitchLags, _ := d.decodePitchLags(frameSignalTypeVoiced, BandwidthWideband, nanoseconds20Ms, true)
+	lagMax, pitchLags := d.decodePitchLags(frameSignalTypeVoiced, BandwidthWideband, nanoseconds20Ms, true)
 	assert.Equal(t, uint32(288), lagMax)
 	assert.Equal(t, []int{206, 206, 206, 206}, pitchLags)
 }
@@ -447,11 +450,37 @@ func TestDecodePitchLagsRelative(t *testing.T) {
 		previousLag:           100,
 	}
 
-	lagMax, pitchLags, err := d.decodePitchLags(frameSignalTypeVoiced, BandwidthWideband, nanoseconds10Ms, false)
-	assert.NoError(t, err)
+	lagMax, pitchLags := d.decodePitchLags(frameSignalTypeVoiced, BandwidthWideband, nanoseconds10Ms, false)
 	assert.Equal(t, uint32(288), lagMax)
 	assert.Len(t, pitchLags, 2)
 	assert.Equal(t, 92, d.previousLag)
+}
+
+func TestDecodePitchLagsBandwidths(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		bandwidth   Bandwidth
+		nanoseconds int
+		lagMax      uint32
+		previousLag int
+	}{
+		{
+			name: "Narrowband 10ms", bandwidth: BandwidthNarrowband,
+			nanoseconds: nanoseconds10Ms, lagMax: 144, previousLag: 140,
+		},
+		{
+			name: "Mediumband 20ms", bandwidth: BandwidthMediumband,
+			nanoseconds: nanoseconds20Ms, lagMax: 216, previousLag: 210,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			d := &Decoder{rangeDecoder: createRangeDecoder(nil, 0, 256, 0)}
+			lagMax, pitchLags := d.decodePitchLags(frameSignalTypeVoiced, test.bandwidth, test.nanoseconds, true)
+			assert.Equal(t, test.lagMax, lagMax)
+			assert.Len(t, pitchLags, subframeCount(test.nanoseconds))
+			assert.Equal(t, test.previousLag, d.previousLag)
+		})
+	}
 }
 
 func TestDecodeLTPFilterCoefficients(t *testing.T) {

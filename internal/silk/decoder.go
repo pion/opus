@@ -1284,21 +1284,67 @@ func (d *Decoder) limitLPCFilterPredictionGain(a32Q17 []int32) (aQ12 []float32) 
 	return
 }
 
+func pitchLagCodebooks(bandwidth Bandwidth) (lowPartICDF []uint, lagScale, lagMin, lagMax uint32) {
+	switch bandwidth {
+	case BandwidthNarrowband:
+		return icdfPrimaryPitchLagLowPartNarrowband, 4, 16, 144
+	case BandwidthMediumband:
+		return icdfPrimaryPitchLagLowPartMediumband, 6, 24, 216
+	case BandwidthWideband:
+		return icdfPrimaryPitchLagLowPartWideband, 8, 32, 288
+	}
+
+	return nil, 0, 0, 0
+}
+
+func (d *Decoder) decodePrimaryPitchLag(lagAbsolute bool, lowPartICDF []uint, lagScale, lagMin uint32) int {
+	if lagAbsolute {
+		lagHigh := d.rangeDecoder.DecodeSymbolWithICDF(icdfPrimaryPitchLagHighPart)
+		lagLow := d.rangeDecoder.DecodeSymbolWithICDF(lowPartICDF)
+
+		return int(lagHigh*lagScale + lagLow + lagMin)
+	}
+
+	deltaLagIndex := d.rangeDecoder.DecodeSymbolWithICDF(icdfPrimaryPitchLagChange)
+	if deltaLagIndex == 0 {
+		lagHigh := d.rangeDecoder.DecodeSymbolWithICDF(icdfPrimaryPitchLagHighPart)
+		lagLow := d.rangeDecoder.DecodeSymbolWithICDF(lowPartICDF)
+
+		return int(lagHigh*lagScale + lagLow + lagMin)
+	}
+
+	return d.previousLag + int(deltaLagIndex) - 9
+}
+
+func pitchContourCodebooks(bandwidth Bandwidth, nanoseconds int) (lagCb [][]int8, lagIcdf []uint) {
+	switch bandwidth {
+	case BandwidthNarrowband:
+		if nanoseconds == nanoseconds10Ms {
+			return codebookSubframePitchCounterNarrowband10Ms, icdfSubframePitchContourNarrowband10Ms
+		}
+
+		return codebookSubframePitchCounterNarrowband20Ms, icdfSubframePitchContourNarrowband20Ms
+	case BandwidthMediumband, BandwidthWideband:
+		if nanoseconds == nanoseconds10Ms {
+			return codebookSubframePitchCounterMediumbandOrWideband10Ms, icdfSubframePitchContourMediumbandOrWideband10Ms
+		}
+
+		return codebookSubframePitchCounterMediumbandOrWideband20Ms, icdfSubframePitchContourMediumbandOrWideband20Ms
+	}
+
+	return nil, nil
+}
+
 // https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.1
 func (d *Decoder) decodePitchLags(
 	signalType frameSignalType,
 	bandwidth Bandwidth,
 	nanoseconds int,
 	isFirstSilkFrameInOpusFrame bool,
-) (lagMax uint32, pitchLags []int, err error) {
+) (lagMax uint32, pitchLags []int) {
 	if signalType != frameSignalTypeVoiced {
-		return 0, nil, nil
+		return 0, nil
 	}
-
-	var (
-		lag    int
-		lagMin uint32
-	)
 
 	// The primary lag index is coded either relative to the primary lag of
 	// the prior frame in the same channel or as an absolute index.
@@ -1314,70 +1360,36 @@ func (d *Decoder) decodePitchLags(
 	//    Section 4.2.7.3).
 
 	lagAbsolute := isFirstSilkFrameInOpusFrame || !d.isPreviousFrameVoiced
-	var (
-		lowPartICDF []uint
-		lagScale    uint32
-	)
-	switch bandwidth {
-	case BandwidthNarrowband:
-		lowPartICDF = icdfPrimaryPitchLagLowPartNarrowband
-		lagScale = 4
-		lagMin = 16
-		lagMax = 144
-	case BandwidthMediumband:
-		lowPartICDF = icdfPrimaryPitchLagLowPartMediumband
-		lagScale = 6
-		lagMin = 24
-		lagMax = 216
-	case BandwidthWideband:
-		lowPartICDF = icdfPrimaryPitchLagLowPartWideband
-		lagScale = 8
-		lagMin = 32
-		lagMax = 288
-	}
+	lowPartICDF, lagScale, lagMin, lagMax := pitchLagCodebooks(bandwidth)
 
-	if lagAbsolute {
-		// With absolute coding, the primary pitch lag may range from 2 ms
-		// (inclusive) up to 18 ms (exclusive), corresponding to pitches from
-		// 500 Hz down to 55.6 Hz, respectively.  It is comprised of a high part
-		// and a low part, where the decoder first reads the high part using the
-		// 32-entry codebook in Table 29 and then the low part using the
-		// codebook corresponding to the current audio bandwidth from Table 30.
-		//
-		//  +------------+------------------------+-------+----------+----------+
-		//  | Audio      | PDF                    | Scale | Minimum  | Maximum  |
-		//  | Bandwidth  |                        |       | Lag      | Lag      |
-		//  +------------+------------------------+-------+----------+----------+
-		//  | NB         | {64, 64, 64, 64}/256   | 4     | 16       | 144      |
-		//  |            |                        |       |          |          |
-		//  | MB         | {43, 42, 43, 43, 42,   | 6     | 24       | 216      |
-		//  |            | 43}/256                |       |          |          |
-		//  |            |                        |       |          |          |
-		//  | WB         | {32, 32, 32, 32, 32,   | 8     | 32       | 288      |
-		//  |            | 32, 32, 32}/256        |       |          |          |
-		//  +------------+------------------------+-------+----------+----------+
+	// With absolute coding, the primary pitch lag may range from 2 ms
+	// (inclusive) up to 18 ms (exclusive), corresponding to pitches from
+	// 500 Hz down to 55.6 Hz, respectively.  It is comprised of a high part
+	// and a low part, where the decoder first reads the high part using the
+	// 32-entry codebook in Table 29 and then the low part using the
+	// codebook corresponding to the current audio bandwidth from Table 30.
+	//
+	//  +------------+------------------------+-------+----------+----------+
+	//  | Audio      | PDF                    | Scale | Minimum  | Maximum  |
+	//  | Bandwidth  |                        |       | Lag      | Lag      |
+	//  +------------+------------------------+-------+----------+----------+
+	//  | NB         | {64, 64, 64, 64}/256   | 4     | 16       | 144      |
+	//  |            |                        |       |          |          |
+	//  | MB         | {43, 42, 43, 43, 42,   | 6     | 24       | 216      |
+	//  |            | 43}/256                |       |          |          |
+	//  |            |                        |       |          |          |
+	//  | WB         | {32, 32, 32, 32, 32,   | 8     | 32       | 288      |
+	//  |            | 32, 32, 32}/256        |       |          |          |
+	//  +------------+------------------------+-------+----------+----------+
 
-		lagHigh := d.rangeDecoder.DecodeSymbolWithICDF(icdfPrimaryPitchLagHighPart)
-		lagLow := d.rangeDecoder.DecodeSymbolWithICDF(lowPartICDF)
-
-		// The final primary pitch lag is then
-		//
-		//              lag = lag_high*lag_scale + lag_low + lag_min
-		//
-		// where lag_high is the high part, lag_low is the low part, and
-		// lag_scale and lag_min are the values from the "Scale" and "Minimum
-		// Lag" columns of Table 30, respectively.
-		lag = int(lagHigh*lagScale + lagLow + lagMin)
-	} else {
-		deltaLagIndex := d.rangeDecoder.DecodeSymbolWithICDF(icdfPrimaryPitchLagChange)
-		if deltaLagIndex == 0 {
-			lagHigh := d.rangeDecoder.DecodeSymbolWithICDF(icdfPrimaryPitchLagHighPart)
-			lagLow := d.rangeDecoder.DecodeSymbolWithICDF(lowPartICDF)
-			lag = int(lagHigh*lagScale + lagLow + lagMin)
-		} else {
-			lag = d.previousLag + int(deltaLagIndex) - 9
-		}
-	}
+	// The final primary pitch lag is then
+	//
+	//              lag = lag_high*lag_scale + lag_low + lag_min
+	//
+	// where lag_high is the high part, lag_low is the low part, and
+	// lag_scale and lag_min are the values from the "Scale" and "Minimum
+	// Lag" columns of Table 30, respectively.
+	lag := d.decodePrimaryPitchLag(lagAbsolute, lowPartICDF, lagScale, lagMin)
 	d.previousLag = lag
 
 	// After the primary pitch lag, a "pitch contour", stored as a single
@@ -1416,30 +1428,7 @@ func (d *Decoder) decodePitchLags(
 	// the codebook from the appropriate table given above for the k'th
 	// subframe.
 
-	var (
-		lagCb   [][]int8
-		lagIcdf []uint
-	)
-
-	switch bandwidth {
-	case BandwidthNarrowband:
-		if nanoseconds == nanoseconds10Ms {
-			lagCb = codebookSubframePitchCounterNarrowband10Ms
-			lagIcdf = icdfSubframePitchContourNarrowband10Ms
-		} else {
-			lagCb = codebookSubframePitchCounterNarrowband20Ms
-			lagIcdf = icdfSubframePitchContourNarrowband20Ms
-		}
-	case BandwidthMediumband, BandwidthWideband:
-		if nanoseconds == nanoseconds10Ms {
-			lagCb = codebookSubframePitchCounterMediumbandOrWideband10Ms
-			lagIcdf = icdfSubframePitchContourMediumbandOrWideband10Ms
-		} else {
-			lagCb = codebookSubframePitchCounterMediumbandOrWideband20Ms
-			lagIcdf = icdfSubframePitchContourMediumbandOrWideband20Ms
-		}
-	}
-
+	lagCb, lagIcdf := pitchContourCodebooks(bandwidth, nanoseconds)
 	contourIndex := d.rangeDecoder.DecodeSymbolWithICDF(lagIcdf)
 
 	// Then the final pitch lag for that subframe is
@@ -1455,7 +1444,7 @@ func (d *Decoder) decodePitchLags(
 		)
 	}
 
-	return lagMax, pitchLags, nil
+	return lagMax, pitchLags
 }
 
 // This allows the encoder to trade off the prediction gain between
@@ -1898,10 +1887,7 @@ func (d *Decoder) decodeFrame(
 	aQ12 = d.generateAQ12(nlsfQ15, bandwidth, aQ12)
 
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.1
-	lagMax, pitchLags, err := d.decodePitchLags(signalType, bandwidth, nanoseconds, isFirstSilkFrameInOpusFrame)
-	if err != nil {
-		return err
-	}
+	lagMax, pitchLags := d.decodePitchLags(signalType, bandwidth, nanoseconds, isFirstSilkFrameInOpusFrame)
 
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.2
 	bQ7 := d.decodeLTPFilterCoefficients(signalType, subframeCount)
