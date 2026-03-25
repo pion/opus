@@ -11,4 +11,6 @@ var (
 	errUnsupportedFrameCode = errors.New("unsupported frame code")
 
 	errUnsupportedConfigurationMode = errors.New("unsupported configuration mode")
+
+	errMalformedPacket = errors.New("malformed packet")
 )

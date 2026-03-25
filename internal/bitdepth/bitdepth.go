@@ -18,7 +18,7 @@ func ConvertFloat32LittleEndianToSigned16LittleEndian(in []float32, out []byte, 
 			out[currIndex] = byte(res & 0b11111111)
 			currIndex++
 
-			out[currIndex] = (byte(res >> 8))
+			out[currIndex] = byte(uint16(res) >> 8) // #nosec G115
 			currIndex++
 		}
 	}
