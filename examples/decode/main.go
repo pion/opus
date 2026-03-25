@@ -6,6 +6,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"io"
 	"os"
@@ -29,13 +30,16 @@ func main() { // nolint:cyclop
 		panic(err)
 	}
 
-	out := make([]byte, 1920)
+	out := make([]int16, 960)
 	fd, err := os.Create(os.Args[2]) // #nosec G703
 	if err != nil {
 		panic(err)
 	}
 
-	decoder := opus.NewDecoder()
+	decoder, err := opus.NewDecoder(48000, 1)
+	if err != nil {
+		panic(err)
+	}
 	for {
 		segments, _, err := ogg.ParseNextPage()
 
@@ -50,11 +54,12 @@ func main() { // nolint:cyclop
 		}
 
 		for i := range segments {
-			if _, _, err = decoder.Decode(segments[i], out); err != nil {
+			n, err := decoder.Decode(segments[i], out)
+			if err != nil {
 				panic(err)
 			}
 
-			if _, err := fd.Write(out); err != nil {
+			if err := binary.Write(fd, binary.LittleEndian, out[:n]); err != nil {
 				panic(err)
 			}
 		}

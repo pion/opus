@@ -21,14 +21,17 @@ func FuzzDecoder(f *testing.F) {
 	f.Add(tinyogg)
 
 	f.Fuzz(func(_ *testing.T, data []byte) {
-		var out [1920]byte
+		var out [960]int16
 
 		ogg, _, err := oggreader.NewWith(bytes.NewReader(data))
 		if err != nil {
 			return
 		}
 
-		decoder := NewDecoder()
+		decoder, err := NewDecoder(48000, 1)
+		if err != nil {
+			return
+		}
 		for {
 			segments, _, err := ogg.ParseNextPage()
 			if errors.Is(err, io.EOF) {
@@ -41,7 +44,7 @@ func FuzzDecoder(f *testing.F) {
 			}
 
 			for i := range segments {
-				if _, _, err = decoder.Decode(segments[i], out[:]); err != nil {
+				if _, err = decoder.Decode(segments[i], out[:]); err != nil {
 					return
 				}
 			}

@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/binary"
 	"io"
 	"os"
 	"time"
@@ -17,16 +18,18 @@ import (
 
 type opusReader struct {
 	oggFile     *oggreader.OggReader
-	opusDecoder opus.Decoder
+	opusDecoder *opus.Decoder
 
-	decodeBuffer       []byte
+	decodeBuffer       []int16
+	decodeBytes        []byte
 	decodeBufferOffset int
+	decodeBufferLength int
 
 	segmentBuffer [][]byte
 }
 
 func (o *opusReader) Read(p []byte) (n int, err error) {
-	if o.decodeBufferOffset == 0 || o.decodeBufferOffset >= len(o.decodeBuffer) {
+	if o.decodeBufferOffset == 0 || o.decodeBufferOffset >= o.decodeBufferLength {
 		if len(o.segmentBuffer) == 0 {
 			for {
 				o.segmentBuffer, _, err = o.oggFile.ParseNextPage()
@@ -44,12 +47,17 @@ func (o *opusReader) Read(p []byte) (n int, err error) {
 		segment, o.segmentBuffer = o.segmentBuffer[0], o.segmentBuffer[1:]
 
 		o.decodeBufferOffset = 0
-		if _, _, err = o.opusDecoder.Decode(segment, o.decodeBuffer); err != nil {
-			panic(err)
+		sampleCount, decodeErr := o.opusDecoder.Decode(segment, o.decodeBuffer)
+		if decodeErr != nil {
+			panic(decodeErr)
+		}
+		o.decodeBufferLength = sampleCount * 2
+		for i := 0; i < sampleCount; i++ {
+			binary.LittleEndian.PutUint16(o.decodeBytes[i*2:], uint16(o.decodeBuffer[i]))
 		}
 	}
 
-	n = copy(p, o.decodeBuffer[o.decodeBufferOffset:])
+	n = copy(p, o.decodeBytes[o.decodeBufferOffset:o.decodeBufferLength])
 	o.decodeBufferOffset += n
 	return n, nil
 }
@@ -69,10 +77,16 @@ func main() {
 		panic(err)
 	}
 
+	opusDecoder, err := opus.NewDecoder(48000, 1)
+	if err != nil {
+		panic(err)
+	}
+
 	r := &opusReader{
-		decodeBuffer: make([]byte, 1920),
+		decodeBuffer: make([]int16, 960),
+		decodeBytes:  make([]byte, 1920),
 		oggFile:      oggFile,
-		opusDecoder:  opus.NewDecoder(),
+		opusDecoder:  opusDecoder,
 	}
 
 	format := beep.Format{

@@ -114,12 +114,14 @@ func TestParsePacketFramesRFC6716MalformedRules(t *testing.T) {
 func TestDecodeRejectsEmptyPacket(t *testing.T) {
 	t.Parallel()
 
-	decoder := NewDecoder()
+	decoder, err := NewDecoder(48000, 1)
+	require.NoError(t, err)
 
-	_, _, _, err := decoder.decode(nil, make([]float32, 0))
+	_, _, sampleCount, err := decoder.decode(nil, make([]float32, 0), false)
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, errTooShortForTableOfContentsHeader)
+	assert.Zero(t, sampleCount)
 }
 
 func TestParsePacketFramesValidEdgeCases(t *testing.T) {
@@ -204,8 +206,9 @@ func TestDecodePacketFrames(t *testing.T) {
 	t.Run("resizes silk buffer for multiple frames before decode", func(t *testing.T) {
 		t.Parallel()
 
-		decoder := NewDecoder()
-		_, _, _, err := decoder.decode([]byte{tocByte(frameCodeTwoEqualFrames) | 0b100}, decoder.silkBuffer)
+		decoder, err := NewDecoder(48000, 1)
+		require.NoError(t, err)
+		_, _, _, err = decoder.decode([]byte{tocByte(frameCodeTwoEqualFrames) | 0b100}, decoder.silkBuffer, false)
 
 		require.NoError(t, err)
 		assert.Equal(t, maxSilkFrameSampleCount*4, len(decoder.silkBuffer))
@@ -214,8 +217,9 @@ func TestDecodePacketFrames(t *testing.T) {
 	t.Run("Decode rejects empty packets", func(t *testing.T) {
 		t.Parallel()
 
-		decoder := NewDecoder()
-		_, _, err := decoder.Decode(nil, make([]byte, 0))
+		decoder, err := NewDecoder(48000, 1)
+		require.NoError(t, err)
+		_, err = decoder.Decode(nil, make([]int16, 0))
 
 		require.Error(t, err)
 		assert.ErrorIs(t, err, errTooShortForTableOfContentsHeader)
@@ -227,7 +231,8 @@ func TestDecodePacketFrames(t *testing.T) {
 		ogg, _, err := oggreader.NewWith(bytes.NewReader(tinyogg))
 		require.NoError(t, err)
 
-		decoder := NewDecoder()
+		decoder, err := NewDecoder(48000, 1)
+		require.NoError(t, err)
 		var out [960]float32
 		for {
 			segments, _, err := ogg.ParseNextPage()
@@ -239,7 +244,7 @@ func TestDecodePacketFrames(t *testing.T) {
 				continue
 			}
 
-			_, _, err = decoder.DecodeFloat32(segments[0], out[:])
+			_, err = decoder.DecodeFloat32(segments[0], out[:])
 			require.NoError(t, err)
 
 			return

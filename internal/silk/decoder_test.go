@@ -60,6 +60,43 @@ func TestDecodeNon20MsDurations(t *testing.T) {
 	}
 }
 
+func TestDecodeFECNoLowBitrateRedundancy(t *testing.T) {
+	d := NewDecoder()
+	err := d.DecodeFEC(nil, make([]float32, 320), false, nanoseconds20Ms, BandwidthWideband)
+	assert.ErrorIs(t, err, ErrNoLowBitrateRedundancy)
+}
+
+func TestClone(t *testing.T) {
+	d := NewDecoder()
+	d.previousFrameLPCValues = []float32{1, 2}
+	d.finalOutValues[0] = 3
+	d.n0Q15 = []int16{4, 5}
+	d.sideDecoder.previousFrameLPCValues = []float32{6}
+
+	clone := d.clone()
+	d.previousFrameLPCValues[0] = 10
+	d.finalOutValues[0] = 11
+	d.n0Q15[0] = 12
+	d.sideDecoder.previousFrameLPCValues[0] = 13
+
+	assert.Equal(t, []float32{1, 2}, clone.previousFrameLPCValues)
+	assert.Equal(t, float32(3), clone.finalOutValues[0])
+	assert.Equal(t, []int16{4, 5}, clone.n0Q15)
+	assert.Equal(t, []float32{6}, clone.sideDecoder.previousFrameLPCValues)
+}
+
+func TestDecodeLowBitRateRedundancyFlags(t *testing.T) {
+	d := NewDecoder()
+	assert.Equal(t, []bool{true}, d.decodeLowBitRateRedundancyFlags(1, true))
+	assert.Equal(t, []bool{false, false}, d.decodeLowBitRateRedundancyFlags(2, false))
+}
+
+func TestSkipLowBitRateRedundancy(t *testing.T) {
+	d := NewDecoder()
+	err := d.skipLowBitRateRedundancy([]bool{false}, nil, false, 320, nanoseconds20Ms, BandwidthWideband)
+	assert.NoError(t, err)
+}
+
 func TestDecodeStereo(t *testing.T) {
 	d := NewDecoder()
 	err := d.Decode(testSilkFrame(), make([]float32, 640), true, nanoseconds20Ms, BandwidthWideband)
@@ -86,6 +123,11 @@ func TestStereoUnmix(t *testing.T) {
 	assert.True(t, d.wasStereo)
 }
 
+func TestTell(t *testing.T) {
+	d := &Decoder{rangeDecoder: createRangeDecoder(testSilkFrame(), 31, 482344960, 437100388)}
+	assert.Equal(t, d.rangeDecoder.Tell(), d.Tell())
+}
+
 func TestDelayMono(t *testing.T) {
 	d := NewDecoder()
 	d.previousMidValues = [2]float32{0.25, 0.5}
@@ -109,7 +151,11 @@ func TestDecodeFrameType(t *testing.T) {
 
 func TestDecodeSubframeQuantizations(t *testing.T) {
 	d := &Decoder{rangeDecoder: createRangeDecoder(testSilkFrame(), 31, 482344960, 437100388)}
-	assert.Equal(t, []float32{210944, 112640, 96256, 96256}, d.decodeSubframeQuantizations(frameSignalTypeInactive, 4, true))
+	assert.Equal(
+		t,
+		[]float32{210944, 112640, 96256, 96256},
+		d.decodeSubframeQuantizations(frameSignalTypeInactive, 4, true),
+	)
 }
 
 func TestDecodeBufferSize(t *testing.T) {
@@ -468,7 +514,7 @@ func TestDecodePitchLags(t *testing.T) {
 	}
 	d := &Decoder{rangeDecoder: createRangeDecoder(silkFrame, 73, 30770362, 1380489)}
 
-	lagMax, pitchLags, _ := d.decodePitchLags(frameSignalTypeVoiced, BandwidthWideband, nanoseconds20Ms, true)
+	lagMax, pitchLags := d.decodePitchLags(frameSignalTypeVoiced, BandwidthWideband, nanoseconds20Ms, true)
 	assert.Equal(t, uint32(288), lagMax)
 	assert.Equal(t, []int{206, 206, 206, 206}, pitchLags)
 }
@@ -480,8 +526,7 @@ func TestDecodePitchLagsRelative(t *testing.T) {
 		previousLag:           100,
 	}
 
-	lagMax, pitchLags, err := d.decodePitchLags(frameSignalTypeVoiced, BandwidthWideband, nanoseconds10Ms, false)
-	assert.NoError(t, err)
+	lagMax, pitchLags := d.decodePitchLags(frameSignalTypeVoiced, BandwidthWideband, nanoseconds10Ms, false)
 	assert.Equal(t, uint32(288), lagMax)
 	assert.Len(t, pitchLags, 2)
 	assert.Equal(t, 92, d.previousLag)

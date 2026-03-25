@@ -60,6 +60,19 @@ func newChannelDecoder() *Decoder {
 	}
 }
 
+func (d *Decoder) clone() Decoder {
+	clone := *d
+	clone.previousFrameLPCValues = slices.Clone(d.previousFrameLPCValues)
+	clone.finalOutValues = slices.Clone(d.finalOutValues)
+	clone.n0Q15 = slices.Clone(d.n0Q15)
+	if d.sideDecoder != nil {
+		sideDecoder := d.sideDecoder.clone()
+		clone.sideDecoder = &sideDecoder
+	}
+
+	return clone
+}
+
 // The LP layer begins with two to eight header bits These consist of one
 // Voice Activity Detection (VAD) bit per frame (up to 3), followed by a
 // single flag indicating the presence of LBRR frames.
@@ -75,11 +88,37 @@ func (d *Decoder) decodeHeaderBits(frameCount int) (voiceActivityDetected []bool
 	return
 }
 
+// When LBRR is present in a 40 or 60 ms Opus frame, the decoder reads
+// per-frame flags indicating which 20 ms intervals include redundancy.
+//
+// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.4
+func (d *Decoder) decodeLowBitRateRedundancyFlags(frameCount int, lowBitRateRedundancy bool) []bool {
+	lowBitRateRedundancyFlags := make([]bool, frameCount)
+	if !lowBitRateRedundancy {
+		return lowBitRateRedundancyFlags
+	}
+
+	if frameCount == 1 {
+		lowBitRateRedundancyFlags[0] = true
+
+		return lowBitRateRedundancyFlags
+	}
+
+	symbol := d.rangeDecoder.DecodeSymbolWithICDF(icdfLowBitRateRedundancyFlags[frameCount-2]) + 1
+	for i := 0; i < frameCount; i++ {
+		lowBitRateRedundancyFlags[i] = ((symbol >> i) & 1) == 1
+	}
+
+	return lowBitRateRedundancyFlags
+}
+
 var stereoWeightsQ13 = []int32{ // nolint:gochecknoglobals
 	-13732, -10050, -8266, -7526, -6500, -5000, -2950, -820,
 	820, 2950, 5000, 6500, 7526, 8266, 10050, 13732,
 }
 
+// RFC 6716 Section 4.2.7.1 decodes two stereo prediction weights for each
+// SILK frame using a coarse/fine split across three-stage codebooks.
 func (d *Decoder) decodeStereoPredictionWeights() (w0Q13, w1Q13 int32) {
 	n := d.rangeDecoder.DecodeSymbolWithICDF(icdfStereoWeightsStageOne)
 	i0 := d.rangeDecoder.DecodeSymbolWithICDF(icdfStereoWeightsStageTwo)
@@ -90,19 +129,23 @@ func (d *Decoder) decodeStereoPredictionWeights() (w0Q13, w1Q13 int32) {
 	return stereoPredictionWeights(n, i0, i1, i2, i3)
 }
 
+// RFC 6716 Section 4.2.7.1 reconstructs the two Q13 weights from the decoded
+// stage-1/2/3 symbols.
 func stereoPredictionWeights(n, i0, i1, i2, i3 uint32) (w0Q13, w1Q13 int32) {
 	wi0 := i0 + 3*(n/5)
 	wi1 := i2 + 3*(n%5)
 
 	w1Q13 = stereoWeightsQ13[wi1] +
-		(((stereoWeightsQ13[wi1+1]-stereoWeightsQ13[wi1])*6554)>>16)*(2*int32(i3)+1)
+		(((stereoWeightsQ13[wi1+1]-stereoWeightsQ13[wi1])*6554)>>16)*(2*int32(i3)+1) //nolint:gosec
 	w0Q13 = stereoWeightsQ13[wi0] +
-		(((stereoWeightsQ13[wi0+1]-stereoWeightsQ13[wi0])*6554)>>16)*(2*int32(i1)+1) -
+		(((stereoWeightsQ13[wi0+1]-stereoWeightsQ13[wi0])*6554)>>16)*(2*int32(i1)+1) - //nolint:gosec
 		w1Q13
 
 	return w0Q13, w1Q13
 }
 
+// RFC 6716 Section 4.2.7.2 signals whether a stereo frame codes only the mid
+// channel and skips the side channel.
 func (d *Decoder) decodeMidOnlyFlag() bool {
 	return d.rangeDecoder.DecodeSymbolWithICDF(icdfStereoMidOnly) == 1
 }
@@ -1330,14 +1373,14 @@ func (d *Decoder) limitLPCFilterPredictionGain(a32Q17 []int32) (aQ12 []float32) 
 }
 
 // https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.1
-func (d *Decoder) decodePitchLags(
+func (d *Decoder) decodePitchLags( //nolint:cyclop
 	signalType frameSignalType,
 	bandwidth Bandwidth,
 	nanoseconds int,
 	isFirstSilkFrameInOpusFrame bool,
-) (lagMax uint32, pitchLags []int, err error) {
+) (lagMax uint32, pitchLags []int) {
 	if signalType != frameSignalTypeVoiced {
-		return 0, nil, nil
+		return 0, nil
 	}
 
 	var (
@@ -1500,7 +1543,7 @@ func (d *Decoder) decodePitchLags(
 		)
 	}
 
-	return lagMax, pitchLags, nil
+	return lagMax, pitchLags
 }
 
 // This allows the encoder to trade off the prediction gain between
@@ -1630,7 +1673,7 @@ func (d *Decoder) ltpSynthesis(
 	// then let out_end be set to (j - (s-2)*n) and let LTP_scale_Q14 be set
 	// to 16384.  Otherwise, set out_end to (j - s*n) and set LTP_scale_Q14
 	// to the Q14 LTP scaling value from Section 4.2.7.6.3.
-	var out_end int //nolint:staticcheck,var-naming,revive
+	var out_end int //nolint:staticcheck,revive
 	if s < 2 || wQ2 == 4 {
 		out_end = -s * n
 	} else {
@@ -1943,10 +1986,7 @@ func (d *Decoder) decodeFrame(
 	aQ12 = d.generateAQ12(nlsfQ15, bandwidth, aQ12)
 
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.1
-	lagMax, pitchLags, err := d.decodePitchLags(signalType, bandwidth, nanoseconds, isFirstSilkFrameInOpusFrame)
-	if err != nil {
-		return err
-	}
+	lagMax, pitchLags := d.decodePitchLags(signalType, bandwidth, nanoseconds, isFirstSilkFrameInOpusFrame)
 
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.2
 	bQ7 := d.decodeLTPFilterCoefficients(signalType, subframeCount)
@@ -2041,6 +2081,9 @@ func (d *Decoder) saveFinalOutValues(out []float32) {
 //	  6: Decoded signal (mono or mid-side stereo)
 //	  7: Unmixed signal (mono or left-right stereo)
 //	  8: Resampled signal
+//
+// RFC 6716 Section 4.2.8 interpolates stereo weights over the first 8 ms of
+// each frame.
 func (d *Decoder) stereoPhaseOneSampleCount(bandwidth Bandwidth) int {
 	switch bandwidth {
 	case BandwidthNarrowband:
@@ -2054,6 +2097,8 @@ func (d *Decoder) stereoPhaseOneSampleCount(bandwidth Bandwidth) int {
 	return 0
 }
 
+// RFC 6716 Section 4.2.8 applies a one-sample delay to mono output so mono
+// and stereo transitions remain seamless.
 func (d *Decoder) delayMono(out []float32) {
 	if len(out) == 0 {
 		return
@@ -2070,9 +2115,7 @@ func (d *Decoder) delayMono(out []float32) {
 	}
 
 	for i := range out {
-		currentSample := out[i]
-		out[i] = previousSample
-		previousSample = currentSample
+		out[i], previousSample = previousSample, out[i]
 	}
 
 	d.previousMidValues = previousMidValues
@@ -2080,6 +2123,8 @@ func (d *Decoder) delayMono(out []float32) {
 	d.wasStereo = false
 }
 
+// RFC 6716 Section 4.2.8 converts mid-side stereo to left-right stereo and
+// applies the required one-sample delay to the mid signal.
 func (d *Decoder) stereoUnmix(mid, side, out []float32, w0Q13, w1Q13 int32, bandwidth Bandwidth) {
 	phaseOneSampleCount := d.stereoPhaseOneSampleCount(bandwidth)
 	previousW0Q13 := d.previousStereoWeights[0]
@@ -2116,8 +2161,115 @@ func (d *Decoder) stereoUnmix(mid, side, out []float32, w0Q13, w1Q13 int32, band
 	d.wasStereo = true
 }
 
-// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.1
-func (d *Decoder) Decode(in []byte, out []float32, isStereo bool, nanoseconds int, bandwidth Bandwidth) error { // nolint:lll
+// RFC 6716 Section 4.2.5 allows LBRR frames to appear before regular SILK
+// frames. When the caller is not decoding FEC, those frames still need to be
+// consumed from the range coder to keep the stream aligned.
+func (d *Decoder) skipLowBitRateRedundancy( //nolint:cyclop,gocognit
+	midLowBitRateRedundancyFlags []bool,
+	sideLowBitRateRedundancyFlags []bool,
+	isStereo bool,
+	frameSampleCount int,
+	silkFrameNanoseconds int,
+	bandwidth Bandwidth,
+) error {
+	if !slices.Contains(midLowBitRateRedundancyFlags, true) && !slices.Contains(sideLowBitRateRedundancyFlags, true) {
+		return nil
+	}
+
+	skipDecoder := d.clone()
+	skipDecoder.rangeDecoder = d.rangeDecoder
+
+	if !isStereo {
+		frameOut := make([]float32, frameSampleCount)
+		for i, hasLowBitRateRedundancy := range midLowBitRateRedundancyFlags {
+			if !hasLowBitRateRedundancy {
+				continue
+			}
+			for j := range frameOut {
+				frameOut[j] = 0
+			}
+			isFirstMidFrame := i == 0
+			if !isFirstMidFrame {
+				isFirstMidFrame = !midLowBitRateRedundancyFlags[i-1] //nolint:gosec
+			}
+			if err := skipDecoder.decodeFrame(
+				frameOut,
+				true,
+				silkFrameNanoseconds,
+				bandwidth,
+				isFirstMidFrame,
+			); err != nil {
+				return err
+			}
+		}
+
+		d.rangeDecoder = skipDecoder.rangeDecoder
+
+		return nil
+	}
+
+	if skipDecoder.sideDecoder == nil {
+		skipDecoder.sideDecoder = newChannelDecoder()
+	}
+	if !skipDecoder.wasStereo {
+		skipDecoder.previousStereoWeights = [2]int32{}
+		skipDecoder.previousSideValue = 0
+		skipDecoder.sideDecoder = newChannelDecoder()
+	}
+
+	for i := range midLowBitRateRedundancyFlags {
+		if !midLowBitRateRedundancyFlags[i] && !sideLowBitRateRedundancyFlags[i] {
+			continue
+		}
+
+		if midLowBitRateRedundancyFlags[i] {
+			skipDecoder.decodeStereoPredictionWeights()
+			if !sideLowBitRateRedundancyFlags[i] {
+				skipDecoder.decodeMidOnlyFlag()
+			}
+
+			mid := make([]float32, frameSampleCount)
+			isFirstMidFrame := i == 0
+			if !isFirstMidFrame {
+				isFirstMidFrame = !midLowBitRateRedundancyFlags[i-1] //nolint:gosec
+			}
+			if err := skipDecoder.decodeFrame(
+				mid,
+				true,
+				silkFrameNanoseconds,
+				bandwidth,
+				isFirstMidFrame,
+			); err != nil {
+				return err
+			}
+		}
+
+		if sideLowBitRateRedundancyFlags[i] {
+			side := make([]float32, frameSampleCount)
+			skipDecoder.sideDecoder.rangeDecoder = skipDecoder.rangeDecoder
+			isFirstSideFrame := i == 0
+			if !isFirstSideFrame {
+				isFirstSideFrame = !sideLowBitRateRedundancyFlags[i-1] //nolint:gosec
+			}
+			if err := skipDecoder.sideDecoder.decodeFrame(
+				side,
+				true,
+				silkFrameNanoseconds,
+				bandwidth,
+				isFirstSideFrame,
+			); err != nil {
+				return err
+			}
+			skipDecoder.rangeDecoder = skipDecoder.sideDecoder.rangeDecoder
+		}
+	}
+
+	d.rangeDecoder = skipDecoder.rangeDecoder
+
+	return nil
+}
+
+func (d *Decoder) decode(in []byte, out []float32, isStereo bool, nanoseconds int, bandwidth Bandwidth, decodeFEC bool) error { //nolint:lll,cyclop,gocognit,gocyclo,maintidx
 	silkFrameCount := silkFrameCount(nanoseconds)
 	silkFrameNanoseconds := nanoseconds
 	if nanoseconds > nanoseconds20Ms {
@@ -2140,12 +2292,58 @@ func (d *Decoder) Decode(in []byte, out []float32, isStereo bool, nanoseconds in
 	d.rangeDecoder.Init(in)
 
 	midVoiceActivityDetected, midLowBitRateRedundancy := d.decodeHeaderBits(silkFrameCount)
-	if midLowBitRateRedundancy {
-		return errUnsupportedSilkLowBitrateRedundancy
+	var (
+		sideVoiceActivityDetected []bool
+		sideLowBitRateRedundancy  bool
+	)
+	if isStereo {
+		sideVoiceActivityDetected, sideLowBitRateRedundancy = d.decodeHeaderBits(silkFrameCount)
+	}
+	midLowBitRateRedundancyFlags := d.decodeLowBitRateRedundancyFlags(silkFrameCount, midLowBitRateRedundancy)
+	var sideLowBitRateRedundancyFlags []bool
+	if isStereo {
+		sideLowBitRateRedundancyFlags = d.decodeLowBitRateRedundancyFlags(silkFrameCount, sideLowBitRateRedundancy)
 	}
 
 	frameSampleCount := subframeSize * subframeCount
-	if !isStereo {
+	if !isStereo { //nolint:nestif
+		if decodeFEC {
+			if !slices.Contains(midLowBitRateRedundancyFlags, true) {
+				return ErrNoLowBitrateRedundancy
+			}
+			for i := 0; i < silkFrameCount; i++ {
+				if !midLowBitRateRedundancyFlags[i] {
+					return ErrNoLowBitrateRedundancy
+				}
+
+				frameOut := out[i*frameSampleCount : (i+1)*frameSampleCount]
+				if err := d.decodeFrame(
+					frameOut,
+					true,
+					silkFrameNanoseconds,
+					bandwidth,
+					i == 0 || !midLowBitRateRedundancyFlags[i-1],
+				); err != nil {
+					return err
+				}
+			}
+
+			d.delayMono(out[:frameSampleCount*silkFrameCount])
+
+			return nil
+		}
+
+		if err := d.skipLowBitRateRedundancy(
+			midLowBitRateRedundancyFlags,
+			nil,
+			false,
+			frameSampleCount,
+			silkFrameNanoseconds,
+			bandwidth,
+		); err != nil {
+			return err
+		}
+
 		for i := 0; i < silkFrameCount; i++ {
 			frameOut := out[i*frameSampleCount : (i+1)*frameSampleCount]
 			if err := d.decodeFrame(frameOut, midVoiceActivityDetected[i], silkFrameNanoseconds, bandwidth, i == 0); err != nil {
@@ -2167,9 +2365,67 @@ func (d *Decoder) Decode(in []byte, out []float32, isStereo bool, nanoseconds in
 		d.sideDecoder = newChannelDecoder()
 	}
 
-	sideVoiceActivityDetected, sideLowBitRateRedundancy := d.decodeHeaderBits(silkFrameCount)
-	if sideLowBitRateRedundancy {
-		return errUnsupportedSilkLowBitrateRedundancy
+	if decodeFEC { //nolint:nestif
+		if !slices.Contains(midLowBitRateRedundancyFlags, true) {
+			return ErrNoLowBitrateRedundancy
+		}
+
+		for i := 0; i < silkFrameCount; i++ {
+			if !midLowBitRateRedundancyFlags[i] {
+				return ErrNoLowBitrateRedundancy
+			}
+
+			w0Q13, w1Q13 := d.decodeStereoPredictionWeights()
+			midOnly := false
+			if !sideLowBitRateRedundancyFlags[i] {
+				midOnly = d.decodeMidOnlyFlag()
+				if !midOnly {
+					return ErrNoLowBitrateRedundancy
+				}
+			}
+
+			mid := make([]float32, frameSampleCount)
+			if err := d.decodeFrame(
+				mid,
+				true,
+				silkFrameNanoseconds,
+				bandwidth,
+				i == 0 || !midLowBitRateRedundancyFlags[i-1],
+			); err != nil {
+				return err
+			}
+
+			side := make([]float32, frameSampleCount)
+			if !midOnly {
+				d.sideDecoder.rangeDecoder = d.rangeDecoder
+				if err := d.sideDecoder.decodeFrame(
+					side,
+					true,
+					silkFrameNanoseconds,
+					bandwidth,
+					i == 0 || !sideLowBitRateRedundancyFlags[i-1],
+				); err != nil {
+					return err
+				}
+				d.rangeDecoder = d.sideDecoder.rangeDecoder
+			}
+
+			frameOut := out[i*frameSampleCount*2 : (i+1)*frameSampleCount*2]
+			d.stereoUnmix(mid, side, frameOut, w0Q13, w1Q13, bandwidth)
+		}
+
+		return nil
+	}
+
+	if err := d.skipLowBitRateRedundancy(
+		midLowBitRateRedundancyFlags,
+		sideLowBitRateRedundancyFlags,
+		true,
+		frameSampleCount,
+		silkFrameNanoseconds,
+		bandwidth,
+	); err != nil {
+		return err
 	}
 
 	isFirstSideFrame := true
@@ -2185,7 +2441,13 @@ func (d *Decoder) Decode(in []byte, out []float32, isStereo bool, nanoseconds in
 		side := make([]float32, frameSampleCount)
 		if !midOnly {
 			d.sideDecoder.rangeDecoder = d.rangeDecoder
-			if err := d.sideDecoder.decodeFrame(side, sideVoiceActivityDetected[i], silkFrameNanoseconds, bandwidth, isFirstSideFrame); err != nil {
+			if err := d.sideDecoder.decodeFrame(
+				side,
+				sideVoiceActivityDetected[i],
+				silkFrameNanoseconds,
+				bandwidth,
+				isFirstSideFrame,
+			); err != nil {
 				return err
 			}
 			d.rangeDecoder = d.sideDecoder.rangeDecoder
@@ -2197,6 +2459,18 @@ func (d *Decoder) Decode(in []byte, out []float32, isStereo bool, nanoseconds in
 	}
 
 	return nil
+}
+
+// Decode decodes many SILK subframes.
+//
+// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.1
+func (d *Decoder) Decode(in []byte, out []float32, isStereo bool, nanoseconds int, bandwidth Bandwidth) error {
+	return d.decode(in, out, isStereo, nanoseconds, bandwidth, false)
+}
+
+// DecodeFEC decodes SILK low bit-rate redundancy data.
+func (d *Decoder) DecodeFEC(in []byte, out []float32, isStereo bool, nanoseconds int, bandwidth Bandwidth) error {
+	return d.decode(in, out, isStereo, nanoseconds, bandwidth, true)
 }
 
 // Tell returns the number of range-coded bits consumed by the current frame.
