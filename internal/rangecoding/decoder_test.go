@@ -193,3 +193,10 @@ func TestDecoder(t *testing.T) { // nolint:cyclop,gocyclo
 	assert.Equal(t, uint32(0), decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]))
 	assert.Equal(t, uint32(0), decoder.DecodeSymbolWithICDF(silkModelPulseCount[0]))
 }
+
+func TestDecoderInitEmptyInput(t *testing.T) {
+	decoder := &Decoder{}
+	assert.NotPanics(t, func() {
+		decoder.Init(nil)
+	})
+}

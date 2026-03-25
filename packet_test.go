@@ -205,7 +205,7 @@ func TestDecodePacketFrames(t *testing.T) {
 		t.Parallel()
 
 		decoder := NewDecoder()
-		_, _, err := decoder.decode([]byte{byte(frameCodeTwoEqualFrames)}, decoder.silkBuffer)
+		_, _, err := decoder.decode([]byte{tocByte(frameCodeTwoEqualFrames) | 0b100}, decoder.silkBuffer)
 
 		require.Error(t, err)
 		assert.Equal(t, maxSilkFrameSampleCount*2, len(decoder.silkBuffer))

@@ -15,12 +15,14 @@ type (
 )
 
 const (
-	subframeCount = 4
+	maxSubframeCount = 4
 
 	pulsecountLargestPartitionSize = 16
 
 	nanoseconds10Ms = 10000000
 	nanoseconds20Ms = 20000000
+	nanoseconds40Ms = 40000000
+	nanoseconds60Ms = 60000000
 
 	frameSignalTypeInactive frameSignalType = iota + 1
 	frameSignalTypeUnvoiced
@@ -119,4 +121,28 @@ func ilog(n int) int {
 	}
 
 	return int(math.Floor(math.Log2(float64(n)))) + 1
+}
+
+func subframeCount(nanoseconds int) int {
+	switch nanoseconds {
+	case nanoseconds10Ms:
+		return 2
+	case nanoseconds20Ms:
+		return 4
+	}
+
+	return 0
+}
+
+func silkFrameCount(nanoseconds int) int {
+	switch nanoseconds {
+	case nanoseconds10Ms, nanoseconds20Ms:
+		return 1
+	case nanoseconds40Ms:
+		return 2
+	case nanoseconds60Ms:
+		return 3
+	}
+
+	return 0
 }

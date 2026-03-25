@@ -20,6 +20,7 @@ type Decoder struct {
 
 	// Is the previous frame a voiced frame?
 	isPreviousFrameVoiced bool
+	previousLag           int
 
 	previousLogGain int32
 
@@ -51,8 +52,11 @@ func NewDecoder() Decoder {
 // single flag indicating the presence of LBRR frames.
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.3
-func (d *Decoder) decodeHeaderBits() (voiceActivityDetected, lowBitRateRedundancy bool) {
-	voiceActivityDetected = d.rangeDecoder.DecodeSymbolLogP(1) == 1
+func (d *Decoder) decodeHeaderBits(frameCount int) (voiceActivityDetected []bool, lowBitRateRedundancy bool) {
+	voiceActivityDetected = make([]bool, frameCount)
+	for i := 0; i < frameCount; i++ {
+		voiceActivityDetected[i] = d.rangeDecoder.DecodeSymbolLogP(1) == 1
+	}
 	lowBitRateRedundancy = d.rangeDecoder.DecodeSymbolLogP(1) == 1
 
 	return
@@ -119,16 +123,20 @@ func (d *Decoder) determineFrameType(voiceActivityDetected bool) (
 // A separate quantization gain is coded for each 5 ms subframe
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.4
-func (d *Decoder) decodeSubframeQuantizations(signalType frameSignalType) (gainQ16 []float32) {
+func (d *Decoder) decodeSubframeQuantizations(
+	signalType frameSignalType,
+	subframeCount int,
+	isFirstSilkFrameInOpusFrame bool,
+) (gainQ16 []float32) {
 	var logGain, deltaGainIndex, gainIndex int32
-	gainQ16 = make([]float32, 4)
+	gainQ16 = make([]float32, subframeCount)
 
 	for subframeIndex := 0; subframeIndex < subframeCount; subframeIndex++ {
 		// The subframe gains are either coded independently, or relative to the
 		// gain from the most recent coded subframe in the same channel.
 		//
 		// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.4
-		if subframeIndex == 0 {
+		if subframeIndex == 0 && isFirstSilkFrameInOpusFrame {
 			// In an independently coded subframe gain, the 3 most significant bits
 			// of the quantization gain are decoded using a PDF selected from
 			// Table 11 based on the decoded signal type
@@ -574,7 +582,7 @@ func (d *Decoder) normalizeLSFStabilization(nlsfQ15 []int16, dLPC int, bandwidth
 }
 
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.5
-func (d *Decoder) normalizeLSFInterpolation(n2Q15 []int16) (n1Q15 []int16, wQ2 int16) {
+func (d *Decoder) normalizeLSFInterpolation(n2Q15 []int16, nanoseconds int) (n1Q15 []int16, wQ2 int16) {
 	// Let n2_Q15[k] be the normalized LSF coefficients decoded by the
 	// procedure in Section 4.2.7.5, n0_Q15[k] be the LSF coefficients
 	// decoded for the prior frame, and w_Q2 be the interpolation factor.
@@ -582,6 +590,10 @@ func (d *Decoder) normalizeLSFInterpolation(n2Q15 []int16) (n1Q15 []int16, wQ2 i
 	// 20 ms frame, n1_Q15[k], are
 	//
 	//      n1_Q15[k] = n0_Q15[k] + (w_Q2*(n2_Q15[k] - n0_Q15[k]) >> 2)
+	if nanoseconds != nanoseconds20Ms {
+		return nil, 4
+	}
+
 	wQ2 = int16(d.rangeDecoder.DecodeSymbolWithICDF(icdfNormalizedLSFInterpolationIndex)) //nolint:gosec // G115
 	if wQ2 == 4 || !d.haveDecoded {
 		return nil, wQ2
@@ -1276,13 +1288,15 @@ func (d *Decoder) limitLPCFilterPredictionGain(a32Q17 []int32) (aQ12 []float32) 
 func (d *Decoder) decodePitchLags(
 	signalType frameSignalType,
 	bandwidth Bandwidth,
+	nanoseconds int,
+	isFirstSilkFrameInOpusFrame bool,
 ) (lagMax uint32, pitchLags []int, err error) {
 	if signalType != frameSignalTypeVoiced {
 		return 0, nil, nil
 	}
 
 	var (
-		lag    uint32
+		lag    int
 		lagMin uint32
 	)
 
@@ -1299,7 +1313,29 @@ func (d *Decoder) decodePitchLags(
 	// *  That previous SILK frame was coded, but was not voiced (see
 	//    Section 4.2.7.3).
 
-	lagAbsolute := true
+	lagAbsolute := isFirstSilkFrameInOpusFrame || !d.isPreviousFrameVoiced
+	var (
+		lowPartICDF []uint
+		lagScale    uint32
+	)
+	switch bandwidth {
+	case BandwidthNarrowband:
+		lowPartICDF = icdfPrimaryPitchLagLowPartNarrowband
+		lagScale = 4
+		lagMin = 16
+		lagMax = 144
+	case BandwidthMediumband:
+		lowPartICDF = icdfPrimaryPitchLagLowPartMediumband
+		lagScale = 6
+		lagMin = 24
+		lagMax = 216
+	case BandwidthWideband:
+		lowPartICDF = icdfPrimaryPitchLagLowPartWideband
+		lagScale = 8
+		lagMin = 32
+		lagMax = 288
+	}
+
 	if lagAbsolute {
 		// With absolute coding, the primary pitch lag may range from 2 ms
 		// (inclusive) up to 18 ms (exclusive), corresponding to pitches from
@@ -1321,29 +1357,6 @@ func (d *Decoder) decodePitchLags(
 		//  |            | 32, 32, 32}/256        |       |          |          |
 		//  +------------+------------------------+-------+----------+----------+
 
-		// Table 30: PDF for Low Part of Primary Pitch Lag
-		var (
-			lowPartICDF []uint
-			lagScale    uint32
-		)
-		switch bandwidth {
-		case BandwidthNarrowband:
-			lowPartICDF = icdfPrimaryPitchLagLowPartNarrowband
-			lagScale = 4
-			lagMin = 16
-			lagMax = 144
-		case BandwidthMediumband:
-			lowPartICDF = icdfPrimaryPitchLagLowPartMediumband
-			lagScale = 6
-			lagMin = 24
-			lagMax = 216
-		case BandwidthWideband:
-			lowPartICDF = icdfPrimaryPitchLagLowPartWideband
-			lagScale = 8
-			lagMin = 32
-			lagMax = 288
-		}
-
 		lagHigh := d.rangeDecoder.DecodeSymbolWithICDF(icdfPrimaryPitchLagHighPart)
 		lagLow := d.rangeDecoder.DecodeSymbolWithICDF(lowPartICDF)
 
@@ -1354,10 +1367,18 @@ func (d *Decoder) decodePitchLags(
 		// where lag_high is the high part, lag_low is the low part, and
 		// lag_scale and lag_min are the values from the "Scale" and "Minimum
 		// Lag" columns of Table 30, respectively.
-		lag = lagHigh*lagScale + lagLow + lagMin
+		lag = int(lagHigh*lagScale + lagLow + lagMin)
 	} else {
-		return lagMax, pitchLags, errNonAbsoluteLagsUnsupported
+		deltaLagIndex := d.rangeDecoder.DecodeSymbolWithICDF(icdfPrimaryPitchLagChange)
+		if deltaLagIndex == 0 {
+			lagHigh := d.rangeDecoder.DecodeSymbolWithICDF(icdfPrimaryPitchLagHighPart)
+			lagLow := d.rangeDecoder.DecodeSymbolWithICDF(lowPartICDF)
+			lag = int(lagHigh*lagScale + lagLow + lagMin)
+		} else {
+			lag = d.previousLag + int(deltaLagIndex) - 9
+		}
 	}
+	d.previousLag = lag
 
 	// After the primary pitch lag, a "pitch contour", stored as a single
 	// entry from one of four small VQ codebooks, gives lag offsets for each
@@ -1402,11 +1423,21 @@ func (d *Decoder) decodePitchLags(
 
 	switch bandwidth {
 	case BandwidthNarrowband:
-		lagCb = codebookSubframePitchCounterNarrowband20Ms
-		lagIcdf = icdfSubframePitchContourNarrowband20Ms
+		if nanoseconds == nanoseconds10Ms {
+			lagCb = codebookSubframePitchCounterNarrowband10Ms
+			lagIcdf = icdfSubframePitchContourNarrowband10Ms
+		} else {
+			lagCb = codebookSubframePitchCounterNarrowband20Ms
+			lagIcdf = icdfSubframePitchContourNarrowband20Ms
+		}
 	case BandwidthMediumband, BandwidthWideband:
-		lagCb = codebookSubframePitchCounterMediumbandOrWideband20Ms
-		lagIcdf = icdfSubframePitchContourMediumbandOrWideband20Ms
+		if nanoseconds == nanoseconds10Ms {
+			lagCb = codebookSubframePitchCounterMediumbandOrWideband10Ms
+			lagIcdf = icdfSubframePitchContourMediumbandOrWideband10Ms
+		} else {
+			lagCb = codebookSubframePitchCounterMediumbandOrWideband20Ms
+			lagIcdf = icdfSubframePitchContourMediumbandOrWideband20Ms
+		}
 	}
 
 	contourIndex := d.rangeDecoder.DecodeSymbolWithICDF(lagIcdf)
@@ -1415,12 +1446,12 @@ func (d *Decoder) decodePitchLags(
 	//
 	//     pitch_lags[k] = clamp(lag_min, lag + lag_cb[contour_index][k],
 	//                           lag_max)
-	pitchLags = make([]int, subframeCount)
-	for i := 0; i < subframeCount; i++ {
+	pitchLags = make([]int, subframeCount(nanoseconds))
+	for i := 0; i < len(pitchLags); i++ {
 		pitchLags[i] = int(clamp(
-			int32(lagMin), //nolint:gosec
-			int32(lag+uint32(lagCb[contourIndex][i])), //nolint:gosec
-			int32(lagMax)), //nolint:gosec
+			int32(lagMin),                          //nolint:gosec
+			int32(lag+int(lagCb[contourIndex][i])), //nolint:gosec
+			int32(lagMax)),                         //nolint:gosec
 		)
 	}
 
@@ -1431,7 +1462,10 @@ func (d *Decoder) decodePitchLags(
 // packets against the recovery time after packet loss.
 //
 // https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.3
-func (d *Decoder) decodeLTPScalingParamater(signalType frameSignalType) (LTPscaleQ14 float32) { //nolint:gocritic
+func (d *Decoder) decodeLTPScalingParamater(
+	signalType frameSignalType,
+	isFirstSilkFrameInOpusFrame bool,
+) (LTPscaleQ14 float32) { //nolint:gocritic
 	// An LTP scaling parameter appears after the LTP filter coefficients if
 	// and only if
 	//
@@ -1446,7 +1480,7 @@ func (d *Decoder) decodeLTPScalingParamater(signalType frameSignalType) (LTPscal
 
 	// Frames that do not code the scaling parameter
 	//    use the default factor of 15565 (approximately 0.95).
-	if signalType != frameSignalTypeVoiced {
+	if signalType != frameSignalTypeVoiced || !isFirstSilkFrameInOpusFrame {
 		return 15565.0
 	}
 
@@ -1470,16 +1504,14 @@ func (d *Decoder) decodeLTPScalingParamater(signalType frameSignalType) (LTPscal
 // from one of three codebooks.
 //
 // https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.2
-func (d *Decoder) decodeLTPFilterCoefficients(signalType frameSignalType) (bQ7 [][]int8) {
+func (d *Decoder) decodeLTPFilterCoefficients(signalType frameSignalType, subframeCount int) (bQ7 [][]int8) {
 	if signalType != frameSignalTypeVoiced {
 		return bQ7
 	}
 
-	bQ7 = [][]int8{
-		make([]int8, 5),
-		make([]int8, 5),
-		make([]int8, 5),
-		make([]int8, 5),
+	bQ7 = make([][]int8, subframeCount)
+	for i := range bQ7 {
+		bQ7[i] = make([]int8, 5)
 	}
 
 	// This is signaled with an explicitly-coded "periodicity index".  This
@@ -1752,6 +1784,7 @@ func (d *Decoder) lpcSynthesis(
 // https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9
 func (d *Decoder) silkFrameReconstruction(
 	signalType frameSignalType, bandwidth Bandwidth,
+	subframeCount int,
 	dLPC int,
 	lagMax uint32,
 	bQ7 [][]int8,
@@ -1825,6 +1858,113 @@ func (d *Decoder) silkFrameReconstruction(
 	}
 }
 
+func (d *Decoder) decodeFrame(
+	out []float32,
+	voiceActivityDetected bool,
+	nanoseconds int,
+	bandwidth Bandwidth,
+	isFirstSilkFrameInOpusFrame bool,
+) error {
+	subframeCount := subframeCount(nanoseconds)
+
+	signalType, quantizationOffsetType := d.determineFrameType(voiceActivityDetected)
+
+	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.4
+	gainQ16 := d.decodeSubframeQuantizations(signalType, subframeCount, isFirstSilkFrameInOpusFrame)
+
+	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.1
+	I1 := d.normalizeLineSpectralFrequencyStageOne(signalType == frameSignalTypeVoiced, bandwidth)
+
+	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.2
+	dLPC, resQ10 := d.normalizeLineSpectralFrequencyStageTwo(bandwidth, I1)
+
+	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.3
+	nlsfQ15 := d.normalizeLineSpectralFrequencyCoefficients(dLPC, bandwidth, resQ10, I1)
+
+	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.4
+	d.normalizeLSFStabilization(nlsfQ15, dLPC, bandwidth)
+
+	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.5
+	n1Q15, wQ2 := d.normalizeLSFInterpolation(nlsfQ15, nanoseconds)
+
+	// For 20 ms SILK frames, the first half of the frame (i.e., the first
+	// two subframes) may use normalized LSF coefficients that are
+	// interpolated between the decoded LSFs for the most recent coded frame
+	// (in the same channel) and the current frame
+	//
+	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.5
+	aQ12 := [][]float32{}
+	aQ12 = d.generateAQ12(n1Q15, bandwidth, aQ12)
+	aQ12 = d.generateAQ12(nlsfQ15, bandwidth, aQ12)
+
+	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.1
+	lagMax, pitchLags, err := d.decodePitchLags(signalType, bandwidth, nanoseconds, isFirstSilkFrameInOpusFrame)
+	if err != nil {
+		return err
+	}
+
+	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.2
+	bQ7 := d.decodeLTPFilterCoefficients(signalType, subframeCount)
+
+	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.3
+	LTPscaleQ14 := d.decodeLTPScalingParamater(signalType, isFirstSilkFrameInOpusFrame)
+
+	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.7
+	lcgSeed := d.decodeLinearCongruentialGeneratorSeed()
+
+	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.8
+	shellblocks := d.decodeShellblocks(nanoseconds, bandwidth)
+
+	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.8.1
+	rateLevel := d.decodeRatelevel(signalType == frameSignalTypeVoiced)
+
+	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.8.2
+	pulsecounts, lsbcounts := d.decodePulseAndLSBCounts(shellblocks, rateLevel)
+
+	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.8.6
+	eQ23 := d.decodeExcitation(signalType, quantizationOffsetType, lcgSeed, pulsecounts, lsbcounts)
+
+	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9
+	d.silkFrameReconstruction(
+		signalType, bandwidth,
+		subframeCount,
+		dLPC,
+		lagMax,
+		bQ7,
+		pitchLags,
+		eQ23,
+		LTPscaleQ14,
+		wQ2,
+		aQ12,
+		gainQ16, out,
+	)
+
+	d.isPreviousFrameVoiced = signalType == frameSignalTypeVoiced
+
+	// n0Q15 is the LSF coefficients decoded for the prior frame
+	// see normalizeLSFInterpolation.
+	if len(d.n0Q15) != len(nlsfQ15) {
+		d.n0Q15 = make([]int16, len(nlsfQ15))
+	}
+	copy(d.n0Q15, nlsfQ15)
+
+	d.saveFinalOutValues(out)
+	d.haveDecoded = true
+
+	return nil
+}
+
+func (d *Decoder) saveFinalOutValues(out []float32) {
+	if len(out) >= len(d.finalOutValues) {
+		copy(d.finalOutValues, out[len(out)-len(d.finalOutValues):])
+
+		return
+	}
+
+	copy(d.finalOutValues, d.finalOutValues[len(out):])
+	copy(d.finalOutValues[len(d.finalOutValues)-len(out):], out)
+}
+
 // Decode decodes many SILK subframes
 //
 //	An overview of the decoder is given in Figure 14.
@@ -1859,107 +1999,37 @@ func (d *Decoder) silkFrameReconstruction(
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.1
 func (d *Decoder) Decode(in []byte, out []float32, isStereo bool, nanoseconds int, bandwidth Bandwidth) error { // nolint:lll
+	silkFrameCount := silkFrameCount(nanoseconds)
+	silkFrameNanoseconds := nanoseconds
+	if nanoseconds > nanoseconds20Ms {
+		silkFrameNanoseconds = nanoseconds20Ms
+	}
+
+	subframeCount := subframeCount(silkFrameNanoseconds)
 	subframeSize := d.samplesInSubframe(bandwidth)
 	switch {
-	case nanoseconds != nanoseconds20Ms:
+	case silkFrameCount == 0 || subframeCount == 0:
 		return errUnsupportedSilkFrameDuration
 	case isStereo:
 		return errUnsupportedSilkStereo
-	case (subframeSize * subframeCount) > len(out):
+	case (subframeSize * subframeCount * silkFrameCount) > len(out):
 		return errOutBufferTooSmall
 	}
 
 	d.rangeDecoder.Init(in)
 
-	voiceActivityDetected, lowBitRateRedundancy := d.decodeHeaderBits()
+	voiceActivityDetected, lowBitRateRedundancy := d.decodeHeaderBits(silkFrameCount)
 	if lowBitRateRedundancy {
 		return errUnsupportedSilkLowBitrateRedundancy
 	}
 
-	signalType, quantizationOffsetType := d.determineFrameType(voiceActivityDetected)
-
-	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.4
-	gainQ16 := d.decodeSubframeQuantizations(signalType)
-
-	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.1
-	I1 := d.normalizeLineSpectralFrequencyStageOne(signalType == frameSignalTypeVoiced, bandwidth)
-
-	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.2
-	dLPC, resQ10 := d.normalizeLineSpectralFrequencyStageTwo(bandwidth, I1)
-
-	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.3
-	nlsfQ15 := d.normalizeLineSpectralFrequencyCoefficients(dLPC, bandwidth, resQ10, I1)
-
-	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.4
-	d.normalizeLSFStabilization(nlsfQ15, dLPC, bandwidth)
-
-	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.5
-	n1Q15, wQ2 := d.normalizeLSFInterpolation(nlsfQ15)
-
-	// For 20 ms SILK frames, the first half of the frame (i.e., the first
-	// two subframes) may use normalized LSF coefficients that are
-	// interpolated between the decoded LSFs for the most recent coded frame
-	// (in the same channel) and the current frame
-	//
-	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.5
-	aQ12 := [][]float32{}
-	aQ12 = d.generateAQ12(n1Q15, bandwidth, aQ12)
-	aQ12 = d.generateAQ12(nlsfQ15, bandwidth, aQ12)
-
-	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.1
-	lagMax, pitchLags, err := d.decodePitchLags(signalType, bandwidth)
-	if err != nil {
-		return err
+	frameSampleCount := subframeSize * subframeCount
+	for i := 0; i < silkFrameCount; i++ {
+		frameOut := out[i*frameSampleCount : (i+1)*frameSampleCount]
+		if err := d.decodeFrame(frameOut, voiceActivityDetected[i], silkFrameNanoseconds, bandwidth, i == 0); err != nil {
+			return err
+		}
 	}
-
-	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.2
-	bQ7 := d.decodeLTPFilterCoefficients(signalType)
-
-	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.3
-	LTPscaleQ14 := d.decodeLTPScalingParamater(signalType)
-
-	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.7
-	lcgSeed := d.decodeLinearCongruentialGeneratorSeed()
-
-	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.8
-	shellblocks := d.decodeShellblocks(nanoseconds, bandwidth)
-
-	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.8.1
-	rateLevel := d.decodeRatelevel(signalType == frameSignalTypeVoiced)
-
-	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.8.2
-	pulsecounts, lsbcounts := d.decodePulseAndLSBCounts(shellblocks, rateLevel)
-
-	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.8.6
-	eQ23 := d.decodeExcitation(signalType, quantizationOffsetType, lcgSeed, pulsecounts, lsbcounts)
-
-	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9
-	d.silkFrameReconstruction(
-		signalType, bandwidth,
-		dLPC,
-		lagMax,
-		bQ7,
-		pitchLags,
-		eQ23,
-		LTPscaleQ14,
-		wQ2,
-		aQ12,
-		gainQ16, out,
-	)
-
-	d.isPreviousFrameVoiced = signalType == frameSignalTypeVoiced
-
-	// n0Q15 is the LSF coefficients decoded for the prior frame
-	// see normalizeLSFInterpolation.
-	if len(d.n0Q15) != len(nlsfQ15) {
-		d.n0Q15 = make([]int16, len(nlsfQ15))
-	}
-	copy(d.n0Q15, nlsfQ15)
-
-	// Save the final values of out
-	copy(d.finalOutValues, out[len(out)-len(d.finalOutValues):])
-
-	d.haveDecoded = true
 
 	return nil
 }

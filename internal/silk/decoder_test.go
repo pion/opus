@@ -38,9 +38,26 @@ func createRangeDecoder(
 	return d
 }
 
-func TestDecode20MsOnly(t *testing.T) {
+func TestDecodeUnsupportedFrameDuration(t *testing.T) {
 	d := &Decoder{}
 	assert.ErrorIs(t, errUnsupportedSilkFrameDuration, d.Decode(testSilkFrame(), []float32{}, false, 1, BandwidthWideband))
+}
+
+func TestDecodeNon20MsDurations(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		nanoseconds int
+		out         []float32
+	}{
+		{name: "10ms", nanoseconds: nanoseconds10Ms, out: make([]float32, 160)},
+		{name: "40ms", nanoseconds: nanoseconds40Ms, out: make([]float32, 640)},
+		{name: "60ms", nanoseconds: nanoseconds60Ms, out: make([]float32, 960)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			d := NewDecoder()
+			assert.NoError(t, d.Decode(nil, test.out, false, test.nanoseconds, BandwidthWideband))
+		})
+	}
 }
 
 func TestDecodeStereoTODO(t *testing.T) {
@@ -59,7 +76,7 @@ func TestDecodeFrameType(t *testing.T) {
 
 func TestDecodeSubframeQuantizations(t *testing.T) {
 	d := &Decoder{rangeDecoder: createRangeDecoder(testSilkFrame(), 31, 482344960, 437100388)}
-	assert.Equal(t, []float32{210944, 112640, 96256, 96256}, d.decodeSubframeQuantizations(frameSignalTypeInactive))
+	assert.Equal(t, []float32{210944, 112640, 96256, 96256}, d.decodeSubframeQuantizations(frameSignalTypeInactive, 4, true))
 }
 
 func TestDecodeBufferSize(t *testing.T) {
@@ -128,7 +145,7 @@ func TestNormalizeLSFInterpolation(t *testing.T) {
 		d := &Decoder{rangeDecoder: createRangeDecoder(testSilkFrame(), 55, 493249168, 174371199)}
 		var expectedN1Q15 []int16
 
-		actualN1Q15, _ := d.normalizeLSFInterpolation(expectedN1Q15)
+		actualN1Q15, _ := d.normalizeLSFInterpolation(expectedN1Q15, nanoseconds20Ms)
 		assert.Equal(t, expectedN1Q15, actualN1Q15)
 	})
 
@@ -154,7 +171,7 @@ func TestNormalizeLSFInterpolation(t *testing.T) {
 			17622, 19433, 21888, 24000, 26048, 28224, 30240,
 		}
 
-		actualN2Q15, _ := decoder.normalizeLSFInterpolation(n2Q15)
+		actualN2Q15, _ := decoder.normalizeLSFInterpolation(n2Q15, nanoseconds20Ms)
 		assert.Equal(t, expectedN1Q15, actualN2Q15)
 	})
 }
@@ -400,7 +417,7 @@ func TestLPCSynthesis(t *testing.T) { //nolint:lll
 		},
 	}
 
-	lpc := make([]float32, decoder.samplesInSubframe(BandwidthWideband)*subframeCount)
+	lpc := make([]float32, decoder.samplesInSubframe(BandwidthWideband)*maxSubframeCount)
 	for i := range expectedOut {
 		out := make([]float32, 80)
 		decoder.lpcSynthesis(out, decoder.samplesInSubframe(BandwidthWideband), i, dLPC, aQ12, res, gainQ16, lpc)
@@ -418,9 +435,23 @@ func TestDecodePitchLags(t *testing.T) {
 	}
 	d := &Decoder{rangeDecoder: createRangeDecoder(silkFrame, 73, 30770362, 1380489)}
 
-	lagMax, pitchLags, _ := d.decodePitchLags(frameSignalTypeVoiced, BandwidthWideband)
+	lagMax, pitchLags, _ := d.decodePitchLags(frameSignalTypeVoiced, BandwidthWideband, nanoseconds20Ms, true)
 	assert.Equal(t, uint32(288), lagMax)
 	assert.Equal(t, []int{206, 206, 206, 206}, pitchLags)
+}
+
+func TestDecodePitchLagsRelative(t *testing.T) {
+	d := &Decoder{
+		rangeDecoder:          createRangeDecoder(nil, 0, 256, 208),
+		isPreviousFrameVoiced: true,
+		previousLag:           100,
+	}
+
+	lagMax, pitchLags, err := d.decodePitchLags(frameSignalTypeVoiced, BandwidthWideband, nanoseconds10Ms, false)
+	assert.NoError(t, err)
+	assert.Equal(t, uint32(288), lagMax)
+	assert.Len(t, pitchLags, 2)
+	assert.Equal(t, 92, d.previousLag)
 }
 
 func TestDecodeLTPFilterCoefficients(t *testing.T) {
@@ -431,7 +462,7 @@ func TestDecodeLTPFilterCoefficients(t *testing.T) {
 	}
 	d := &Decoder{rangeDecoder: createRangeDecoder(silkFrame, 89, 253853952, 138203876)}
 
-	bQ7 := d.decodeLTPFilterCoefficients(frameSignalTypeVoiced)
+	bQ7 := d.decodeLTPFilterCoefficients(frameSignalTypeVoiced, 4)
 	assert.Equal(t, [][]int8{
 		{1, 1, 8, 1, 1},
 		{2, 0, 77, 11, 9},
@@ -448,12 +479,17 @@ func TestDecodeLTPScalingParameter(t *testing.T) {
 			0x6b, 0x71, 0xa4, 0x03, 0x70, 0xbf,
 		}
 		d := &Decoder{rangeDecoder: createRangeDecoder(silkFrame, 105, 160412192, 164623240)}
-		assert.Equal(t, float32(15565.0), d.decodeLTPScalingParamater(frameSignalTypeVoiced))
+		assert.Equal(t, float32(15565.0), d.decodeLTPScalingParamater(frameSignalTypeVoiced, true))
 	})
 
 	t.Run("Unvoiced", func(t *testing.T) {
 		d := &Decoder{}
-		assert.Equal(t, float32(15565.0), d.decodeLTPScalingParamater(frameSignalTypeUnvoiced))
+		assert.Equal(t, float32(15565.0), d.decodeLTPScalingParamater(frameSignalTypeUnvoiced, true))
+	})
+
+	t.Run("Subsequent voiced", func(t *testing.T) {
+		d := &Decoder{}
+		assert.Equal(t, float32(15565.0), d.decodeLTPScalingParamater(frameSignalTypeVoiced, false))
 	})
 }
 
