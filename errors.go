@@ -12,5 +12,11 @@ var (
 
 	errUnsupportedConfigurationMode = errors.New("unsupported configuration mode")
 
+	errInvalidSampleRate = errors.New("invalid sample rate")
+
+	errInvalidChannelCount = errors.New("invalid channel count")
+
+	errOutBufferTooSmall = errors.New("out isn't large enough")
+
 	errMalformedPacket = errors.New("malformed packet")
 )

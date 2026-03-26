@@ -110,6 +110,42 @@ func TestTinyOgg(t *testing.T) {
 	}
 }
 
+func TestNewDecoderWithOutput(t *testing.T) {
+	decoder, err := NewDecoderWithOutput(16000, 2)
+	assert.NoError(t, err)
+	assert.Equal(t, 16000, decoder.sampleRate)
+	assert.Equal(t, 2, decoder.channels)
+
+	_, err = NewDecoderWithOutput(44100, 1)
+	assert.ErrorIs(t, err, errInvalidSampleRate)
+
+	_, err = NewDecoderWithOutput(48000, 3)
+	assert.ErrorIs(t, err, errInvalidChannelCount)
+}
+
+func TestDecodeToFloat32(t *testing.T) {
+	decoder, err := NewDecoderWithOutput(16000, 2)
+	assert.NoError(t, err)
+
+	out := make([]float32, 320)
+	sampleCount, err := decoder.DecodeToFloat32([]byte{byte(8<<3) | byte(frameCodeOneFrame)}, out)
+	assert.NoError(t, err)
+	assert.Equal(t, 160, sampleCount)
+
+	_, err = decoder.DecodeToFloat32([]byte{byte(8<<3) | byte(frameCodeOneFrame)}, out[:319])
+	assert.ErrorIs(t, err, errOutBufferTooSmall)
+}
+
+func TestDecodeToInt16(t *testing.T) {
+	decoder, err := NewDecoderWithOutput(8000, 1)
+	assert.NoError(t, err)
+
+	out := make([]int16, 80)
+	sampleCount, err := decoder.DecodeToInt16([]byte{byte(0<<3) | byte(frameCodeOneFrame)}, out)
+	assert.NoError(t, err)
+	assert.Equal(t, 80, sampleCount)
+}
+
 func TestDecodeSilkFrameDurations(t *testing.T) {
 	for _, test := range []struct {
 		name          string
@@ -123,7 +159,7 @@ func TestDecodeSilkFrameDurations(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			decoder := NewDecoder()
-			_, _, err := decoder.decode([]byte{byte(test.configuration<<3) | byte(frameCodeOneFrame)}, nil)
+			_, _, _, err := decoder.decode([]byte{byte(test.configuration<<3) | byte(frameCodeOneFrame)}, nil)
 			assert.NoError(t, err)
 			assert.Len(t, decoder.silkBuffer, test.sampleCount)
 		})
