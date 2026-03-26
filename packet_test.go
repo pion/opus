@@ -115,11 +115,13 @@ func TestDecodeRejectsEmptyPacket(t *testing.T) {
 
 	decoder := NewDecoder()
 
-	_, _, sampleCount, err := decoder.decode(nil, make([]float32, 0))
+	bandwidth, isStereo, sampleCount, err := decoder.decode(nil, make([]float32, 0))
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, errTooShortForTableOfContentsHeader)
+	assert.Zero(t, bandwidth)
+	assert.False(t, isStereo)
 	assert.Zero(t, sampleCount)
+	assert.ErrorIs(t, err, errTooShortForTableOfContentsHeader)
 }
 
 func TestParsePacketFramesValidEdgeCases(t *testing.T) {

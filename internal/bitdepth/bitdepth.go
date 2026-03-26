@@ -40,7 +40,10 @@ func ConvertFloat32LittleEndianToSigned16LittleEndian(
 	for i := 0; i < len(in); i += channelCount {
 		for j := resampleCount; j > 0; j-- {
 			for k := range channelCount {
-				res := int16(math.Floor(float64(in[i+k] * 32767)))
+				sample := math.Round(float64(in[i+k] * 32768))
+				sample = math.Max(sample, -32768)
+				sample = math.Min(sample, 32767)
+				res := int16(sample)
 
 				out[currIndex] = byte(res & 0b11111111)
 				currIndex++
