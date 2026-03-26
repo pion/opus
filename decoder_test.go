@@ -123,7 +123,7 @@ func TestDecodeSilkFrameDurations(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			decoder := NewDecoder()
-			_, _, err := decoder.decode([]byte{byte(test.configuration<<3) | byte(frameCodeOneFrame)}, nil)
+			_, _, _, err := decoder.decode([]byte{byte(test.configuration<<3) | byte(frameCodeOneFrame)}, nil)
 			assert.NoError(t, err)
 			assert.Len(t, decoder.silkBuffer, test.sampleCount)
 		})

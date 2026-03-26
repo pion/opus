@@ -14,6 +14,7 @@ import (
 // of Silk frames.
 type Decoder struct {
 	rangeDecoder rangecoding.Decoder
+	sideDecoder  *Decoder
 
 	// Have we decoded a frame yet?
 	haveDecoded bool
@@ -38,13 +39,44 @@ type Decoder struct {
 	// n0Q15 are the LSF coefficients decoded for the prior frame
 	// see normalizeLSFInterpolation
 	n0Q15 []int16
+
+	previousStereoWeights [2]int32
+	previousMidValues     [2]float32
+	previousSideValue     float32
+	previousDecodeOnlyMid bool
+	wasStereo             bool
+	stereoMid             []float32
+	stereoSide            []float32
 }
 
 // NewDecoder creates a new Silk Decoder.
 func NewDecoder() Decoder {
 	return Decoder{
+		sideDecoder:    newChannelDecoder(),
 		finalOutValues: make([]float32, 306),
 	}
+}
+
+func newChannelDecoder() *Decoder {
+	return &Decoder{
+		finalOutValues: make([]float32, 306),
+	}
+}
+
+// RFC 6716 Sections 4.2.7.4, 4.2.7.5.5, and 4.2.7.6.1 require the side
+// channel to restart gain, LSF, and pitch prediction after an uncoded frame.
+func (d *Decoder) resetSideDecoderPrediction() {
+	if d.sideDecoder == nil {
+		d.sideDecoder = newChannelDecoder()
+	}
+
+	d.sideDecoder.haveDecoded = false
+	d.sideDecoder.isPreviousFrameVoiced = false
+	d.sideDecoder.previousLag = 100
+	d.sideDecoder.previousLogGain = 10
+	d.sideDecoder.previousFrameLPCValues = nil
+	clear(d.sideDecoder.finalOutValues)
+	d.sideDecoder.n0Q15 = nil
 }
 
 // The LP layer begins with two to eight header bits These consist of one
@@ -60,6 +92,42 @@ func (d *Decoder) decodeHeaderBits(frameCount int) (voiceActivityDetected []bool
 	lowBitRateRedundancy = d.rangeDecoder.DecodeSymbolLogP(1) == 1
 
 	return
+}
+
+// RFC 6716 Table 7 contains the mid-side stereo prediction weights.
+var stereoWeightsQ13 = []int32{ // nolint:gochecknoglobals
+	-13732, -10050, -8266, -7526, -6500, -5000, -2950, -820,
+	820, 2950, 5000, 6500, 7526, 8266, 10050, 13732,
+}
+
+// RFC 6716 Section 4.2.7.1 decodes mid-side stereo prediction weights.
+func (d *Decoder) decodeStereoPredictionWeights() (w0Q13, w1Q13 int32) {
+	n := int32(d.rangeDecoder.DecodeSymbolWithICDF(icdfStereoWeightsStageOne))    // #nosec G115
+	i0 := int32(d.rangeDecoder.DecodeSymbolWithICDF(icdfStereoWeightsStageTwo))   // #nosec G115
+	i1 := int32(d.rangeDecoder.DecodeSymbolWithICDF(icdfStereoWeightsStageThree)) // #nosec G115
+	i2 := int32(d.rangeDecoder.DecodeSymbolWithICDF(icdfStereoWeightsStageTwo))   // #nosec G115
+	i3 := int32(d.rangeDecoder.DecodeSymbolWithICDF(icdfStereoWeightsStageThree)) // #nosec G115
+
+	return stereoPredictionWeights(n, i0, i1, i2, i3)
+}
+
+// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.1
+func stereoPredictionWeights(n, i0, i1, i2, i3 int32) (w0Q13, w1Q13 int32) {
+	wi0 := i0 + 3*(n/5)
+	wi1 := i2 + 3*(n%5)
+
+	w1Q13 = stereoWeightsQ13[wi1] +
+		(((stereoWeightsQ13[wi1+1]-stereoWeightsQ13[wi1])*6554)>>16)*(2*i3+1)
+	w0Q13 = stereoWeightsQ13[wi0] +
+		(((stereoWeightsQ13[wi0+1]-stereoWeightsQ13[wi0])*6554)>>16)*(2*i1+1) -
+		w1Q13
+
+	return w0Q13, w1Q13
+}
+
+// RFC 6716 Section 4.2.7.2 decodes the mid-only flag for side-channel skipping.
+func (d *Decoder) decodeMidOnlyFlag() bool {
+	return d.rangeDecoder.DecodeSymbolWithICDF(icdfStereoMidOnly) == 1
 }
 
 // Each SILK frame contains a single "frame type" symbol that jointly
@@ -136,7 +204,9 @@ func (d *Decoder) decodeSubframeQuantizations(
 		// gain from the most recent coded subframe in the same channel.
 		//
 		// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.4
-		if subframeIndex == 0 && isFirstSilkFrameInOpusFrame {
+		// !d.haveDecoded also covers side-channel frames that resume after
+		// a mid-only frame, where the previous side frame was not coded.
+		if subframeIndex == 0 && (isFirstSilkFrameInOpusFrame || !d.haveDecoded) {
 			// In an independently coded subframe gain, the 3 most significant bits
 			// of the quantization gain are decoded using a PDF selected from
 			// Table 11 based on the decoded signal type
@@ -1665,7 +1735,7 @@ func (d *Decoder) ltpSynthesis(
 	// then let out_end be set to (j - (s-2)*n) and let LTP_scale_Q14 be set
 	// to 16384.  Otherwise, set out_end to (j - s*n) and set LTP_scale_Q14
 	// to the Q14 LTP scaling value from Section 4.2.7.6.3.
-	var out_end int //nolint:staticcheck,revive
+	var out_end int //nolint:staticcheck,varnamelen,revive
 	if s < 2 || wQ2 == 4 {
 		out_end = -s * n
 	} else {
@@ -1954,6 +2024,7 @@ func (d *Decoder) decodeFrame(
 	nanoseconds int,
 	bandwidth Bandwidth,
 	isFirstSilkFrameInOpusFrame bool,
+	skipLTPScaling bool,
 ) error {
 	subframeCount := subframeCount(nanoseconds)
 
@@ -1994,7 +2065,7 @@ func (d *Decoder) decodeFrame(
 	bQ7 := d.decodeLTPFilterCoefficients(signalType, subframeCount)
 
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.3
-	LTPscaleQ14 := d.decodeLTPScalingParameter(signalType, isFirstSilkFrameInOpusFrame)
+	LTPscaleQ14 := d.decodeLTPScalingParameter(signalType, isFirstSilkFrameInOpusFrame && !skipLTPScaling)
 
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.7
 	lcgSeed := d.decodeLinearCongruentialGeneratorSeed()
@@ -2084,6 +2155,193 @@ func (d *Decoder) saveFinalOutValues(out []float32) {
 //	  7: Unmixed signal (mono or left-right stereo)
 //	  8: Resampled signal
 //
+// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.8
+func (d *Decoder) stereoPhaseOneSampleCount(bandwidth Bandwidth) int {
+	switch bandwidth {
+	case BandwidthNarrowband:
+		return 64
+	case BandwidthMediumband:
+		return 96
+	case BandwidthWideband:
+		return 128
+	}
+
+	return 0
+}
+
+// RFC 6716 Section 4.2.8 applies a one-sample delay to mono output so mono
+// to stereo transitions remain seamless.
+func (d *Decoder) delayMono(out []float32) {
+	if len(out) == 0 {
+		return
+	}
+
+	previousSample := d.previousMidValues[1]
+	previousMidValues := d.previousMidValues
+	if len(out) == 1 {
+		previousMidValues[0] = previousMidValues[1]
+		previousMidValues[1] = out[0]
+	} else {
+		previousMidValues[0] = out[len(out)-2]
+		previousMidValues[1] = out[len(out)-1]
+	}
+
+	for i := range out {
+		out[i], previousSample = previousSample, out[i]
+	}
+
+	d.previousMidValues = previousMidValues
+	d.previousSideValue = 0
+	d.wasStereo = false
+}
+
+// RFC 6716 Section 4.2.8 converts mid-side stereo to left-right stereo.
+func (d *Decoder) stereoUnmix(mid, side, out []float32, w0Q13, w1Q13 int32, bandwidth Bandwidth) {
+	phaseOneSampleCount := d.stereoPhaseOneSampleCount(bandwidth)
+	previousW0Q13 := d.previousStereoWeights[0]
+	previousW1Q13 := d.previousStereoWeights[1]
+	midPrev2 := d.previousMidValues[0]
+	midPrev1 := d.previousMidValues[1]
+	sidePrev := d.previousSideValue
+
+	for i := range mid {
+		interpSample := min(i, phaseOneSampleCount)
+
+		w0 := float32(previousW0Q13)/8192.0 +
+			float32(interpSample)*float32(w0Q13-previousW0Q13)/(8192.0*float32(phaseOneSampleCount))
+		w1 := float32(previousW1Q13)/8192.0 +
+			float32(interpSample)*float32(w1Q13-previousW1Q13)/(8192.0*float32(phaseOneSampleCount))
+		p0 := (midPrev2 + 2*midPrev1 + mid[i]) / 4.0
+
+		out[i*2] = clampNegativeOneToOne((1+w1)*midPrev1 + sidePrev + w0*p0)
+		out[i*2+1] = clampNegativeOneToOne((1-w1)*midPrev1 - sidePrev - w0*p0)
+
+		midPrev2 = midPrev1
+		midPrev1 = mid[i]
+		sidePrev = side[i]
+	}
+
+	d.previousStereoWeights[0] = w0Q13
+	d.previousStereoWeights[1] = w1Q13
+	d.previousMidValues[0] = midPrev2
+	d.previousMidValues[1] = midPrev1
+	d.previousSideValue = sidePrev
+	d.wasStereo = true
+}
+
+// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.8
+func (d *Decoder) decodeMono(
+	out []float32,
+	voiceActivityDetected []bool,
+	frameSampleCount int,
+	silkFrameNanoseconds int,
+	bandwidth Bandwidth,
+) error {
+	for i := range voiceActivityDetected {
+		frameOut := out[i*frameSampleCount : (i+1)*frameSampleCount]
+		if err := d.decodeFrame(
+			frameOut,
+			voiceActivityDetected[i],
+			silkFrameNanoseconds,
+			bandwidth,
+			i == 0,
+			false,
+		); err != nil {
+			return err
+		}
+	}
+
+	d.delayMono(out[:frameSampleCount*len(voiceActivityDetected)])
+
+	return nil
+}
+
+func (d *Decoder) stereoScratchBuffers(frameSampleCount int) (mid, side []float32) {
+	if cap(d.stereoMid) < frameSampleCount {
+		d.stereoMid = make([]float32, frameSampleCount)
+	}
+	if cap(d.stereoSide) < frameSampleCount {
+		d.stereoSide = make([]float32, frameSampleCount)
+	}
+
+	return d.stereoMid[:frameSampleCount], d.stereoSide[:frameSampleCount]
+}
+
+// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.1
+// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.2
+// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.8
+func (d *Decoder) decodeStereo(
+	out []float32,
+	midVoiceActivityDetected []bool,
+	sideVoiceActivityDetected []bool,
+	frameSampleCount int,
+	silkFrameNanoseconds int,
+	bandwidth Bandwidth,
+) error {
+	if d.sideDecoder == nil {
+		d.sideDecoder = newChannelDecoder()
+	}
+	// RFC 6716 Section 4.2.7.1 resets previous stereo weights on transitions
+	// from mono to stereo.
+	if !d.wasStereo {
+		d.previousStereoWeights = [2]int32{}
+		d.previousSideValue = 0
+		d.sideDecoder = newChannelDecoder()
+		d.resetSideDecoderPrediction()
+		d.previousDecodeOnlyMid = false
+	}
+
+	mid, side := d.stereoScratchBuffers(frameSampleCount)
+
+	isFirstSideFrame := true
+	for i := range midVoiceActivityDetected {
+		w0Q13, w1Q13 := d.decodeStereoPredictionWeights()
+		midOnly := !sideVoiceActivityDetected[i] && d.decodeMidOnlyFlag()
+
+		// RFC 6716 Sections 4.2.7.2, 4.2.7.4, and 4.2.7.6.1 restart side
+		// prediction when the previous side frame was not coded.
+		if !midOnly && d.previousDecodeOnlyMid {
+			d.resetSideDecoderPrediction()
+		}
+
+		if err := d.decodeFrame(
+			mid,
+			midVoiceActivityDetected[i],
+			silkFrameNanoseconds,
+			bandwidth,
+			i == 0,
+			false,
+		); err != nil {
+			return err
+		}
+
+		if !midOnly {
+			d.sideDecoder.rangeDecoder = d.rangeDecoder
+			if err := d.sideDecoder.decodeFrame(
+				side,
+				sideVoiceActivityDetected[i],
+				silkFrameNanoseconds,
+				bandwidth,
+				isFirstSideFrame,
+				d.previousDecodeOnlyMid,
+			); err != nil {
+				return err
+			}
+			d.rangeDecoder = d.sideDecoder.rangeDecoder
+			isFirstSideFrame = false
+		} else {
+			clear(side)
+		}
+
+		frameOut := out[i*frameSampleCount*2 : (i+1)*frameSampleCount*2]
+		d.stereoUnmix(mid, side, frameOut, w0Q13, w1Q13, bandwidth)
+		d.previousDecodeOnlyMid = midOnly
+	}
+
+	return nil
+}
+
+// Decode decodes one SILK frame of mono or stereo audio.
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.1
 func (d *Decoder) Decode(in []byte, out []float32, isStereo bool, nanoseconds int, bandwidth Bandwidth) error { // nolint:lll
 	frameCount := silkFrameCount(nanoseconds)
@@ -2091,29 +2349,40 @@ func (d *Decoder) Decode(in []byte, out []float32, isStereo bool, nanoseconds in
 
 	sfCount := subframeCount(silkFrameNanoseconds)
 	subframeSize := d.samplesInSubframe(bandwidth)
+	channelCount := 1
+	if isStereo {
+		channelCount = 2
+	}
 	switch {
 	case frameCount == 0 || sfCount == 0:
 		return errUnsupportedSilkFrameDuration
-	case isStereo:
-		return errUnsupportedSilkStereo
-	case (subframeSize * sfCount * frameCount) > len(out):
+	case (subframeSize * sfCount * frameCount * channelCount) > len(out):
 		return errOutBufferTooSmall
 	}
 
 	d.rangeDecoder.Init(in)
 
-	voiceActivityDetected, lowBitRateRedundancy := d.decodeHeaderBits(frameCount)
-	if lowBitRateRedundancy {
+	midVoiceActivityDetected, midLowBitRateRedundancy := d.decodeHeaderBits(frameCount)
+	if midLowBitRateRedundancy {
 		return errUnsupportedSilkLowBitrateRedundancy
 	}
 
 	frameSampleCount := subframeSize * sfCount
-	for i := range frameCount {
-		frameOut := out[i*frameSampleCount : (i+1)*frameSampleCount]
-		if err := d.decodeFrame(frameOut, voiceActivityDetected[i], silkFrameNanoseconds, bandwidth, i == 0); err != nil {
-			return err
-		}
+	if !isStereo {
+		return d.decodeMono(out, midVoiceActivityDetected, frameSampleCount, silkFrameNanoseconds, bandwidth)
 	}
 
-	return nil
+	sideVoiceActivityDetected, sideLowBitRateRedundancy := d.decodeHeaderBits(frameCount)
+	if sideLowBitRateRedundancy {
+		return errUnsupportedSilkLowBitrateRedundancy
+	}
+
+	return d.decodeStereo(
+		out,
+		midVoiceActivityDetected,
+		sideVoiceActivityDetected,
+		frameSampleCount,
+		silkFrameNanoseconds,
+		bandwidth,
+	)
 }
