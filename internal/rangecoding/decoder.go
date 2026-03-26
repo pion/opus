@@ -20,25 +20,25 @@ package rangecoding
 // process, unlike corruption in the input to the range decoder.  Raw
 // bits are only used in the CELT layer.
 //
-//	 0                   1                   2                   3
-//	 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-//	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//	| Range coder data (packed MSB to LSB) ->                       :
-//	+                                                               +
-//	:                                                               :
-//	+     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//	:     | <- Boundary occurs at an arbitrary bit position         :
-//	+-+-+-+                                                         +
-//	:                          <- Raw bits data (packed LSB to MSB) |
-//	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//	          0                   1                   2                   3
+//	          0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+//	         +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//	         | Range coder data (packed MSB to LSB) ->                       :
+//	         +                                                               +
+//	         :                                                               :
+//	         +     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//	         :     | <- Boundary occurs at an arbitrary bit position         :
+//	         +-+-+-+                                                         +
+//	         :                          <- Raw bits data (packed LSB to MSB) |
+//	         +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 //
-//	Legend:
+//		Legend:
 //
-//	LSB = Least Significant Bit
-//	MSB = Most Significant Bit
+//		LSB = Least Significant Bit
+//		MSB = Most Significant Bit
 //
-//	     Figure 12: Illustrative Example of Packing Range Coder
-//	                        and Raw Bits Data
+//		     Figure 12: Illustrative Example of Packing Range Coder
+//		                        and Raw Bits Data
 //
 // Each symbol coded by the range coder is drawn from a finite alphabet
 // and coded in a separate "context", which describes the size of the
