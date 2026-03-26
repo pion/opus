@@ -4,7 +4,10 @@
 // Package silk provides a Silk coder
 package silk
 
-import "math"
+import (
+	"math"
+	"math/bits"
+)
 
 type (
 	// Bandwidth for Silk can be NB (narrowband) MB (medium-band) or WB (wideband).
@@ -71,6 +74,32 @@ func minInt16(a, b int16) int16 {
 	return a
 }
 
+func saturatingAddInt16(a, b int16) int16 {
+	sum := int32(a) + int32(b)
+
+	return int16(clamp(math.MinInt16, sum, math.MaxInt16))
+}
+
+func saturatingSubInt32(a, b int32) int32 {
+	diff := int64(a) - int64(b)
+	if diff > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	if diff < math.MinInt32 {
+		return math.MinInt32
+	}
+
+	return int32(diff)
+}
+
+func absInt32(v int32) int32 {
+	if v < 0 {
+		return -v
+	}
+
+	return v
+}
+
 func clamp(low, in, high int32) int32 {
 	if in > high {
 		return high
@@ -121,6 +150,80 @@ func ilog(n int) int {
 	}
 
 	return int(math.Floor(math.Log2(float64(n)))) + 1
+}
+
+func clz32(in int32) int {
+	return bits.LeadingZeros32(uint32(in))
+}
+
+func rshiftRound64(a int64, shift int) int64 {
+	if shift == 1 {
+		return (a >> 1) + (a & 1)
+	}
+
+	return ((a >> (shift - 1)) + 1) >> 1
+}
+
+func rshiftRound32(a int32, shift int) int32 {
+	if shift == 1 {
+		return (a >> 1) + (a & 1)
+	}
+
+	return ((a >> (shift - 1)) + 1) >> 1
+}
+
+func smmul(a, b int32) int32 {
+	return int32((int64(a) * int64(b)) >> 32)
+}
+
+func smulwb(a, b int32) int32 {
+	return int32((int64(a) * int64(int16(b))) >> 16)
+}
+
+func smulww(a, b int32) int32 {
+	return smulwb(a, b) + a*rshiftRound32(b, 16)
+}
+
+func smlaWW(a, b, c int32) int32 {
+	return a + smulwb(b, c) + b*rshiftRound32(c, 16)
+}
+
+// inverse32VarQ mirrors silk_INVERSE32_varQ() from the RFC 6716 C reference.
+func inverse32VarQ(b32 int32, qRes int) int32 {
+	bHeadrm := clz32(absInt32(b32)) - 1
+	b32Nrm := b32 << bHeadrm
+	b32Inv := (math.MaxInt32 >> 2) / (b32Nrm >> 16)
+	result := b32Inv << 16
+	errQ32 := ((1 << 29) - smulwb(b32Nrm, b32Inv)) << 3
+	result = smlaWW(result, errQ32, b32Inv)
+
+	lshift := 61 - bHeadrm - qRes
+	if lshift <= 0 {
+		shifted := int64(result) << -lshift
+		if shifted > math.MaxInt32 {
+			return math.MaxInt32
+		}
+		if shifted < math.MinInt32 {
+			return math.MinInt32
+		}
+
+		return int32(shifted)
+	}
+	if lshift < 32 {
+		return result >> lshift
+	}
+
+	return 0
+}
+
+// bwexpander32 mirrors silk_bwexpander_32() from the RFC 6716 C reference.
+func bwexpander32(ar []int32, chirpQ16 int32) {
+	chirpMinusOneQ16 := chirpQ16 - 65536
+	for i := 0; i < len(ar)-1; i++ {
+		ar[i] = smulww(chirpQ16, ar[i])
+		chirpQ16 += rshiftRound32(chirpQ16*chirpMinusOneQ16, 16)
+	}
+	ar[len(ar)-1] = smulww(chirpQ16, ar[len(ar)-1])
 }
 
 func subframeCount(nanoseconds int) int {
