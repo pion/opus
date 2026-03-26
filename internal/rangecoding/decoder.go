@@ -167,7 +167,7 @@ func (r *Decoder) getBit() uint32 {
 func (r *Decoder) getBits(n int) uint32 {
 	bits := uint32(0)
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if i != 0 {
 			bits <<= 1
 		}
