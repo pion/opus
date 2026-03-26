@@ -598,11 +598,14 @@ func (d *Decoder) normalizeLSFInterpolation(n2Q15 []int16, nanoseconds int) (n1Q
 	if wQ2 == 4 || !d.haveDecoded {
 		return nil, wQ2
 	}
+	if len(d.n0Q15) != len(n2Q15) {
+		return nil, wQ2
+	}
 
 	n1Q15 = make([]int16, len(n2Q15))
 	for k := range n1Q15 {
-		interpolated := int32(wQ2) * (int32(n2Q15[k]) - int32(d.n0Q15[k])) >> 2
-		n1Q15[k] = int16(int32(d.n0Q15[k]) + interpolated) //nolint:gosec // G115
+		interpolated := int32(wQ2) * (int32(n2Q15[k]) - int32(d.n0Q15[k])) >> 2 //nolint:gosec // G602
+		n1Q15[k] = int16(int32(d.n0Q15[k]) + interpolated)                      //nolint:gosec // G115
 	}
 
 	return
@@ -1229,7 +1232,7 @@ func (d *Decoder) limitLPCCoefficientsRange(a32Q17 []int32) {
 			//           sc_Q16[k+1] = (sc_Q16[0]*sc_Q16[k] + 32768) >> 16
 			//
 			// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.7
-				expandLPCCoefficientsBandwidth(a32Q17, int32(scQ16)) //nolint:gosec // G115
+			expandLPCCoefficientsBandwidth(a32Q17, int32(scQ16)) //nolint:gosec // G115
 		} else {
 			break
 		}
@@ -1277,7 +1280,7 @@ func (d *Decoder) limitLPCFilterPredictionGain(a32Q17 []int32) (aQ12 []float32) 
 	for n := range a32Q17 {
 		aQ12Int[n] = int16((a32Q17[n] + 16) >> 5) //nolint:gosec // G115
 	}
-	for i := 0; i < 16; i++ {
+	for i := range 16 {
 		if lpcInversePredictionGain(aQ12Int) >= 107374 {
 			break
 		}
@@ -1289,7 +1292,7 @@ func (d *Decoder) limitLPCFilterPredictionGain(a32Q17 []int32) (aQ12 []float32) 
 		// expansion we re-quantize to Q12 before checking stability again,
 		// because the C reference measures the gain on the exact coefficients
 		// used by reconstruction.
-			expandLPCCoefficientsBandwidth(a32Q17, int32(65536-(2<<i)))
+		expandLPCCoefficientsBandwidth(a32Q17, int32(65536-(2<<i)))
 		for n := range a32Q17 {
 			aQ12Int[n] = int16((a32Q17[n] + 16) >> 5) //nolint:gosec // G115
 		}
@@ -1300,9 +1303,10 @@ func (d *Decoder) limitLPCFilterPredictionGain(a32Q17 []int32) (aQ12 []float32) 
 		aQ12[n] = float32(aQ12Int[n])
 	}
 
-	return
+	return aQ12
 }
 
+//nolint:cyclop
 func lpcInversePredictionGain(aQ12 []int16) int32 {
 	const (
 		inversePredictionGainQA     = 24
@@ -1313,7 +1317,7 @@ func lpcInversePredictionGain(aQ12 []int16) int32 {
 	var atmpQA [2][16]int32
 	aNewQA := atmpQA[order&1][:]
 	dcResp := int32(0)
-	for k := 0; k < order; k++ {
+	for k := range order {
 		dcResp += int32(aQ12[k])
 		aNewQA[k] = int32(aQ12[k]) << (inversePredictionGainQA - 12)
 	}
@@ -1328,27 +1332,30 @@ func lpcInversePredictionGain(aQ12 []int16) int32 {
 	}
 
 	invGainQ30 := int32(1 << 30)
-	for k := order - 1; k > 0; k-- {
+	for coefIndex := order - 1; coefIndex > 0; coefIndex-- {
 		// This is the fixed-point Levinson recurrence from RFC 6716 section
 		// 4.2.7.5.8. The code intentionally mirrors
 		// silk_LPC_inverse_pred_gain_QA() in LPC_inv_pred_gain.c, including
 		// the Q24/Q30 scaling, the reflection-coefficient stability checks,
 		// and the saturating numerator update, because tiny arithmetic
 		// differences here can flip a filter from stable to unstable.
-		if aNewQA[k] > inversePredictionGainALimit || aNewQA[k] < -inversePredictionGainALimit {
+		if aNewQA[coefIndex] > inversePredictionGainALimit || aNewQA[coefIndex] < -inversePredictionGainALimit {
 			return 0
 		}
 
-		rcQ31 := -(aNewQA[k] << (31 - inversePredictionGainQA))
+		rcQ31 := -(aNewQA[coefIndex] << (31 - inversePredictionGainQA))
 		rcMult1Q30 := int32(1<<30) - smmul(rcQ31, rcQ31)
 		mult2Q := 32 - clz32(absInt32(rcMult1Q30))
 		rcMult2 := inverse32VarQ(rcMult1Q30, mult2Q+30)
 		invGainQ30 = smmul(invGainQ30, rcMult1Q30) << 2
 
 		aOldQA := aNewQA
-		aNewQA = atmpQA[k&1][:]
-		for n := 0; n < k; n++ {
-			tmpQA := saturatingSubInt32(aOldQA[n], int32(rshiftRound64(int64(aOldQA[k-n-1])*int64(rcQ31), 31)))
+		aNewQA = atmpQA[coefIndex&1][:]
+		for n := 0; n < coefIndex; n++ {
+			tmpQA := saturatingSubInt32(
+				aOldQA[n],
+				int32(rshiftRound64(int64(aOldQA[coefIndex-n-1])*int64(rcQ31), 31)), //nolint:gosec // G115
+			)
 			tmp64 := rshiftRound64(int64(tmpQA)*int64(rcMult2), mult2Q)
 			if tmp64 > math.MaxInt32 || tmp64 < math.MinInt32 {
 				return 0
@@ -1658,7 +1665,7 @@ func (d *Decoder) ltpSynthesis(
 	// then let out_end be set to (j - (s-2)*n) and let LTP_scale_Q14 be set
 	// to 16384.  Otherwise, set out_end to (j - s*n) and set LTP_scale_Q14
 	// to the Q14 LTP scaling value from Section 4.2.7.6.3.
-	var out_end int //nolint:staticcheck,var-naming,revive
+	var out_end int //nolint:staticcheck,revive
 	if s < 2 || wQ2 == 4 {
 		out_end = -s * n
 	} else {

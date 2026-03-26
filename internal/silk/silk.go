@@ -81,7 +81,7 @@ func minInt16(a, b int16) int16 {
 func saturatingAddInt16(a, b int16) int16 {
 	sum := int32(a) + int32(b)
 
-	return int16(clamp(math.MinInt16, sum, math.MaxInt16))
+	return int16(clamp(math.MinInt16, sum, math.MaxInt16)) //nolint:gosec // G115
 }
 
 // saturatingSubInt32 mirrors silk_SUB_SAT32() from the RFC 6716 C macros.
@@ -161,7 +161,7 @@ func ilog(n int) int {
 }
 
 func clz32(in int32) int {
-	return bits.LeadingZeros32(uint32(in))
+	return bits.LeadingZeros32(uint32(in)) //nolint:gosec // G115
 }
 
 // rshiftRound64 mirrors silk_RSHIFT_ROUND64() from the RFC 6716 C macros.
@@ -176,8 +176,8 @@ func rshiftRound64(a int64, shift int) int64 {
 }
 
 // rshiftRound32 mirrors silk_RSHIFT_ROUND() from the RFC 6716 C macros.
-// This is used by the bandwidth expander and multiply helpers to match the
-// reference fixed-point rounding behavior.
+// This is used by the multiply helpers to match the reference fixed-point
+// rounding behavior.
 func rshiftRound32(a int32, shift int) int32 {
 	if shift == 1 {
 		return (a >> 1) + (a & 1)
@@ -190,14 +190,14 @@ func rshiftRound32(a int32, shift int) int32 {
 // 32 bits of a signed 32x32 multiply. RFC 6716 section 4.2.7.5.8 expresses
 // several of the LPC inverse-gain updates in terms of this operation.
 func smmul(a, b int32) int32 {
-	return int32((int64(a) * int64(b)) >> 32)
+	return int32((int64(a) * int64(b)) >> 32) //nolint:gosec // G115
 }
 
 // smulwb mirrors silk_SMULWB() from the RFC 6716 C macros. It multiplies a
 // 32-bit value by the low 16 bits of another 32-bit value and is one half of
 // the reference implementation's SMULWW/SMLAWW decomposition.
 func smulwb(a, b int32) int32 {
-	return int32((int64(a) * int64(int16(b))) >> 16)
+	return int32((int64(a) * int64(int16(b))) >> 16) //nolint:gosec // G115
 }
 
 // smlaWW mirrors silk_SMLAWW() from the RFC 6716 C macros. The inverse helper
@@ -242,7 +242,7 @@ func inverse32VarQ(b32 int32, qRes int) int32 {
 // same recurrence with a fixed chirp sequence for prediction-gain limiting.
 func expandLPCCoefficientsBandwidth(ar []int32, chirpQ16 int32) {
 	initialChirpQ16 := chirpQ16
-	for i := 0; i < len(ar); i++ {
+	for i := range ar {
 		ar[i] = int32((int64(ar[i]) * int64(chirpQ16)) >> 16) //nolint:gosec // G115
 		if i+1 < len(ar) {
 			chirpQ16 = int32((int64(initialChirpQ16)*int64(chirpQ16) + 32768) >> 16) //nolint:gosec // G115
