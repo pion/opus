@@ -200,13 +200,6 @@ func smulwb(a, b int32) int32 {
 	return int32((int64(a) * int64(int16(b))) >> 16)
 }
 
-// smulww mirrors silk_SMULWW() from the RFC 6716 C macros. The branch uses
-// this in bwexpander32() so the chirp recurrence matches
-// silk_bwexpander_32() instead of using a plain 32-bit multiply.
-func smulww(a, b int32) int32 {
-	return smulwb(a, b) + a*rshiftRound32(b, 16)
-}
-
 // smlaWW mirrors silk_SMLAWW() from the RFC 6716 C macros. The inverse helper
 // uses it for the Newton-Raphson refinement step in silk_INVERSE32_varQ().
 func smlaWW(a, b, c int32) int32 {
@@ -244,16 +237,17 @@ func inverse32VarQ(b32 int32, qRes int) int32 {
 	return 0
 }
 
-// bwexpander32 mirrors silk_bwexpander_32() from the RFC 6716 C reference
-// (bwexpander_32.c). RFC 6716 sections 4.2.7.5.7 and 4.2.7.5.8 both rely on
-// this exact chirp recurrence for bandwidth expansion.
-func bwexpander32(ar []int32, chirpQ16 int32) {
-	chirpMinusOneQ16 := chirpQ16 - 65536
-	for i := 0; i < len(ar)-1; i++ {
-		ar[i] = smulww(chirpQ16, ar[i])
-		chirpQ16 += rshiftRound32(chirpQ16*chirpMinusOneQ16, 16)
+// expandLPCCoefficientsBandwidth applies the RFC 6716 section 4.2.7.5.7
+// bandwidth expansion recurrence directly in Go. Section 4.2.7.5.8 reuses the
+// same recurrence with a fixed chirp sequence for prediction-gain limiting.
+func expandLPCCoefficientsBandwidth(ar []int32, chirpQ16 int32) {
+	initialChirpQ16 := chirpQ16
+	for i := 0; i < len(ar); i++ {
+		ar[i] = int32((int64(ar[i]) * int64(chirpQ16)) >> 16) //nolint:gosec // G115
+		if i+1 < len(ar) {
+			chirpQ16 = int32((int64(initialChirpQ16)*int64(chirpQ16) + 32768) >> 16) //nolint:gosec // G115
+		}
 	}
-	ar[len(ar)-1] = smulww(chirpQ16, ar[len(ar)-1])
 }
 
 func subframeCount(nanoseconds int) int {
