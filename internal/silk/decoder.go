@@ -1826,8 +1826,13 @@ func (d *Decoder) lpcSynthesis(
 			switch {
 			case lpcIndex >= 0:
 				currentLPCVal = lpc[lpcIndex]
-			case i < len(d.previousFrameLPCValues) && s == 0:
-				currentLPCVal = d.previousFrameLPCValues[len(d.previousFrameLPCValues)-1+(i-k)]
+			case s == 0:
+				previousIndex := len(d.previousFrameLPCValues) - 1 + (i - k)
+				if previousIndex >= 0 {
+					currentLPCVal = d.previousFrameLPCValues[previousIndex]
+				} else {
+					currentLPCVal = 0
+				}
 			default:
 				currentLPCVal = 0
 			}

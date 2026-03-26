@@ -480,6 +480,25 @@ func TestDecodePitchLags(t *testing.T) {
 	assert.Equal(t, []int{206, 206, 206, 206}, pitchLags)
 }
 
+func TestLPCSynthesisWithShorterPreviousHistory(t *testing.T) {
+	d := &Decoder{
+		previousFrameLPCValues: make([]float32, 10),
+	}
+
+	assert.NotPanics(t, func() {
+		d.lpcSynthesis(
+			make([]float32, 80),
+			80,
+			0,
+			16,
+			make([]float32, 16),
+			make([]float32, 80),
+			[]float32{65536},
+			make([]float32, 80),
+		)
+	})
+}
+
 func TestDecodePitchLagsRelative(t *testing.T) {
 	d := &Decoder{
 		rangeDecoder:          createRangeDecoder(nil, 0, 256, 208),
