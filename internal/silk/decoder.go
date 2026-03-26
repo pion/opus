@@ -564,7 +564,7 @@ func (d *Decoder) normalizeLSFStabilization(nlsfQ15 []int16, dLPC int, bandwidth
 			prevNLSF = nlsfQ15[k-1] // #nosec G602
 		}
 
-		nlsfQ15[k] = maxInt16(nlsfQ15[k], prevNLSF+int16(NDeltaMinQ15[k])) //nolint:gosec // G115
+		nlsfQ15[k] = maxInt16(nlsfQ15[k], saturatingAddInt16(prevNLSF, int16(NDeltaMinQ15[k]))) //nolint:gosec // G115
 	}
 
 	// Next, for each value of k from d_LPC-1 down to 0, NLSF_Q15[k] is set
@@ -598,10 +598,14 @@ func (d *Decoder) normalizeLSFInterpolation(n2Q15 []int16, nanoseconds int) (n1Q
 	if wQ2 == 4 || !d.haveDecoded {
 		return nil, wQ2
 	}
+	if len(d.n0Q15) != len(n2Q15) {
+		return nil, wQ2
+	}
 
 	n1Q15 = make([]int16, len(n2Q15))
 	for k := range n1Q15 {
-		n1Q15[k] = d.n0Q15[k] + (wQ2 * (n2Q15[k] - d.n0Q15[k]) >> 2)
+		interpolated := int32(wQ2) * (int32(n2Q15[k]) - int32(d.n0Q15[k])) >> 2 //nolint:gosec // G602
+		n1Q15[k] = int16(int32(d.n0Q15[k]) + interpolated)                      //nolint:gosec // G115
 	}
 
 	return
@@ -1215,26 +1219,20 @@ func (d *Decoder) limitLPCCoefficientsRange(a32Q17 []int32) {
 		//
 		// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.7
 		if maxabsQ12 > 32767 {
-			scQ16 := make([]uint, len(a32Q17))
+			scQ16 := uint(65470)
+			scQ16 -= ((maxabsQ12 - 32767) << 14) / ((maxabsQ12 * (maxabsQ17K + 1)) >> 2)
 
-			scQ16[0] = uint(65470)
-			scQ16[0] -= ((maxabsQ12 - 32767) << 14) / ((maxabsQ12 * (maxabsQ17K + 1)) >> 2)
-
-			// silk_bwexpander_32() (bwexpander_32.c) performs the bandwidth
-			// expansion (again, only when maxabs_Q12 is greater than 32767) using
-			// the following recurrence:
+			// RFC 6716 spells out the bandwidth expansion recurrence here as
+			// sc_Q16[k]. This branch keeps that recurrence as the shared Go
+			// implementation so the coefficient range limiter and the
+			// prediction-gain limiter use the same code path:
 			//
 			//            a32_Q17[k] = (a32_Q17[k]*sc_Q16[k]) >> 16
 			//
 			//           sc_Q16[k+1] = (sc_Q16[0]*sc_Q16[k] + 32768) >> 16
 			//
 			// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.7
-			for k := range a32Q17 {
-				a32Q17[k] = (a32Q17[k] * int32(scQ16[k])) >> 16 //nolint:gosec
-				if len(scQ16) <= k {
-					scQ16[k+1] = (scQ16[0]*scQ16[k] + 32768) >> 16
-				}
-			}
+			expandLPCCoefficientsBandwidth(a32Q17, int32(scQ16)) //nolint:gosec // G115
 		} else {
 			break
 		}
@@ -1245,10 +1243,13 @@ func (d *Decoder) limitLPCCoefficientsRange(a32Q17 []int32) {
 	//
 	//     a32_Q17[k] = clamp(-32768, (a32_Q17[k] + 16) >> 5, 32767) << 5
 	//
-	// Because this performs the actual saturation in the Q12 domain, but
-	// saturation is not performed if maxabs_Q12 drops to 32767 or less
-	// prior to the 10th round.
-	if bandwidthExpansionRound == 9 {
+	// RFC 6716 section 4.2.7.5.7 says the 10th bandwidth-expansion round is
+	// special: even if the coefficients would no longer overflow in Q12, the
+	// decoder still has to saturate them in Q12 and then convert them back to
+	// Q17 for the prediction-gain limiter. The extracted C reference does the
+	// same thing in silk_NLSF2A() (NLSF2A.c), so this branch follows that
+	// behavior exactly instead of stopping after the 9th expansion.
+	if bandwidthExpansionRound == 10 {
 		for k := range a32Q17 {
 			a32Q17[k] = clamp(-32768, (a32Q17[k]+16)>>5, 32767) << 5
 		}
@@ -1265,8 +1266,6 @@ func (d *Decoder) limitLPCCoefficientsRange(a32Q17 []int32) {
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.8
 func (d *Decoder) limitLPCFilterPredictionGain(a32Q17 []int32) (aQ12 []float32) {
-	aQ12 = make([]float32, len(a32Q17))
-
 	// However, silk_LPC_inverse_pred_gain_QA() approximates this using
 	// fixed-point arithmetic to guarantee reproducible results across
 	// platforms and implementations.  Since small changes in the
@@ -1277,11 +1276,103 @@ func (d *Decoder) limitLPCFilterPredictionGain(a32Q17 []int32) (aQ12 []float32) 
 	//     a32_Q12[n] = (a32_Q17[n] + 16) >> 5
 	//
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.8
+	aQ12Int := make([]int16, len(a32Q17))
 	for n := range a32Q17 {
-		aQ12[n] = float32((a32Q17[n] + 16) >> 5)
+		aQ12Int[n] = int16((a32Q17[n] + 16) >> 5) //nolint:gosec // G115
+	}
+	for i := range 16 {
+		if lpcInversePredictionGain(aQ12Int) >= 107374 {
+			break
+		}
+
+		// RFC 6716 section 4.2.7.5.8 applies up to 16 more rounds of bandwidth
+		// expansion when the inverse prediction gain is too small. The chirp
+		// factor starts at 65534 and decreases as 65536 - (2 << i), which is
+		// the same sequence used by silk_NLSF2A() in NLSF2A.c. After each
+		// expansion we re-quantize to Q12 before checking stability again,
+		// because the C reference measures the gain on the exact coefficients
+		// used by reconstruction.
+		expandLPCCoefficientsBandwidth(a32Q17, int32(65536-(2<<i)))
+		for n := range a32Q17 {
+			aQ12Int[n] = int16((a32Q17[n] + 16) >> 5) //nolint:gosec // G115
+		}
 	}
 
-	return
+	aQ12 = make([]float32, len(aQ12Int))
+	for n := range aQ12Int {
+		aQ12[n] = float32(aQ12Int[n])
+	}
+
+	return aQ12
+}
+
+//nolint:cyclop
+func lpcInversePredictionGain(aQ12 []int16) int32 {
+	const (
+		inversePredictionGainQA     = 24
+		inversePredictionGainALimit = 16773022
+	)
+
+	order := len(aQ12)
+	var atmpQA [2][16]int32
+	aNewQA := atmpQA[order&1][:]
+	dcResp := int32(0)
+	for k := range order {
+		dcResp += int32(aQ12[k])
+		aNewQA[k] = int32(aQ12[k]) << (inversePredictionGainQA - 12)
+	}
+	// RFC 6716 section 4.2.7.5.8 has two prose mismatches here: it spells
+	// the summation bound as d_PLC instead of d_LPC, and it says the filter is
+	// unstable when "DC_resp > 4096". The extracted C reference in
+	// silk_LPC_inverse_pred_gain() (LPC_inv_pred_gain.c) sums over the LPC
+	// order and rejects DC_resp >= 4096, and RFC 6716 section 6 says the
+	// reference source takes precedence for conformance.
+	if dcResp >= 4096 {
+		return 0
+	}
+
+	invGainQ30 := int32(1 << 30)
+	for coefIndex := order - 1; coefIndex > 0; coefIndex-- {
+		// This is the fixed-point Levinson recurrence from RFC 6716 section
+		// 4.2.7.5.8. The code intentionally mirrors
+		// silk_LPC_inverse_pred_gain_QA() in LPC_inv_pred_gain.c, including
+		// the Q24/Q30 scaling, the reflection-coefficient stability checks,
+		// and the saturating numerator update, because tiny arithmetic
+		// differences here can flip a filter from stable to unstable.
+		if aNewQA[coefIndex] > inversePredictionGainALimit || aNewQA[coefIndex] < -inversePredictionGainALimit {
+			return 0
+		}
+
+		rcQ31 := -(aNewQA[coefIndex] << (31 - inversePredictionGainQA))
+		rcMult1Q30 := int32(1<<30) - smmul(rcQ31, rcQ31)
+		mult2Q := 32 - clz32(absInt32(rcMult1Q30))
+		rcMult2 := inverse32VarQ(rcMult1Q30, mult2Q+30)
+		invGainQ30 = smmul(invGainQ30, rcMult1Q30) << 2
+
+		aOldQA := aNewQA
+		aNewQA = atmpQA[coefIndex&1][:]
+		for n := 0; n < coefIndex; n++ {
+			tmpQA := saturatingSubInt32(
+				aOldQA[n],
+				int32(rshiftRound64(int64(aOldQA[coefIndex-n-1])*int64(rcQ31), 31)), //nolint:gosec // G115
+			)
+			tmp64 := rshiftRound64(int64(tmpQA)*int64(rcMult2), mult2Q)
+			if tmp64 > math.MaxInt32 || tmp64 < math.MinInt32 {
+				return 0
+			}
+			aNewQA[n] = int32(tmp64)
+		}
+	}
+
+	if aNewQA[0] > inversePredictionGainALimit || aNewQA[0] < -inversePredictionGainALimit {
+		return 0
+	}
+
+	rcQ31 := -(aNewQA[0] << (31 - inversePredictionGainQA))
+	rcMult1Q30 := int32(1<<30) - smmul(rcQ31, rcQ31)
+	invGainQ30 = smmul(invGainQ30, rcMult1Q30) << 2
+
+	return invGainQ30
 }
 
 func pitchLagCodebooks(bandwidth Bandwidth) (lowPartICDF []uint, lagScale, lagMin, lagMax uint32) {
@@ -1574,7 +1665,7 @@ func (d *Decoder) ltpSynthesis(
 	// then let out_end be set to (j - (s-2)*n) and let LTP_scale_Q14 be set
 	// to 16384.  Otherwise, set out_end to (j - s*n) and set LTP_scale_Q14
 	// to the Q14 LTP scaling value from Section 4.2.7.6.3.
-	var out_end int //nolint:staticcheck,var-naming,revive
+	var out_end int //nolint:staticcheck,revive
 	if s < 2 || wQ2 == 4 {
 		out_end = -s * n
 	} else {
@@ -1735,8 +1826,13 @@ func (d *Decoder) lpcSynthesis(
 			switch {
 			case lpcIndex >= 0:
 				currentLPCVal = lpc[lpcIndex]
-			case i < len(d.previousFrameLPCValues) && s == 0:
-				currentLPCVal = d.previousFrameLPCValues[len(d.previousFrameLPCValues)-1+(i-k)]
+			case s == 0:
+				previousIndex := len(d.previousFrameLPCValues) - 1 + (i - k)
+				if previousIndex >= 0 {
+					currentLPCVal = d.previousFrameLPCValues[previousIndex]
+				} else {
+					currentLPCVal = 0
+				}
 			default:
 				currentLPCVal = 0
 			}
@@ -1756,7 +1852,12 @@ func (d *Decoder) lpcSynthesis(
 		// (j + n - d_LPC) <= i < (j + n), to feed into the LPC synthesis of the
 		// next subframe.  This requires storage for up to 16 values of lpc[i]
 		// (for WB frames).
-		if len(out)-1 == i && d.haveDecoded {
+		// The final d_LPC synthesized samples become the history for the next
+		// subframe. RFC 6716 section 4.2.7.9 describes that continuity
+		// requirement, and decode_frame.c preserves this state even for the
+		// first decoded frame. The old haveDecoded guard skipped that initial
+		// handoff and left the next frame with an all-zero LPC history.
+		if len(out)-1 == i {
 			d.previousFrameLPCValues = append([]float32{}, lpc[len(lpc)-dLPC:]...)
 		}
 	}
