@@ -508,17 +508,17 @@ func TestDecodeLTPScalingParameter(t *testing.T) {
 			0x6b, 0x71, 0xa4, 0x03, 0x70, 0xbf,
 		}
 		d := &Decoder{rangeDecoder: createRangeDecoder(silkFrame, 105, 160412192, 164623240)}
-		assert.Equal(t, float32(15565.0), d.decodeLTPScalingParamater(frameSignalTypeVoiced, true))
+		assert.Equal(t, float32(15565.0), d.decodeLTPScalingParameter(frameSignalTypeVoiced, true))
 	})
 
 	t.Run("Unvoiced", func(t *testing.T) {
 		d := &Decoder{}
-		assert.Equal(t, float32(15565.0), d.decodeLTPScalingParamater(frameSignalTypeUnvoiced, true))
+		assert.Equal(t, float32(15565.0), d.decodeLTPScalingParameter(frameSignalTypeUnvoiced, true))
 	})
 
 	t.Run("Subsequent voiced", func(t *testing.T) {
 		d := &Decoder{}
-		assert.Equal(t, float32(15565.0), d.decodeLTPScalingParamater(frameSignalTypeVoiced, false))
+		assert.Equal(t, float32(15565.0), d.decodeLTPScalingParameter(frameSignalTypeVoiced, false))
 	})
 }
 
