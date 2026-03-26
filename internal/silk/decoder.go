@@ -1229,7 +1229,7 @@ func (d *Decoder) limitLPCCoefficientsRange(a32Q17 []int32) {
 			//           sc_Q16[k+1] = (sc_Q16[0]*sc_Q16[k] + 32768) >> 16
 			//
 			// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.7
-			expandLPCCoefficientsBandwidth(a32Q17, int32(scQ16)) //nolint:gosec // G115
+				expandLPCCoefficientsBandwidth(a32Q17, int32(scQ16)) //nolint:gosec // G115
 		} else {
 			break
 		}
@@ -1289,7 +1289,7 @@ func (d *Decoder) limitLPCFilterPredictionGain(a32Q17 []int32) (aQ12 []float32) 
 		// expansion we re-quantize to Q12 before checking stability again,
 		// because the C reference measures the gain on the exact coefficients
 		// used by reconstruction.
-		expandLPCCoefficientsBandwidth(a32Q17, int32(65536-(2<<i)))
+			expandLPCCoefficientsBandwidth(a32Q17, int32(65536-(2<<i)))
 		for n := range a32Q17 {
 			aQ12Int[n] = int16((a32Q17[n] + 16) >> 5) //nolint:gosec // G115
 		}
@@ -1306,7 +1306,7 @@ func (d *Decoder) limitLPCFilterPredictionGain(a32Q17 []int32) (aQ12 []float32) 
 func lpcInversePredictionGain(aQ12 []int16) int32 {
 	const (
 		inversePredictionGainQA     = 24
-		inversePredictionGainALimit = 16773023
+		inversePredictionGainALimit = 16773022
 	)
 
 	order := len(aQ12)
@@ -1317,12 +1317,24 @@ func lpcInversePredictionGain(aQ12 []int16) int32 {
 		dcResp += int32(aQ12[k])
 		aNewQA[k] = int32(aQ12[k]) << (inversePredictionGainQA - 12)
 	}
+	// RFC 6716 section 4.2.7.5.8 has two prose mismatches here: it spells
+	// the summation bound as d_PLC instead of d_LPC, and it says the filter is
+	// unstable when "DC_resp > 4096". The extracted C reference in
+	// silk_LPC_inverse_pred_gain() (LPC_inv_pred_gain.c) sums over the LPC
+	// order and rejects DC_resp >= 4096, and RFC 6716 section 6 says the
+	// reference source takes precedence for conformance.
 	if dcResp >= 4096 {
 		return 0
 	}
 
 	invGainQ30 := int32(1 << 30)
 	for k := order - 1; k > 0; k-- {
+		// This is the fixed-point Levinson recurrence from RFC 6716 section
+		// 4.2.7.5.8. The code intentionally mirrors
+		// silk_LPC_inverse_pred_gain_QA() in LPC_inv_pred_gain.c, including
+		// the Q24/Q30 scaling, the reflection-coefficient stability checks,
+		// and the saturating numerator update, because tiny arithmetic
+		// differences here can flip a filter from stable to unstable.
 		if aNewQA[k] > inversePredictionGainALimit || aNewQA[k] < -inversePredictionGainALimit {
 			return 0
 		}
@@ -1828,6 +1840,11 @@ func (d *Decoder) lpcSynthesis(
 		// (j + n - d_LPC) <= i < (j + n), to feed into the LPC synthesis of the
 		// next subframe.  This requires storage for up to 16 values of lpc[i]
 		// (for WB frames).
+		// The final d_LPC synthesized samples become the history for the next
+		// subframe. RFC 6716 section 4.2.7.9 describes that continuity
+		// requirement, and decode_frame.c preserves this state even for the
+		// first decoded frame. The old haveDecoded guard skipped that initial
+		// handoff and left the next frame with an all-zero LPC history.
 		if len(out)-1 == i {
 			d.previousFrameLPCValues = append([]float32{}, lpc[len(lpc)-dLPC:]...)
 		}

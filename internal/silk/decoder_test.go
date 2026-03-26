@@ -177,6 +177,18 @@ func TestNormalizeLSFInterpolation(t *testing.T) {
 		actualN2Q15, _ := decoder.normalizeLSFInterpolation(n2Q15, nanoseconds20Ms)
 		assert.Equal(t, expectedN1Q15, actualN2Q15)
 	})
+
+	t.Run("wQ2 == 3 does not overflow int16 arithmetic", func(t *testing.T) {
+		decoder := &Decoder{
+			rangeDecoder: createRangeDecoder(nil, 0, 256, 190),
+			haveDecoded:  true,
+			n0Q15:        []int16{0},
+		}
+
+		actualN1Q15, actualWQ2 := decoder.normalizeLSFInterpolation([]int16{32767}, nanoseconds20Ms)
+		assert.Equal(t, int16(3), actualWQ2)
+		assert.Equal(t, []int16{24575}, actualN1Q15)
+	})
 }
 
 func TestConvertNormalizedLSFsToLPCCoefficients(t *testing.T) {
@@ -197,16 +209,27 @@ func TestConvertNormalizedLSFsToLPCCoefficients(t *testing.T) {
 }
 
 func TestLimitLPCCoefficientsRange(t *testing.T) {
-	d := &Decoder{}
-	A32Q17 := []int32{
-		12974, 9765, 4176, 3646, -3766, -4429, -2292, -4663,
-		-3441, -3848, -4493, -1614, -1960, -3112, -2153, -2898,
-	}
-	expectedLimited := append([]int32(nil), A32Q17...)
+	t.Run("already in range", func(t *testing.T) {
+		d := &Decoder{}
+		A32Q17 := []int32{
+			12974, 9765, 4176, 3646, -3766, -4429, -2292, -4663,
+			-3441, -3848, -4493, -1614, -1960, -3112, -2153, -2898,
+		}
+		expectedLimited := append([]int32(nil), A32Q17...)
 
-	d.limitLPCCoefficientsRange(A32Q17)
+		d.limitLPCCoefficientsRange(A32Q17)
 
-	assert.Equal(t, expectedLimited, A32Q17)
+		assert.Equal(t, expectedLimited, A32Q17)
+	})
+
+	t.Run("bandwidth expansion updates every chirp factor", func(t *testing.T) {
+		d := &Decoder{}
+		A32Q17 := []int32{2000000, 1500000, -1200000, 900000}
+
+		d.limitLPCCoefficientsRange(A32Q17)
+
+		assert.Equal(t, []int32{1046539, 410705, -171937, 67483}, A32Q17)
+	})
 }
 
 func TestExcitation(t *testing.T) {
@@ -248,20 +271,34 @@ func TestExcitation(t *testing.T) {
 }
 
 func TestLimitLPCFilterPredictionGain(t *testing.T) {
-	d := &Decoder{}
+	t.Run("stable coefficients", func(t *testing.T) {
+		d := &Decoder{}
 
-	a32Q17 := []int32{
-		12974, 9765, 4176, 3646, -3766, -4429, -2292, -4663, -3441, -3848,
-		-4493, -1614, -1960, -3112, -2153, -2898,
-	}
+		a32Q17 := []int32{
+			12974, 9765, 4176, 3646, -3766, -4429, -2292, -4663, -3441, -3848,
+			-4493, -1614, -1960, -3112, -2153, -2898,
+		}
 
-	expectedAQ12 := []float32{
-		405, 305, 131, 114, -118, -138, -72, -146, -108, -120, -140, -50, -61,
-		-97, -67, -91,
-	}
+		expectedAQ12 := []float32{
+			405, 305, 131, 114, -118, -138, -72, -146, -108, -120, -140, -50, -61,
+			-97, -67, -91,
+		}
 
-	aQ12 := d.limitLPCFilterPredictionGain(a32Q17)
-	assert.Equal(t, aQ12, expectedAQ12)
+		aQ12 := d.limitLPCFilterPredictionGain(a32Q17)
+		assert.Equal(t, aQ12, expectedAQ12)
+	})
+
+	t.Run("re-quantizes after the final bandwidth expansion round", func(t *testing.T) {
+		d := &Decoder{}
+
+		a32Q17 := []int32{
+			1102852, 136167, -791773, 138666, -832129,
+			-874422, 291321, 470182, 1637922, 401952,
+		}
+
+		aQ12 := d.limitLPCFilterPredictionGain(a32Q17)
+		assert.Equal(t, []float32{0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, aQ12)
+	})
 }
 
 func TestLPCSynthesis(t *testing.T) { //nolint:lll

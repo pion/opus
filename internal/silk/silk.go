@@ -74,12 +74,20 @@ func minInt16(a, b int16) int16 {
 	return a
 }
 
+// saturatingAddInt16 mirrors silk_ADD_SAT16() from the RFC 8251 update to
+// NLSF_stabilize.c. RFC 8251 section 7 changed this addition to saturate
+// instead of wrapping, and this helper keeps that behavior explicit at the
+// call site in normalizeLSFStabilization().
 func saturatingAddInt16(a, b int16) int16 {
 	sum := int32(a) + int32(b)
 
 	return int16(clamp(math.MinInt16, sum, math.MaxInt16))
 }
 
+// saturatingSubInt32 mirrors silk_SUB_SAT32() from the RFC 6716 C macros.
+// The LPC inverse-gain recurrence uses this for the numerator update in
+// silk_LPC_inverse_pred_gain_QA() (LPC_inv_pred_gain.c), where overflow must
+// clamp instead of wrap to preserve the reference stability decision.
 func saturatingSubInt32(a, b int32) int32 {
 	diff := int64(a) - int64(b)
 	if diff > math.MaxInt32 {
@@ -156,6 +164,9 @@ func clz32(in int32) int {
 	return bits.LeadingZeros32(uint32(in))
 }
 
+// rshiftRound64 mirrors silk_RSHIFT_ROUND64() from the RFC 6716 C macros.
+// The LPC gain limiter depends on this exact rounding rule when it converts
+// 64-bit products back down to fixed-point state.
 func rshiftRound64(a int64, shift int) int64 {
 	if shift == 1 {
 		return (a >> 1) + (a & 1)
@@ -164,6 +175,9 @@ func rshiftRound64(a int64, shift int) int64 {
 	return ((a >> (shift - 1)) + 1) >> 1
 }
 
+// rshiftRound32 mirrors silk_RSHIFT_ROUND() from the RFC 6716 C macros.
+// This is used by the bandwidth expander and multiply helpers to match the
+// reference fixed-point rounding behavior.
 func rshiftRound32(a int32, shift int) int32 {
 	if shift == 1 {
 		return (a >> 1) + (a & 1)
@@ -172,23 +186,37 @@ func rshiftRound32(a int32, shift int) int32 {
 	return ((a >> (shift - 1)) + 1) >> 1
 }
 
+// smmul mirrors silk_SMMUL() from the RFC 6716 C macros: it returns the high
+// 32 bits of a signed 32x32 multiply. RFC 6716 section 4.2.7.5.8 expresses
+// several of the LPC inverse-gain updates in terms of this operation.
 func smmul(a, b int32) int32 {
 	return int32((int64(a) * int64(b)) >> 32)
 }
 
+// smulwb mirrors silk_SMULWB() from the RFC 6716 C macros. It multiplies a
+// 32-bit value by the low 16 bits of another 32-bit value and is one half of
+// the reference implementation's SMULWW/SMLAWW decomposition.
 func smulwb(a, b int32) int32 {
 	return int32((int64(a) * int64(int16(b))) >> 16)
 }
 
+// smulww mirrors silk_SMULWW() from the RFC 6716 C macros. The branch uses
+// this in bwexpander32() so the chirp recurrence matches
+// silk_bwexpander_32() instead of using a plain 32-bit multiply.
 func smulww(a, b int32) int32 {
 	return smulwb(a, b) + a*rshiftRound32(b, 16)
 }
 
+// smlaWW mirrors silk_SMLAWW() from the RFC 6716 C macros. The inverse helper
+// uses it for the Newton-Raphson refinement step in silk_INVERSE32_varQ().
 func smlaWW(a, b, c int32) int32 {
 	return a + smulwb(b, c) + b*rshiftRound32(c, 16)
 }
 
-// inverse32VarQ mirrors silk_INVERSE32_varQ() from the RFC 6716 C reference.
+// inverse32VarQ mirrors silk_INVERSE32_varQ() from the RFC 6716 C reference
+// (Inlines.h). The LPC gain limiter uses this to approximate the reciprocal
+// of div_Q30 with the same normalization and refinement steps as the
+// reference decoder.
 func inverse32VarQ(b32 int32, qRes int) int32 {
 	bHeadrm := clz32(absInt32(b32)) - 1
 	b32Nrm := b32 << bHeadrm
@@ -216,7 +244,9 @@ func inverse32VarQ(b32 int32, qRes int) int32 {
 	return 0
 }
 
-// bwexpander32 mirrors silk_bwexpander_32() from the RFC 6716 C reference.
+// bwexpander32 mirrors silk_bwexpander_32() from the RFC 6716 C reference
+// (bwexpander_32.c). RFC 6716 sections 4.2.7.5.7 and 4.2.7.5.8 both rely on
+// this exact chirp recurrence for bandwidth expansion.
 func bwexpander32(ar []int32, chirpQ16 int32) {
 	chirpMinusOneQ16 := chirpQ16 - 65536
 	for i := 0; i < len(ar)-1; i++ {
