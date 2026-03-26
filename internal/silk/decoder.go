@@ -54,7 +54,7 @@ func NewDecoder() Decoder {
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.3
 func (d *Decoder) decodeHeaderBits(frameCount int) (voiceActivityDetected []bool, lowBitRateRedundancy bool) {
 	voiceActivityDetected = make([]bool, frameCount)
-	for i := 0; i < frameCount; i++ {
+	for i := range frameCount {
 		voiceActivityDetected[i] = d.rangeDecoder.DecodeSymbolLogP(1) == 1
 	}
 	lowBitRateRedundancy = d.rangeDecoder.DecodeSymbolLogP(1) == 1
@@ -131,7 +131,7 @@ func (d *Decoder) decodeSubframeQuantizations(
 	var logGain, deltaGainIndex, gainIndex int32
 	gainQ16 = make([]float32, subframeCount)
 
-	for subframeIndex := 0; subframeIndex < subframeCount; subframeIndex++ {
+	for subframeIndex := range subframeCount {
 		// The subframe gains are either coded independently, or relative to the
 		// gain from the most recent coded subframe in the same channel.
 		//
@@ -262,7 +262,7 @@ func (d *Decoder) normalizeLineSpectralFrequencyStageTwo(bandwidth Bandwidth, I1
 	}
 
 	I2 := make([]int8, len(codebook[0]))
-	for i := 0; i < len(I2); i++ {
+	for i := range I2 {
 		// the decoder reads a symbol using the PDF corresponding
 		// to I1 from either Table 17 or Table 18 and subtracts 4 from the
 		// result to give an index in the range -4 to 4, inclusive.
@@ -384,7 +384,7 @@ func (d *Decoder) normalizeLineSpectralFrequencyCoefficients(
 	// the following square-root approximation:
 	//
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.3
-	for k := 0; k < dLPC; k++ { //nolint:varnamelen
+	for k := range dLPC { //nolint:varnamelen
 		kMinusOne, kPlusOne := uint(0), uint(256) //nolint: revive
 		if k != 0 {
 			kMinusOne = cb1Q8[I1][k-1]
@@ -725,7 +725,7 @@ func (d *Decoder) convertNormalizedLSFsToLPCCoefficients(n1Q15 []int16, bandwidt
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.6
 
 	a32Q17 = make([]int32, len(n1Q15))
-	for k := 0; k < d2; k++ {
+	for k := range d2 {
 		a32Q17[k] = -(qQ16[k+1] - qQ16[k]) - (pQ16[k+1] + pQ16[k])
 		a32Q17[dLPC-k-1] = (qQ16[k+1] - qQ16[k]) - (pQ16[k+1] + pQ16[k])
 	}
@@ -809,7 +809,7 @@ func (d *Decoder) decodeRatelevel(voiceActivityDetected bool) uint32 {
 func (d *Decoder) decodePulseAndLSBCounts(shellblocks int, rateLevel uint32) (pulsecounts []uint8, lsbcounts []uint8) {
 	pulsecounts = make([]uint8, shellblocks)
 	lsbcounts = make([]uint8, shellblocks)
-	for i := 0; i < shellblocks; i++ {
+	for i := range shellblocks {
 		pulsecounts[i] = uint8(d.rangeDecoder.DecodeSymbolWithICDF(icdfPulseCount[rateLevel])) //nolint:gosec // g115
 
 		// The special value 17 indicates that this block
@@ -875,11 +875,11 @@ func (d *Decoder) decodePulseLocation(pulsecounts []uint8) (eRaw []int32) {
 		// of the split.  All remaining pulses must fall on the right side of
 		// the split.
 		d.partitionPulseCount(icdfPulseCountSplit16SamplePartitions, pulsecounts[i], samplePartition16)
-		for j := 0; j < 2; j++ {
+		for j := range 2 {
 			d.partitionPulseCount(icdfPulseCountSplit8SamplePartitions, samplePartition16[j], samplePartition8)
-			for k := 0; k < 2; k++ {
+			for k := range 2 {
 				d.partitionPulseCount(icdfPulseCountSplit4SamplePartitions, samplePartition8[k], samplePartition4)
-				for l := 0; l < 2; l++ {
+				for l := range 2 {
 					d.partitionPulseCount(icdfPulseCountSplit2SamplePartitions, samplePartition4[l], samplePartition2)
 					eRaw[eRawIndex] = int32(samplePartition2[0])
 					eRawIndex++
@@ -901,7 +901,7 @@ func (d *Decoder) decodePulseLocation(pulsecounts []uint8) (eRaw []int32) {
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8.4
 func (d *Decoder) decodeExcitationLSB(eRaw []int32, lsbcounts []uint8) {
-	for i := 0; i < len(eRaw); i++ {
+	for i := range eRaw {
 		for bit := uint8(0); bit < lsbcounts[i/pulsecountLargestPartitionSize]; bit++ {
 			eRaw[i] = (eRaw[i] << 1) | int32(d.rangeDecoder.DecodeSymbolWithICDF(icdfExcitationLSB)) //nolint:gosec // g115
 		}
@@ -920,7 +920,7 @@ func (d *Decoder) decodeExcitationSign(
 	quantizationOffsetType frameQuantizationOffsetType,
 	pulsecounts []uint8,
 ) {
-	for i := 0; i < len(eRaw); i++ {
+	for i := range eRaw {
 		// It then decodes a sign for all coefficients
 		// with a non-zero magnitude
 		//
@@ -1122,7 +1122,7 @@ func (d *Decoder) decodeExcitation(signalType frameSignalType, quantizationOffse
 	d.decodeExcitationSign(eRaw, signalType, quantizationOffsetType, pulsecounts)
 
 	eQ23 = make([]int32, len(eRaw))
-	for i := 0; i < len(eRaw); i++ {
+	for i := range eRaw {
 		// Additionally, let seed be the current pseudorandom seed, which is initialized to the
 		// value decoded from Section 4.2.7.7 for the first sample in the current SILK frame, and
 		// updated for each subsequent sample according to the procedure below.
@@ -1229,7 +1229,7 @@ func (d *Decoder) limitLPCCoefficientsRange(a32Q17 []int32) {
 			//           sc_Q16[k+1] = (sc_Q16[0]*sc_Q16[k] + 32768) >> 16
 			//
 			// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.7
-			for k := 0; k < len(a32Q17); k++ {
+			for k := range a32Q17 {
 				a32Q17[k] = (a32Q17[k] * int32(scQ16[k])) >> 16 //nolint:gosec
 				if len(scQ16) <= k {
 					scQ16[k+1] = (scQ16[0]*scQ16[k] + 32768) >> 16
@@ -1249,7 +1249,7 @@ func (d *Decoder) limitLPCCoefficientsRange(a32Q17 []int32) {
 	// saturation is not performed if maxabs_Q12 drops to 32767 or less
 	// prior to the 10th round.
 	if bandwidthExpansionRound == 9 {
-		for k := 0; k < len(a32Q17); k++ {
+		for k := range a32Q17 {
 			a32Q17[k] = clamp(-32768, (a32Q17[k]+16)>>5, 32767) << 5
 		}
 	}
@@ -1436,7 +1436,7 @@ func (d *Decoder) decodePitchLags(
 	//     pitch_lags[k] = clamp(lag_min, lag + lag_cb[contour_index][k],
 	//                           lag_max)
 	pitchLags = make([]int, subframeCount(nanoseconds))
-	for i := 0; i < len(pitchLags); i++ {
+	for i := range pitchLags {
 		pitchLags[i] = int(clamp(
 			int32(lagMin),                          //nolint:gosec
 			int32(lag+int(lagCb[contourIndex][i])), //nolint:gosec
@@ -1512,7 +1512,7 @@ func (d *Decoder) decodeLTPFilterCoefficients(signalType frameSignalType, subfra
 	// coded using the PDF from Table 38 corresponding to the periodicity
 	// index.  Tables 39 through 41 contain the corresponding filter taps as
 	// signed Q7 integers.
-	for i := 0; i < subframeCount; i++ {
+	for i := range subframeCount {
 		var filterIndiceIcdf []uint
 		switch periodicityIndex {
 		case 0:
@@ -1615,7 +1615,7 @@ func (d *Decoder) ltpSynthesis(
 			writeToLag = true
 		}
 
-		for k := 0; k < dLPC; k++ {
+		for k := range dLPC {
 			var outVal float32
 			if outIndex := index - k - 1; outIndex >= 0 {
 				outVal = out[outIndex]
@@ -1808,7 +1808,7 @@ func (d *Decoder) silkFrameReconstruction(
 
 	// subFrame be the index of the current subframe in this SILK frame
 	// (0 or 1 for 10 ms frames, or 0 to 3 for 20 ms frames)
-	for subFrame := 0; subFrame < subframeCount; subFrame++ {
+	for subFrame := range subframeCount {
 		// For 20 ms SILK frames, the first half of the frame (i.e., the first
 		// two subframes) may use normalized LSF coefficients that are
 		// interpolated between the decoded LSFs for the most recent coded frame
@@ -1986,10 +1986,7 @@ func (d *Decoder) saveFinalOutValues(out []float32) {
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.1
 func (d *Decoder) Decode(in []byte, out []float32, isStereo bool, nanoseconds int, bandwidth Bandwidth) error { // nolint:lll
 	frameCount := silkFrameCount(nanoseconds)
-	silkFrameNanoseconds := nanoseconds
-	if nanoseconds > nanoseconds20Ms {
-		silkFrameNanoseconds = nanoseconds20Ms
-	}
+	silkFrameNanoseconds := min(nanoseconds, nanoseconds20Ms)
 
 	sfCount := subframeCount(silkFrameNanoseconds)
 	subframeSize := d.samplesInSubframe(bandwidth)
@@ -2010,7 +2007,7 @@ func (d *Decoder) Decode(in []byte, out []float32, isStereo bool, nanoseconds in
 	}
 
 	frameSampleCount := subframeSize * sfCount
-	for i := 0; i < frameCount; i++ {
+	for i := range frameCount {
 		frameOut := out[i*frameSampleCount : (i+1)*frameSampleCount]
 		if err := d.decodeFrame(frameOut, voiceActivityDetected[i], silkFrameNanoseconds, bandwidth, i == 0); err != nil {
 			return err

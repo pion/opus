@@ -8,7 +8,7 @@ package resample
 func Up(in, out []float32, upsampleCount int) {
 	currIndex := 0
 	for i := range in {
-		for j := 0; j < upsampleCount; j++ {
+		for range upsampleCount {
 			out[currIndex] = in[i]
 			currIndex++
 		}

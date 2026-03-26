@@ -197,7 +197,7 @@ func parsePacketFramesCode3CBR(in []byte, offset, payloadEnd int, frameCount byt
 	}
 
 	frames := make([][]byte, 0, frameCount)
-	for i := 0; i < int(frameCount); i++ {
+	for range int(frameCount) {
 		frames = append(frames, in[offset:offset+frameSize])
 		offset += frameSize
 	}
@@ -207,7 +207,7 @@ func parsePacketFramesCode3CBR(in []byte, offset, payloadEnd int, frameCount byt
 
 func parsePacketFramesCode3VBR(in []byte, offset, payloadEnd int, frameCount byte) ([][]byte, error) {
 	frameSizes := make([]int, 0, frameCount)
-	for i := 0; i < int(frameCount)-1; i++ {
+	for range int(frameCount) - 1 {
 		// [R7] VBR Code 3 must have enough header bytes to decode each of the
 		// first M-1 frame lengths.
 		frameSize, bytesRead, err := parseFrameLength(in[offset:payloadEnd])

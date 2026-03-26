@@ -47,7 +47,7 @@ func loadTestOgg(tb testing.TB) []byte {
 func BenchmarkDecode(b *testing.B) {
 	data := loadTestOgg(b)
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		benchmarkData(b, data)
 	}
 }
