@@ -33,6 +33,10 @@ func NewDecoder() Decoder {
 }
 
 func (c Configuration) silkFrameSampleCount() int {
+	if c.mode() != configurationModeSilkOnly {
+		return 0
+	}
+
 	switch c.bandwidth() {
 	case BandwidthNarrowband:
 		return 8 * c.frameDuration().nanoseconds() / 1000000

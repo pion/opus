@@ -135,4 +135,5 @@ func TestSilkFrameSampleCount(t *testing.T) {
 	assert.Equal(t, 120, Configuration(4).silkFrameSampleCount())
 	assert.Equal(t, 160, Configuration(8).silkFrameSampleCount())
 	assert.Equal(t, 0, Configuration(12).silkFrameSampleCount())
+	assert.Equal(t, 0, Configuration(16).silkFrameSampleCount())
 }

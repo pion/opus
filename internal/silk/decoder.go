@@ -1451,7 +1451,7 @@ func (d *Decoder) decodePitchLags(
 // packets against the recovery time after packet loss.
 //
 // https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.3
-func (d *Decoder) decodeLTPScalingParamater(
+func (d *Decoder) decodeLTPScalingParameter(
 	signalType frameSignalType,
 	isFirstSilkFrameInOpusFrame bool,
 ) (LTPscaleQ14 float32) { //nolint:gocritic
@@ -1893,7 +1893,7 @@ func (d *Decoder) decodeFrame(
 	bQ7 := d.decodeLTPFilterCoefficients(signalType, subframeCount)
 
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.3
-	LTPscaleQ14 := d.decodeLTPScalingParamater(signalType, isFirstSilkFrameInOpusFrame)
+	LTPscaleQ14 := d.decodeLTPScalingParameter(signalType, isFirstSilkFrameInOpusFrame)
 
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.7
 	lcgSeed := d.decodeLinearCongruentialGeneratorSeed()
@@ -1985,32 +1985,32 @@ func (d *Decoder) saveFinalOutValues(out []float32) {
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.1
 func (d *Decoder) Decode(in []byte, out []float32, isStereo bool, nanoseconds int, bandwidth Bandwidth) error { // nolint:lll
-	silkFrameCount := silkFrameCount(nanoseconds)
+	frameCount := silkFrameCount(nanoseconds)
 	silkFrameNanoseconds := nanoseconds
 	if nanoseconds > nanoseconds20Ms {
 		silkFrameNanoseconds = nanoseconds20Ms
 	}
 
-	subframeCount := subframeCount(silkFrameNanoseconds)
+	sfCount := subframeCount(silkFrameNanoseconds)
 	subframeSize := d.samplesInSubframe(bandwidth)
 	switch {
-	case silkFrameCount == 0 || subframeCount == 0:
+	case frameCount == 0 || sfCount == 0:
 		return errUnsupportedSilkFrameDuration
 	case isStereo:
 		return errUnsupportedSilkStereo
-	case (subframeSize * subframeCount * silkFrameCount) > len(out):
+	case (subframeSize * sfCount * frameCount) > len(out):
 		return errOutBufferTooSmall
 	}
 
 	d.rangeDecoder.Init(in)
 
-	voiceActivityDetected, lowBitRateRedundancy := d.decodeHeaderBits(silkFrameCount)
+	voiceActivityDetected, lowBitRateRedundancy := d.decodeHeaderBits(frameCount)
 	if lowBitRateRedundancy {
 		return errUnsupportedSilkLowBitrateRedundancy
 	}
 
-	frameSampleCount := subframeSize * subframeCount
-	for i := 0; i < silkFrameCount; i++ {
+	frameSampleCount := subframeSize * sfCount
+	for i := 0; i < frameCount; i++ {
 		frameOut := out[i*frameSampleCount : (i+1)*frameSampleCount]
 		if err := d.decodeFrame(frameOut, voiceActivityDetected[i], silkFrameNanoseconds, bandwidth, i == 0); err != nil {
 			return err
