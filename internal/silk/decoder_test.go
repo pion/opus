@@ -60,10 +60,65 @@ func TestDecodeNon20MsDurations(t *testing.T) {
 	}
 }
 
-func TestDecodeStereoTODO(t *testing.T) {
-	d := &Decoder{}
-	err := d.Decode(testSilkFrame(), []float32{}, true, nanoseconds20Ms, BandwidthWideband)
-	assert.ErrorIs(t, errUnsupportedSilkStereo, err)
+func TestDecodeStereo(t *testing.T) {
+	d := NewDecoder()
+	err := d.Decode(testSilkFrame(), make([]float32, 640), true, nanoseconds20Ms, BandwidthWideband)
+	assert.NoError(t, err)
+	assert.NotErrorIs(t, err, errUnsupportedSilkStereo)
+}
+
+func TestStereoPredictionWeights(t *testing.T) {
+	w0Q13, w1Q13 := stereoPredictionWeights(0, 0, 0, 0, 0)
+	assert.Equal(t, int32(0), w0Q13)
+	assert.Equal(t, int32(-13364), w1Q13)
+}
+
+func TestStereoUnmix(t *testing.T) {
+	d := NewDecoder()
+	mid := []float32{1, 0}
+	side := []float32{0, 0}
+	out := make([]float32, 4)
+
+	d.stereoUnmix(mid, side, out, 0, 0, BandwidthNarrowband)
+
+	assert.Equal(t, []float32{0, 0, 1, 1}, out)
+	assert.Equal(t, [2]float32{1, 0}, d.previousMidValues)
+	assert.Equal(t, float32(0), d.previousSideValue)
+	assert.True(t, d.wasStereo)
+}
+
+func TestStereoScratchBuffers(t *testing.T) {
+	decoder := NewDecoder()
+	mid, side := decoder.stereoScratchBuffers(8)
+	mid[0] = 1
+	side[0] = 2
+	midPtr := &mid[0]
+	sidePtr := &side[0]
+
+	mid, side = decoder.stereoScratchBuffers(4)
+	assert.Len(t, mid, 4)
+	assert.Len(t, side, 4)
+	assert.Equal(t, midPtr, &mid[0])
+	assert.Equal(t, sidePtr, &side[0])
+
+	mid, side = decoder.stereoScratchBuffers(16)
+	assert.Len(t, mid, 16)
+	assert.Len(t, side, 16)
+	assert.NotEqual(t, midPtr, &mid[0])
+	assert.NotEqual(t, sidePtr, &side[0])
+}
+
+func TestDelayMono(t *testing.T) {
+	d := NewDecoder()
+	d.previousMidValues = [2]float32{0.25, 0.5}
+	out := []float32{1, 2, 3}
+
+	d.delayMono(out)
+
+	assert.Equal(t, []float32{0.5, 1, 2}, out)
+	assert.Equal(t, [2]float32{2, 3}, d.previousMidValues)
+	assert.Equal(t, float32(0), d.previousSideValue)
+	assert.False(t, d.wasStereo)
 }
 
 func TestDecodeFrameType(t *testing.T) {
@@ -79,6 +134,17 @@ func TestDecodeSubframeQuantizations(t *testing.T) {
 	assert.Equal(t,
 		[]float32{210944, 112640, 96256, 96256},
 		d.decodeSubframeQuantizations(frameSignalTypeInactive, 4, true),
+	)
+}
+
+func TestDecodeSubframeQuantizationsAfterUncodedSideFrame(t *testing.T) {
+	d := &Decoder{
+		rangeDecoder:    createRangeDecoder(testSilkFrame(), 31, 482344960, 437100388),
+		previousLogGain: 63,
+	}
+	assert.Equal(t,
+		[]float32{210944, 112640, 96256, 96256},
+		d.decodeSubframeQuantizations(frameSignalTypeInactive, 4, false),
 	)
 }
 
@@ -581,15 +647,22 @@ func TestDecodeLTPScalingParameter(t *testing.T) {
 func TestDecode(t *testing.T) {
 	decoder := NewDecoder()
 	out := make([]float32, 320)
+	previousSample := float32(0)
 
 	compareBuffer := func(t *testing.T, out, expectedOut []float32) {
 		t.Helper()
 
 		for i := range expectedOut {
+			expectedSample := previousSample
+			if i > 0 {
+				expectedSample = expectedOut[i-1]
+			}
 			// The decoder keeps this stage in float, so cross-frame LPC state
 			// updates accumulate a few extra LSBs versus the old fixture.
-			assert.Less(t, out[i]-expectedOut[i], float32(4*floatEqualityThreshold))
+			assert.InDelta(t, expectedSample, out[i], 4*floatEqualityThreshold)
 		}
+
+		previousSample = expectedOut[len(expectedOut)-1]
 	}
 
 	t.Run("Unvoiced Single Frame", func(t *testing.T) {
