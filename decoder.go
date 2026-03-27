@@ -6,9 +6,10 @@ package opus
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/pion/opus/internal/bitdepth"
-	"github.com/pion/opus/internal/resample"
+	silkresample "github.com/pion/opus/internal/resample/silk"
 	"github.com/pion/opus/internal/silk"
 )
 
@@ -20,16 +21,127 @@ const (
 
 // Decoder decodes the Opus bitstream into PCM.
 type Decoder struct {
-	silkDecoder silk.Decoder
-	silkBuffer  []float32
+	silkDecoder            silk.Decoder
+	silkBuffer             []float32
+	resampleBuffer         []float32
+	resampleChannelIn      [2][]float32
+	resampleChannelOut     [2][]float32
+	silkResampler          [2]silkresample.Resampler
+	silkResamplerBandwidth Bandwidth
+	silkResamplerChannels  int
+	floatBuffer            []float32
+	sampleRate             int
+	channels               int
 }
 
 // NewDecoder creates a new Opus Decoder.
 func NewDecoder() Decoder {
-	return Decoder{
+	decoder, _ := NewDecoderWithOutput(BandwidthFullband.SampleRate(), 1)
+
+	return decoder
+}
+
+// NewDecoderWithOutput creates a new Opus Decoder with the requested output sample rate and channel count.
+func NewDecoderWithOutput(sampleRate, channels int) (Decoder, error) {
+	decoder := Decoder{
 		silkDecoder: silk.NewDecoder(),
 		silkBuffer:  make([]float32, maxSilkFrameSampleCount),
 	}
+	if err := decoder.Init(sampleRate, channels); err != nil {
+		return Decoder{}, err
+	}
+
+	return decoder, nil
+}
+
+// Init initializes a pre-allocated Opus decoder.
+func (d *Decoder) Init(sampleRate, channels int) error {
+	switch sampleRate {
+	case 8000, 12000, 16000, 24000, 48000:
+	default:
+		return errInvalidSampleRate
+	}
+	switch channels {
+	case 1, 2:
+	default:
+		return errInvalidChannelCount
+	}
+
+	d.sampleRate = sampleRate
+	d.channels = channels
+	d.silkDecoder = silk.NewDecoder()
+	d.silkResampler = [2]silkresample.Resampler{}
+	d.silkResamplerBandwidth = 0
+	d.silkResamplerChannels = 0
+
+	return nil
+}
+
+// resampleSilk uses the RFC 6716 C reference's decoder-side SILK resampler.
+func (d *Decoder) resampleSilk(in, out []float32, channelCount int, bandwidth Bandwidth) error {
+	if err := d.initSilkResampler(channelCount, bandwidth); err != nil {
+		return err
+	}
+
+	samplesPerChannel := len(in) / channelCount
+	resampledSamplesPerChannel := samplesPerChannel * d.sampleRate / bandwidth.SampleRate()
+	for channelIndex := range channelCount {
+		if err := d.resampleSilkChannel(
+			in,
+			out,
+			channelIndex,
+			channelCount,
+			samplesPerChannel,
+			resampledSamplesPerChannel,
+		); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (d *Decoder) initSilkResampler(channelCount int, bandwidth Bandwidth) error {
+	if d.silkResamplerBandwidth != bandwidth {
+		for i := range d.silkResampler {
+			if err := d.silkResampler[i].Init(bandwidth.SampleRate(), d.sampleRate); err != nil {
+				return err
+			}
+		}
+		d.silkResamplerBandwidth = bandwidth
+		d.silkResamplerChannels = channelCount
+	}
+	if channelCount == 2 && d.silkResamplerChannels == 1 {
+		d.silkResampler[1] = d.silkResampler[0]
+	}
+	d.silkResamplerChannels = channelCount
+
+	return nil
+}
+
+func (d *Decoder) resampleSilkChannel(
+	in, out []float32,
+	channelIndex, channelCount, samplesPerChannel, resampledSamplesPerChannel int,
+) error {
+	if cap(d.resampleChannelIn[channelIndex]) < samplesPerChannel {
+		d.resampleChannelIn[channelIndex] = make([]float32, samplesPerChannel)
+	}
+	if cap(d.resampleChannelOut[channelIndex]) < resampledSamplesPerChannel {
+		d.resampleChannelOut[channelIndex] = make([]float32, resampledSamplesPerChannel)
+	}
+	channelIn := d.resampleChannelIn[channelIndex][:samplesPerChannel]
+	channelOut := d.resampleChannelOut[channelIndex][:resampledSamplesPerChannel]
+	for i := range samplesPerChannel {
+		channelIn[i] = in[(i*channelCount)+channelIndex]
+	}
+	if err := d.silkResampler[channelIndex].Resample(channelIn, channelOut); err != nil {
+		return err
+	}
+	for i := range resampledSamplesPerChannel {
+		out[(i*channelCount)+channelIndex] = channelOut[i]
+	}
+
+	return nil
 }
 
 func (c Configuration) silkFrameSampleCount() int {
@@ -265,9 +377,9 @@ func parsePacketFrames(in []byte, tocHeader tableOfContentsHeader) ([][]byte, er
 	}
 }
 
-func (d *Decoder) decode(in []byte, out []float32) (bandwidth Bandwidth, isStereo bool, err error) {
+func (d *Decoder) decode(in []byte, out []float32) (bandwidth Bandwidth, isStereo bool, sampleCount int, err error) {
 	if len(in) < 1 {
-		return 0, false, errTooShortForTableOfContentsHeader
+		return 0, false, 0, errTooShortForTableOfContentsHeader
 	}
 
 	tocHeader := tableOfContentsHeader(in[0])
@@ -275,11 +387,11 @@ func (d *Decoder) decode(in []byte, out []float32) (bandwidth Bandwidth, isStere
 
 	encodedFrames, err := parsePacketFrames(in, tocHeader)
 	if err != nil {
-		return 0, false, err
+		return 0, false, 0, err
 	}
 
 	if cfg.mode() != configurationModeSilkOnly {
-		return 0, false, fmt.Errorf("%w: %d", errUnsupportedConfigurationMode, cfg.mode())
+		return 0, false, 0, fmt.Errorf("%w: %d", errUnsupportedConfigurationMode, cfg.mode())
 	}
 
 	frameSampleCount := cfg.silkFrameSampleCount()
@@ -303,33 +415,136 @@ func (d *Decoder) decode(in []byte, out []float32) (bandwidth Bandwidth, isStere
 			silk.Bandwidth(cfg.bandwidth()),
 		)
 		if err != nil {
-			return 0, false, err
+			return 0, false, 0, err
 		}
 	}
 
-	return cfg.bandwidth(), tocHeader.isStereo(), nil
+	sampleCount = requiredSamples
+
+	return cfg.bandwidth(), tocHeader.isStereo(), sampleCount, nil
+}
+
+func (d *Decoder) decodeToFloat32(
+	in []byte,
+	out []float32,
+) (samplesPerChannel int, bandwidth Bandwidth, isStereo bool, err error) {
+	if d.sampleRate == 0 {
+		return 0, 0, false, errInvalidSampleRate
+	}
+	if d.channels == 0 {
+		return 0, 0, false, errInvalidChannelCount
+	}
+
+	bandwidth, isStereo, sampleCount, err := d.decode(in, d.silkBuffer)
+	if err != nil {
+		return 0, 0, false, err
+	}
+
+	channelCount := 1
+	if isStereo {
+		channelCount = 2
+	}
+
+	samplesPerChannel = (sampleCount / channelCount) * d.sampleRate / bandwidth.SampleRate()
+	requiredSamples := samplesPerChannel * channelCount
+	if cap(d.resampleBuffer) < requiredSamples {
+		d.resampleBuffer = make([]float32, requiredSamples)
+	}
+	d.resampleBuffer = d.resampleBuffer[:requiredSamples]
+	if err = d.resampleSilk(d.silkBuffer[:sampleCount], d.resampleBuffer, channelCount, bandwidth); err != nil {
+		return 0, 0, false, err
+	}
+
+	if len(out) < samplesPerChannel*d.channels {
+		return 0, 0, false, errOutBufferTooSmall
+	}
+
+	d.copyResampledSamples(out, channelCount)
+
+	return samplesPerChannel, bandwidth, isStereo, nil
+}
+
+func (d *Decoder) copyResampledSamples(out []float32, channelCount int) {
+	outIndex := 0
+	for i := 0; i < len(d.resampleBuffer); i += channelCount {
+		switch {
+		case channelCount == d.channels:
+			for c := 0; c < d.channels; c++ {
+				out[outIndex] = d.resampleBuffer[i+c]
+				outIndex++
+			}
+		case channelCount == 1 && d.channels == 2:
+			out[outIndex] = d.resampleBuffer[i]
+			out[outIndex+1] = d.resampleBuffer[i]
+			outIndex += 2
+		case channelCount == 2 && d.channels == 1:
+			out[outIndex] = (d.resampleBuffer[i] + d.resampleBuffer[i+1]) / 2
+			outIndex++
+		}
+	}
+}
+
+func float32ToInt16(in []float32, out []int16, sampleCount int) {
+	for i := range sampleCount {
+		sample := math.Round(float64(in[i] * 32768))
+		sample = math.Max(sample, -32768)
+		sample = math.Min(sample, 32767)
+		out[i] = int16(sample)
+	}
 }
 
 // Decode decodes the Opus bitstream into S16LE PCM.
 func (d *Decoder) Decode(in, out []byte) (bandwidth Bandwidth, isStereo bool, err error) {
-	bandwidth, isStereo, err = d.decode(in, d.silkBuffer)
+	if cap(d.floatBuffer) < len(out)/2 {
+		d.floatBuffer = make([]float32, len(out)/2)
+	}
+	d.floatBuffer = d.floatBuffer[:len(out)/2]
+
+	sampleCount, bandwidth, isStereo, err := d.decodeToFloat32(in, d.floatBuffer)
 	if err != nil {
 		return
 	}
 
-	err = bitdepth.ConvertFloat32LittleEndianToSigned16LittleEndian(d.silkBuffer, out, 3)
+	err = bitdepth.ConvertFloat32LittleEndianToSigned16LittleEndian(
+		d.floatBuffer[:sampleCount*d.channels],
+		out,
+		d.channels,
+		1,
+	)
 
 	return
 }
 
 // DecodeFloat32 decodes the Opus bitstream into F32LE PCM.
 func (d *Decoder) DecodeFloat32(in []byte, out []float32) (bandwidth Bandwidth, isStereo bool, err error) {
-	bandwidth, isStereo, err = d.decode(in, d.silkBuffer)
-	if err != nil {
-		return
-	}
-
-	resample.Up(d.silkBuffer, out, 3)
+	_, bandwidth, isStereo, err = d.decodeToFloat32(in, out)
 
 	return
+}
+
+// DecodeToInt16 decodes Opus data into signed 16-bit PCM and returns the sample count per channel.
+func (d *Decoder) DecodeToInt16(in []byte, out []int16) (int, error) {
+	if cap(d.floatBuffer) < len(out) {
+		d.floatBuffer = make([]float32, len(out))
+	}
+	d.floatBuffer = d.floatBuffer[:len(out)]
+
+	sampleCount, _, _, err := d.decodeToFloat32(in, d.floatBuffer)
+	if err != nil {
+		return 0, err
+	}
+
+	float32ToInt16(d.floatBuffer, out, sampleCount*d.channels)
+
+	return sampleCount, nil
+}
+
+// DecodeToFloat32 decodes Opus data into float32 PCM and returns the sample count per channel.
+func (d *Decoder) DecodeToFloat32(in []byte, out []float32) (int, error) {
+	sampleCount, _, _, err := d.decodeToFloat32(in, out)
+	if err != nil {
+		return 0, err
+	}
+
+	return sampleCount, nil
 }
