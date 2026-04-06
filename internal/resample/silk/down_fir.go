@@ -4,7 +4,11 @@
 package silkresample
 
 func (r *Resampler) resamplerPrivateDownFIR(out, in []int16) {
-	buf := make([]int32, r.batchSize+maxFIROrder)
+	if cap(r.downFIRBuf) < r.batchSize+maxFIROrder {
+		r.downFIRBuf = make([]int32, r.batchSize+maxFIROrder)
+	}
+	buf := r.downFIRBuf[:r.batchSize+maxFIROrder]
+	clear(buf)
 	copy(buf, r.sFIR[:r.firOrder])
 
 	firCoefs := r.coefs[2:]
