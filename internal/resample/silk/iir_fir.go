@@ -4,7 +4,11 @@
 package silkresample
 
 func (r *Resampler) resamplerPrivateIIRFIR(out, in []int16) {
-	buf := make([]int16, (2*r.batchSize)+orderFIR12)
+	if cap(r.iirFIRBuf) < (2*r.batchSize)+orderFIR12 {
+		r.iirFIRBuf = make([]int16, (2*r.batchSize)+orderFIR12)
+	}
+	buf := r.iirFIRBuf[:(2*r.batchSize)+orderFIR12]
+	clear(buf)
 	copy(buf, r.sFIRIIR[:])
 
 	outIndex := 0

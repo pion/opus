@@ -52,7 +52,13 @@ func TestInitInvalidSampleRate(t *testing.T) {
 func TestResampleInvalidLength(t *testing.T) {
 	var resampler Resampler
 	assert.NoError(t, resampler.Init(16000, 48000))
-	assert.Error(t, resampler.Resample(make([]float32, 15), make([]float32, 45)))
+	assert.ErrorIs(t, resampler.Resample(make([]float32, 15), make([]float32, 45)), errInvalidInputLength)
+}
+
+func TestResampleNonIntegralOutputLength(t *testing.T) {
+	var resampler Resampler
+	assert.NoError(t, resampler.Init(16000, 12000))
+	assert.ErrorIs(t, resampler.Resample(make([]float32, 17), make([]float32, 20)), errNonIntegralInputLength)
 }
 
 func TestResampleMatchesReferenceImpulse(t *testing.T) {

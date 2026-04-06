@@ -6,7 +6,8 @@ package silkresample
 
 import (
 	"errors"
-	"math"
+
+	"github.com/pion/opus/internal/bitdepth"
 )
 
 const (
@@ -31,6 +32,7 @@ var (
 	errInvalidInputSampleRate  = errors.New("input sample rate must be 8000, 12000, or 16000")
 	errInvalidOutputSampleRate = errors.New("output sample rate must be 8000, 12000, 16000, 24000, or 48000")
 	errInvalidInputLength      = errors.New("input length must be at least 1 ms")
+	errNonIntegralInputLength  = errors.New("input length must align to an integer output length")
 	errOutBufferTooSmall       = errors.New("out buffer too small")
 )
 
@@ -71,13 +73,26 @@ type Resampler struct {
 	fsOutKHz          int
 	inputDelay        int
 	coefs             []int16
+	in16              []int16
+	out16             []int16
+	iirFIRBuf         []int16
+	downFIRBuf        []int32
 }
 
 // Init initializes the resampler state for one decoder channel.
 //
 //nolint:cyclop
 func (r *Resampler) Init(inputSampleRate, outputSampleRate int) error {
-	*r = Resampler{}
+	in16 := r.in16[:0]
+	out16 := r.out16[:0]
+	iirFIRBuf := r.iirFIRBuf[:0]
+	downFIRBuf := r.downFIRBuf[:0]
+	*r = Resampler{
+		in16:       in16,
+		out16:      out16,
+		iirFIRBuf:  iirFIRBuf,
+		downFIRBuf: downFIRBuf,
+	}
 
 	inputRateID, err := inputRateID(inputSampleRate)
 	if err != nil {
@@ -144,6 +159,19 @@ func (r *Resampler) Init(inputSampleRate, outputSampleRate int) error {
 	return nil
 }
 
+// CopyStateFrom copies filter state from src while preserving r's scratch buffers.
+func (r *Resampler) CopyStateFrom(src *Resampler) {
+	in16 := r.in16[:0]
+	out16 := r.out16[:0]
+	iirFIRBuf := r.iirFIRBuf[:0]
+	downFIRBuf := r.downFIRBuf[:0]
+	*r = *src
+	r.in16 = in16
+	r.out16 = out16
+	r.iirFIRBuf = iirFIRBuf
+	r.downFIRBuf = downFIRBuf
+}
+
 // Resample converts one non-interleaved channel to the configured output rate.
 //
 //nolint:cyclop
@@ -157,18 +185,25 @@ func (r *Resampler) Resample(in, out []float32) error {
 
 	outLen := len(in) * r.fsOutKHz
 	if outLen%r.fsInKHz != 0 {
-		return errInvalidInputLength
+		return errNonIntegralInputLength
 	}
 	outLen /= r.fsInKHz
 	if len(out) < outLen {
 		return errOutBufferTooSmall
 	}
-	in16 := make([]int16, len(in))
+	if cap(r.in16) < len(in) {
+		r.in16 = make([]int16, len(in))
+	}
+	in16 := r.in16[:len(in)]
 	for i := range in {
-		in16[i] = float32ToInt16(in[i])
+		in16[i] = bitdepth.Float32ToSigned16(in[i])
 	}
 
-	out16 := make([]int16, outLen+r.fsOutKHz)
+	if cap(r.out16) < outLen+r.fsOutKHz {
+		r.out16 = make([]int16, outLen+r.fsOutKHz)
+	}
+	out16 := r.out16[:outLen+r.fsOutKHz]
+	clear(out16)
 	nSamples := r.fsInKHz - r.inputDelay
 	remainingIn := in16[nSamples : len(in16)-r.inputDelay]
 	copy(r.delayBuf[r.inputDelay:], in16[:nSamples])
@@ -224,12 +259,4 @@ func outputRateID(sampleRate int) (int, error) {
 	default:
 		return 0, errInvalidOutputSampleRate
 	}
-}
-
-func float32ToInt16(sample float32) int16 {
-	sample32 := math.Round(float64(sample * 32768))
-	sample32 = math.Max(sample32, -32768)
-	sample32 = math.Min(sample32, 32767)
-
-	return int16(sample32)
 }
