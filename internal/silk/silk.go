@@ -4,7 +4,10 @@
 // Package silk provides a Silk coder
 package silk
 
-import "math"
+import (
+	"math"
+	"math/bits"
+)
 
 type (
 	// Bandwidth for Silk can be NB (narrowband) MB (medium-band) or WB (wideband).
@@ -71,6 +74,40 @@ func minInt16(a, b int16) int16 {
 	return a
 }
 
+// saturatingAddInt16 mirrors silk_ADD_SAT16() from the RFC 8251 update to
+// NLSF_stabilize.c. RFC 8251 section 7 changed this addition to saturate
+// instead of wrapping, and this helper keeps that behavior explicit at the
+// call site in normalizeLSFStabilization().
+func saturatingAddInt16(a, b int16) int16 {
+	sum := int32(a) + int32(b)
+
+	return int16(clamp(math.MinInt16, sum, math.MaxInt16)) //nolint:gosec // G115
+}
+
+// saturatingSubInt32 mirrors silk_SUB_SAT32() from the RFC 6716 C macros.
+// The LPC inverse-gain recurrence uses this for the numerator update in
+// silk_LPC_inverse_pred_gain_QA() (LPC_inv_pred_gain.c), where overflow must
+// clamp instead of wrap to preserve the reference stability decision.
+func saturatingSubInt32(a, b int32) int32 {
+	diff := int64(a) - int64(b)
+	if diff > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	if diff < math.MinInt32 {
+		return math.MinInt32
+	}
+
+	return int32(diff)
+}
+
+func absInt32(v int32) int32 {
+	if v < 0 {
+		return -v
+	}
+
+	return v
+}
+
 func clamp(low, in, high int32) int32 {
 	if in > high {
 		return high
@@ -121,6 +158,96 @@ func ilog(n int) int {
 	}
 
 	return int(math.Floor(math.Log2(float64(n)))) + 1
+}
+
+func clz32(in int32) int {
+	return bits.LeadingZeros32(uint32(in)) //nolint:gosec // G115
+}
+
+// rshiftRound64 mirrors silk_RSHIFT_ROUND64() from the RFC 6716 C macros.
+// The LPC gain limiter depends on this exact rounding rule when it converts
+// 64-bit products back down to fixed-point state.
+func rshiftRound64(a int64, shift int) int64 {
+	if shift == 1 {
+		return (a >> 1) + (a & 1)
+	}
+
+	return ((a >> (shift - 1)) + 1) >> 1
+}
+
+// rshiftRound32 mirrors silk_RSHIFT_ROUND() from the RFC 6716 C macros.
+// This is used by the multiply helpers to match the reference fixed-point
+// rounding behavior.
+func rshiftRound32(a int32, shift int) int32 {
+	if shift == 1 {
+		return (a >> 1) + (a & 1)
+	}
+
+	return ((a >> (shift - 1)) + 1) >> 1
+}
+
+// smmul mirrors silk_SMMUL() from the RFC 6716 C macros: it returns the high
+// 32 bits of a signed 32x32 multiply. RFC 6716 section 4.2.7.5.8 expresses
+// several of the LPC inverse-gain updates in terms of this operation.
+func smmul(a, b int32) int32 {
+	return int32((int64(a) * int64(b)) >> 32) //nolint:gosec // G115
+}
+
+// smulwb mirrors silk_SMULWB() from the RFC 6716 C macros. It multiplies a
+// 32-bit value by the low 16 bits of another 32-bit value and is one half of
+// the reference implementation's SMULWW/SMLAWW decomposition.
+func smulwb(a, b int32) int32 {
+	return int32((int64(a) * int64(int16(b))) >> 16) //nolint:gosec // G115
+}
+
+// smlaWW mirrors silk_SMLAWW() from the RFC 6716 C macros. The inverse helper
+// uses it for the Newton-Raphson refinement step in silk_INVERSE32_varQ().
+func smlaWW(a, b, c int32) int32 {
+	return a + smulwb(b, c) + b*rshiftRound32(c, 16)
+}
+
+// inverse32VarQ mirrors silk_INVERSE32_varQ() from the RFC 6716 C reference
+// (Inlines.h). The LPC gain limiter uses this to approximate the reciprocal
+// of div_Q30 with the same normalization and refinement steps as the
+// reference decoder.
+func inverse32VarQ(b32 int32, qRes int) int32 {
+	bHeadrm := clz32(absInt32(b32)) - 1
+	b32Nrm := b32 << bHeadrm
+	b32Inv := (math.MaxInt32 >> 2) / (b32Nrm >> 16)
+	result := b32Inv << 16
+	errQ32 := ((1 << 29) - smulwb(b32Nrm, b32Inv)) << 3
+	result = smlaWW(result, errQ32, b32Inv)
+
+	lshift := 61 - bHeadrm - qRes
+	if lshift <= 0 {
+		shifted := int64(result) << -lshift
+		if shifted > math.MaxInt32 {
+			return math.MaxInt32
+		}
+		if shifted < math.MinInt32 {
+			return math.MinInt32
+		}
+
+		return int32(shifted)
+	}
+	if lshift < 32 {
+		return result >> lshift
+	}
+
+	return 0
+}
+
+// expandLPCCoefficientsBandwidth applies the RFC 6716 section 4.2.7.5.7
+// bandwidth expansion recurrence directly in Go. Section 4.2.7.5.8 reuses the
+// same recurrence with a fixed chirp sequence for prediction-gain limiting.
+func expandLPCCoefficientsBandwidth(ar []int32, chirpQ16 int32) {
+	initialChirpQ16 := chirpQ16
+	for i := range ar {
+		ar[i] = int32((int64(ar[i]) * int64(chirpQ16)) >> 16) //nolint:gosec // G115
+		if i+1 < len(ar) {
+			chirpQ16 = int32((int64(initialChirpQ16)*int64(chirpQ16) + 32768) >> 16) //nolint:gosec // G115
+		}
+	}
 }
 
 func subframeCount(nanoseconds int) int {
