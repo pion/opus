@@ -80,6 +80,8 @@ type Decoder struct {
 	highAndCodedDifference uint32 // val in RFC 6716
 }
 
+const maxUniformRangeCoderBits = 8
+
 // Init sets the state of the Decoder
 // Let b0 be an 8-bit unsigned integer containing first input byte (or
 // containing zero if there are no bytes in this Opus frame).  The
@@ -130,6 +132,49 @@ func (r *Decoder) DecodeSymbolWithICDF(cumulativeDistributionTable []uint) uint3
 	r.update(scale, low, high, total)
 
 	return symbolIndex
+}
+
+func (r *Decoder) decodeUniformSymbol(total uint32) uint32 {
+	scale := r.rangeSize / total
+	symbol := r.highAndCodedDifference/scale + 1
+
+	return total - uint32(localMin(uint(symbol), uint(total))) //nolint:gosec // G115: symbol is clamped to total.
+}
+
+func (r *Decoder) decodeAndUpdateUniformSymbol(total uint32) uint32 {
+	symbol := r.decodeUniformSymbol(total)
+	r.update(r.rangeSize/total, symbol, symbol+1, total)
+
+	return symbol
+}
+
+// DecodeUniform decodes an RFC 6716 Section 4.1.5 ec_dec_uint() symbol.
+//
+// It returns false when the decoded raw-bit suffix produces a value outside
+// [0,total), in which case the saturated value matches the reference decoder.
+func (r *Decoder) DecodeUniform(total uint32) (uint32, bool) {
+	if total == 0 {
+		return 0, false
+	}
+	if total == 1 {
+		return 0, true
+	}
+
+	limit := total - 1
+	bitCount := bits.Len32(limit)
+	if bitCount <= maxUniformRangeCoderBits {
+		return r.decodeAndUpdateUniformSymbol(total), true
+	}
+
+	rawBitCount := bitCount - maxUniformRangeCoderBits
+	rangeTotal := (limit >> rawBitCount) + 1
+	symbol := r.decodeAndUpdateUniformSymbol(rangeTotal)
+	value := (symbol << rawBitCount) | r.DecodeRawBits(uint(rawBitCount))
+	if value <= limit {
+		return value, true
+	}
+
+	return limit, false
 }
 
 // DecodeSymbolLogP decodes a single binary symbol.
