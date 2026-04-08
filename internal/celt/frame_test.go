@@ -79,6 +79,65 @@ func TestDecodeFrameSideInfoAllDefaultFlags(t *testing.T) {
 	assert.False(t, info.intraEnergy)
 }
 
+func TestDecodeFrameSideInfoRangeTrace(t *testing.T) {
+	decoder := NewDecoder()
+	info, err := decoder.validateFrameConfig(frameConfig{
+		frameSampleCount: shortBlockSampleCount << 1,
+		startBand:        0,
+		endBand:          maxBands,
+		channelCount:     2,
+	})
+	require.NoError(t, err)
+	info.totalBits = 64
+
+	trace := newRangeTrace(t, &decoder)
+	decoder.rangeDecoder.Init(make([]byte, 8))
+	trace.require(rangeCheckpoint{
+		name:          "range init",
+		tell:          1,
+		tellFrac:      8,
+		remainingBits: 33,
+		finalRange:    2147483648,
+	})
+
+	decoder.decodeSilenceFlag(&info)
+	trace.require(rangeCheckpoint{
+		name:          "silence flag",
+		tell:          2,
+		tellFrac:      9,
+		remainingBits: 33,
+		finalRange:    2147418112,
+	})
+
+	err = decoder.decodePostFilter(&info)
+	require.NoError(t, err)
+	trace.require(rangeCheckpoint{
+		name:          "post-filter disabled",
+		tell:          3,
+		tellFrac:      17,
+		remainingBits: 33,
+		finalRange:    1073709056,
+	})
+
+	decoder.decodeTransientFlag(&info)
+	trace.require(rangeCheckpoint{
+		name:          "transient flag",
+		tell:          3,
+		tellFrac:      18,
+		remainingBits: 33,
+		finalRange:    939495424,
+	})
+
+	decoder.decodeIntraEnergyFlag(&info)
+	trace.require(rangeCheckpoint{
+		name:          "intra energy flag",
+		tell:          3,
+		tellFrac:      20,
+		remainingBits: 33,
+		finalRange:    822058496,
+	})
+}
+
 func TestDecodePostFilter(t *testing.T) {
 	decoder := NewDecoder()
 	decoder.rangeDecoder = rangeDecoderWithBinaryOne()
@@ -92,10 +151,25 @@ func TestDecodePostFilter(t *testing.T) {
 		startBand: 0,
 		totalBits: 256,
 	}
+	trace := newRangeTrace(t, &decoder)
+	trace.require(rangeCheckpoint{
+		name:          "before post-filter",
+		tell:          8,
+		tellFrac:      64,
+		remainingBits: -24,
+		finalRange:    2147483648,
+	})
 
 	err := decoder.decodePostFilter(&info)
 
 	require.NoError(t, err)
+	trace.require(rangeCheckpoint{
+		name:          "after post-filter",
+		tell:          26,
+		tellFrac:      205,
+		remainingBits: -36,
+		finalRange:    44739242,
+	})
 	assert.True(t, info.postFilter.enabled)
 	assert.Equal(t, 5, info.postFilter.octave)
 	assert.Equal(t, 676, info.postFilter.period)
