@@ -226,6 +226,60 @@ func TestDecodeRawBits(t *testing.T) {
 	})
 }
 
+func TestDecodeUniform(t *testing.T) {
+	t.Run("decodes values that fit entirely in the range coder", func(t *testing.T) {
+		for symbol := range 6 {
+			decoder := decoderWithUniformSymbol(uint32(symbol), 6)
+
+			got, ok := decoder.DecodeUniform(6)
+
+			assert.True(t, ok)
+			assert.Equal(t, uint32(symbol), got)
+		}
+	})
+
+	t.Run("combines a range-coded prefix with a raw-bit suffix", func(t *testing.T) {
+		decoder := decoderWithUniformSymbol(128, 150)
+		decoder.data = []byte{0x01}
+
+		got, ok := decoder.DecodeUniform(300)
+
+		assert.True(t, ok)
+		assert.Equal(t, uint32(257), got)
+	})
+
+	t.Run("saturates values outside the requested range", func(t *testing.T) {
+		decoder := decoderWithUniformSymbol(128, 129)
+		decoder.data = []byte{0x01}
+
+		got, ok := decoder.DecodeUniform(257)
+
+		assert.False(t, ok)
+		assert.Equal(t, uint32(256), got)
+	})
+
+	t.Run("accepts degenerate totals defensively", func(t *testing.T) {
+		decoder := &Decoder{}
+
+		got, ok := decoder.DecodeUniform(1)
+		assert.True(t, ok)
+		assert.Zero(t, got)
+
+		got, ok = decoder.DecodeUniform(0)
+		assert.False(t, ok)
+		assert.Zero(t, got)
+	})
+}
+
+func decoderWithUniformSymbol(symbol, total uint32) *Decoder {
+	const scale = 1 << 24
+
+	decoder := &Decoder{}
+	decoder.SetInternalValues(nil, 0, total*scale, (total-symbol-1)*scale)
+
+	return decoder
+}
+
 func TestTell(t *testing.T) {
 	decoder := &Decoder{}
 	decoder.Init(make([]byte, 8))
