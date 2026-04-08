@@ -200,3 +200,79 @@ func TestDecoderInitEmptyInput(t *testing.T) {
 		decoder.Init(nil)
 	})
 }
+
+func TestDecodeRawBits(t *testing.T) {
+	t.Run("reads bits from the end of the frame in LSB-first order", func(t *testing.T) {
+		decoder := &Decoder{data: []byte{0xB2}}
+
+		assert.Equal(t, uint32(0xB2), decoder.DecodeRawBits(8))
+		assert.Equal(t, uint(8), decoder.rawBitsRead)
+		assert.Equal(t, 0, decoder.RemainingBits())
+	})
+
+	t.Run("returns zero for n==0", func(t *testing.T) {
+		decoder := &Decoder{data: []byte{0xFF}}
+
+		assert.Zero(t, decoder.DecodeRawBits(0))
+		assert.Zero(t, decoder.rawBitsRead)
+	})
+
+	t.Run("pads missing raw bits with zeros", func(t *testing.T) {
+		decoder := &Decoder{data: []byte{0x01}}
+
+		assert.Equal(t, uint32(0x01), decoder.DecodeRawBits(12))
+		assert.Equal(t, uint(12), decoder.rawBitsRead)
+		assert.Equal(t, -4, decoder.RemainingBits())
+	})
+}
+
+func TestTell(t *testing.T) {
+	decoder := &Decoder{}
+	decoder.Init(make([]byte, 8))
+
+	assert.Equal(t, uint(1), decoder.Tell())
+	assert.Equal(t, uint(8), decoder.TellFrac())
+
+	decoder.DecodeRawBits(8)
+
+	assert.Equal(t, uint(9), decoder.Tell())
+	assert.Equal(t, uint(72), decoder.TellFrac())
+}
+
+func TestTellFracDoesNotUnderflow(t *testing.T) {
+	decoder := &Decoder{rangeSize: 1 << 31}
+
+	assert.Zero(t, decoder.TellFrac())
+}
+
+func TestSetInternalValuesResetsBitAccounting(t *testing.T) {
+	decoder := &Decoder{
+		rawBitsRead: 7,
+		nbitsTotal:  99,
+	}
+
+	decoder.SetInternalValues([]byte{0x00, 0x00}, 12, 1<<31, 0)
+
+	assert.Equal(t, uint(12), decoder.bitsRead)
+	assert.Zero(t, decoder.rawBitsRead)
+	assert.Equal(t, uint(12), decoder.nbitsTotal)
+	assert.Equal(t, 4, decoder.RemainingBits())
+}
+
+func TestRemainingBitsAndFinalRange(t *testing.T) {
+	t.Run("reports remaining bits conservatively", func(t *testing.T) {
+		decoder := &Decoder{
+			data:        []byte{0x00, 0x00},
+			bitsRead:    10,
+			rawBitsRead: 7,
+		}
+
+		assert.Equal(t, -1, decoder.RemainingBits())
+	})
+
+	t.Run("exposes the current final range", func(t *testing.T) {
+		decoder := &Decoder{rangeSize: 12345}
+
+		assert.Equal(t, uint32(12345), decoder.FinalRange())
+	})
+}

@@ -173,3 +173,45 @@ func TestSilkFrameSampleCount(t *testing.T) {
 	assert.Equal(t, 0, Configuration(12).silkFrameSampleCount())
 	assert.Equal(t, 0, Configuration(16).silkFrameSampleCount())
 }
+
+func TestCeltFrameSampleCount(t *testing.T) {
+	assert.Equal(t, 120, Configuration(16).celtFrameSampleCount())
+	assert.Equal(t, 240, Configuration(17).celtFrameSampleCount())
+	assert.Equal(t, 480, Configuration(18).celtFrameSampleCount())
+	assert.Equal(t, 960, Configuration(19).celtFrameSampleCount())
+	assert.Equal(t, 960, Configuration(31).celtFrameSampleCount())
+	assert.Equal(t, 0, Configuration(0).celtFrameSampleCount())
+	assert.Equal(t, 0, Configuration(12).celtFrameSampleCount())
+}
+
+func TestDecodedSampleRate(t *testing.T) {
+	assert.Equal(t, 8000, Configuration(0).decodedSampleRate())
+	assert.Equal(t, 16000, Configuration(8).decodedSampleRate())
+	assert.Equal(t, celtSampleRate, Configuration(16).decodedSampleRate())
+	assert.Equal(t, celtSampleRate, Configuration(31).decodedSampleRate())
+	assert.Equal(t, 0, Configuration(12).decodedSampleRate())
+}
+
+func TestDecodeCeltOnlyStillUnsupported(t *testing.T) {
+	decoder := NewDecoder()
+
+	bandwidth, isStereo, sampleCount, err := decoder.decode([]byte{byte(16<<3) | byte(frameCodeOneFrame)}, nil)
+
+	assert.ErrorIs(t, err, errUnsupportedConfigurationMode)
+	assert.Zero(t, bandwidth)
+	assert.False(t, isStereo)
+	assert.Zero(t, sampleCount)
+	assert.Equal(t, configurationModeCELTOnly, decoder.previousMode)
+}
+
+func TestDecodeHybridStillUnsupported(t *testing.T) {
+	decoder := NewDecoder()
+
+	bandwidth, isStereo, sampleCount, err := decoder.decode([]byte{byte(12<<3) | byte(frameCodeOneFrame)}, nil)
+
+	assert.ErrorIs(t, err, errUnsupportedConfigurationMode)
+	assert.Zero(t, bandwidth)
+	assert.False(t, isStereo)
+	assert.Zero(t, sampleCount)
+	assert.Equal(t, configurationModeHybrid, decoder.previousMode)
+}
