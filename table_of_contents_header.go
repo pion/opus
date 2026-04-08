@@ -322,8 +322,6 @@ func (b Bandwidth) SampleRate() int {
 //	       +-+-+-+-+-+-+-+-+
 //
 //	Figure 5: The frame count byte
-//
-// nolint:unused
 func parseFrameCountByte(in byte) (isVBR bool, hasPadding bool, frameCount byte) {
 	isVBR = (in & 0b10000000) != 0
 	hasPadding = (in & 0b01000000) != 0

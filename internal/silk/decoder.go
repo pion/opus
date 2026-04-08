@@ -285,8 +285,11 @@ func (d *Decoder) decodeSubframeQuantizations(
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.1.
 //
-//nolint:cyclop,lll
-func (d *Decoder) normalizeLineSpectralFrequencyStageOne(voiceActivityDetected bool, bandwidth Bandwidth) (I1 uint32) { // nolint: gocritic
+//nolint:cyclop
+func (d *Decoder) normalizeLineSpectralFrequencyStageOne(
+	voiceActivityDetected bool,
+	bandwidth Bandwidth,
+) (stageOneIndex uint32) {
 	// The first VQ stage uses a 32-element codebook, coded with one of the
 	// PDFs in Table 14, depending on the audio bandwidth and the signal
 	// type of the current SILK frame.  This yields a single index, I1, for
@@ -300,13 +303,13 @@ func (d *Decoder) normalizeLineSpectralFrequencyStageOne(voiceActivityDetected b
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.1
 	switch {
 	case !voiceActivityDetected && (bandwidth == BandwidthNarrowband || bandwidth == BandwidthMediumband):
-		I1 = d.rangeDecoder.DecodeSymbolWithICDF(icdfNormalizedLSFStageOneIndexNarrowbandOrMediumbandUnvoiced)
+		stageOneIndex = d.rangeDecoder.DecodeSymbolWithICDF(icdfNormalizedLSFStageOneIndexNarrowbandOrMediumbandUnvoiced)
 	case voiceActivityDetected && (bandwidth == BandwidthNarrowband || bandwidth == BandwidthMediumband):
-		I1 = d.rangeDecoder.DecodeSymbolWithICDF(icdfNormalizedLSFStageOneIndexNarrowbandOrMediumbandVoiced)
+		stageOneIndex = d.rangeDecoder.DecodeSymbolWithICDF(icdfNormalizedLSFStageOneIndexNarrowbandOrMediumbandVoiced)
 	case !voiceActivityDetected && (bandwidth == BandwidthWideband):
-		I1 = d.rangeDecoder.DecodeSymbolWithICDF(icdfNormalizedLSFStageOneIndexWidebandUnvoiced)
+		stageOneIndex = d.rangeDecoder.DecodeSymbolWithICDF(icdfNormalizedLSFStageOneIndexWidebandUnvoiced)
 	case voiceActivityDetected && (bandwidth == BandwidthWideband):
-		I1 = d.rangeDecoder.DecodeSymbolWithICDF(icdfNormalizedLSFStageOneIndexWidebandVoiced)
+		stageOneIndex = d.rangeDecoder.DecodeSymbolWithICDF(icdfNormalizedLSFStageOneIndexWidebandVoiced)
 	}
 
 	return
@@ -317,9 +320,10 @@ func (d *Decoder) normalizeLineSpectralFrequencyStageOne(voiceActivityDetected b
 // Predictive Coding (LPC) coefficients for the current SILK frame.
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.2.
-//
-//nolint:lll
-func (d *Decoder) normalizeLineSpectralFrequencyStageTwo(bandwidth Bandwidth, I1 uint32) (dLPC int, resQ10 []int16) { // nolint: gocritic
+func (d *Decoder) normalizeLineSpectralFrequencyStageTwo(
+	bandwidth Bandwidth,
+	stageOneIndex uint32,
+) (dLPC int, resQ10 []int16) {
 	// Decoding the second stage residual proceeds as follows.  For each
 	// coefficient, the decoder reads a symbol using the PDF corresponding
 	// to I1 from either Table 17 or Table 18,
@@ -340,7 +344,7 @@ func (d *Decoder) normalizeLineSpectralFrequencyStageTwo(bandwidth Bandwidth, I1
 		// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.2
 		//
 		//nolint:gosec
-		I2[i] = int8(d.rangeDecoder.DecodeSymbolWithICDF(icdfNormalizedLSFStageTwoIndex[codebook[I1][i]])) - 4
+		I2[i] = int8(d.rangeDecoder.DecodeSymbolWithICDF(icdfNormalizedLSFStageTwoIndex[codebook[stageOneIndex][i]])) - 4
 
 		// If the index is either -4 or 4, it reads a second symbol using the PDF in
 		// Table 19, and adds the value of this second symbol to the index,
@@ -399,10 +403,15 @@ func (d *Decoder) normalizeLineSpectralFrequencyStageTwo(bandwidth Bandwidth, I1
 			var predQ8 int
 			if bandwidth == BandwidthWideband {
 				//nolint:gosec // G115
-				predQ8 = int(predictionWeightForWidebandNormalizedLSF[predictionWeightSelectionForWidebandNormalizedLSF[I1][k]][k])
+				predictionWeightIndex := predictionWeightSelectionForWidebandNormalizedLSF[stageOneIndex][k]
+				predQ8 = int( //nolint:gosec // G115
+					predictionWeightForWidebandNormalizedLSF[predictionWeightIndex][k],
+				)
 			} else {
-				//nolint:lll,gosec // G115
-				predQ8 = int(predictionWeightForNarrowbandAndMediumbandNormalizedLSF[predictionWeightSelectionForNarrowbandAndMediumbandNormalizedLSF[I1][k]][k])
+				predictionWeightIndex := predictionWeightSelectionForNarrowbandAndMediumbandNormalizedLSF[stageOneIndex][k]
+				predQ8 = int( //nolint:gosec // G115
+					predictionWeightForNarrowbandAndMediumbandNormalizedLSF[predictionWeightIndex][k],
+				)
 			}
 
 			firstOperand = (int(resQ10[k+1]) * predQ8) >> 8
@@ -425,13 +434,11 @@ func (d *Decoder) normalizeLineSpectralFrequencyStageTwo(bandwidth Bandwidth, I1
 // reconstructed.
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.3
-//
-//nolint:gocritic
 func (d *Decoder) normalizeLineSpectralFrequencyCoefficients(
 	dLPC int,
 	bandwidth Bandwidth,
 	resQ10 []int16,
-	I1 uint32,
+	stageOneIndex uint32,
 ) (nlsfQ15 []int16) {
 	nlsfQ15 = make([]int16, dLPC)
 	w2Q18 := make([]uint, dLPC)
@@ -455,17 +462,17 @@ func (d *Decoder) normalizeLineSpectralFrequencyCoefficients(
 	//
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.3
 	for k := range dLPC { //nolint:varnamelen
-		kMinusOne, kPlusOne := uint(0), uint(256) //nolint: revive
+		previousCodebookValue, nextCodebookValue := uint(0), uint(256)
 		if k != 0 {
-			kMinusOne = cb1Q8[I1][k-1]
+			previousCodebookValue = cb1Q8[stageOneIndex][k-1]
 		}
 
 		if k+1 != dLPC {
-			kPlusOne = cb1Q8[I1][k+1]
+			nextCodebookValue = cb1Q8[stageOneIndex][k+1]
 		}
 
-		w2Q18[k] = (1024/(cb1Q8[I1][k]-kMinusOne) +
-			1024/(kPlusOne-cb1Q8[I1][k])) << 16
+		w2Q18[k] = (1024/(cb1Q8[stageOneIndex][k]-previousCodebookValue) +
+			1024/(nextCodebookValue-cb1Q8[stageOneIndex][k])) << 16
 
 		// This is reduced to an unsquared, Q9 value using
 		// the following square-root approximation:
@@ -496,7 +503,7 @@ func (d *Decoder) normalizeLineSpectralFrequencyCoefficients(
 		//
 		// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.3
 		nlsfQ15[k] = int16(clamp(0, //nolint:gosec // G115
-			int32((int(cb1Q8[I1][k])<<7)+(int(resQ10[k])<<14)/int(wQ9[k])), 32767)) //nolint:gosec // G115
+			int32((int(cb1Q8[stageOneIndex][k])<<7)+(int(resQ10[k])<<14)/int(wQ9[k])), 32767)) //nolint:gosec // G115
 	}
 
 	return nlsfQ15
@@ -681,13 +688,13 @@ func (d *Decoder) normalizeLSFInterpolation(n2Q15 []int16, nanoseconds int) (n1Q
 	return
 }
 
-func (d *Decoder) generateAQ12(Q15 []int16, bandwidth Bandwidth, aQ12 [][]float32) [][]float32 { //nolint: gocritic
-	if Q15 == nil {
+func (d *Decoder) generateAQ12(q15 []int16, bandwidth Bandwidth, aQ12 [][]float32) [][]float32 {
+	if q15 == nil {
 		return aQ12
 	}
 
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.6
-	a32Q17 := d.convertNormalizedLSFsToLPCCoefficients(Q15, bandwidth)
+	a32Q17 := d.convertNormalizedLSFsToLPCCoefficients(q15, bandwidth)
 
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.5.7
 	d.limitLPCCoefficientsRange(a32Q17)
@@ -1140,8 +1147,13 @@ func (d *Decoder) decodeExcitationSign(
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8
 //
-//nolint:cyclop,lll
-func (d *Decoder) decodeExcitation(signalType frameSignalType, quantizationOffsetType frameQuantizationOffsetType, seed uint32, pulsecounts, lsbcounts []uint8) (eQ23 []int32) {
+//nolint:cyclop
+func (d *Decoder) decodeExcitation(
+	signalType frameSignalType,
+	quantizationOffsetType frameQuantizationOffsetType,
+	seed uint32,
+	pulsecounts, lsbcounts []uint8,
+) (eQ23 []int32) {
 	// After the signs have been read, there is enough information to
 	// reconstruct the complete excitation signal.  This requires adding a
 	// constant quantization offset to each non-zero sample and then
@@ -1615,7 +1627,7 @@ func (d *Decoder) decodePitchLags(
 func (d *Decoder) decodeLTPScalingParameter(
 	signalType frameSignalType,
 	isFirstSilkFrameInOpusFrame bool,
-) (LTPscaleQ14 float32) { //nolint:gocritic
+) float32 {
 	// An LTP scaling parameter appears after the LTP filter coefficients if
 	// and only if
 	//
@@ -1726,7 +1738,7 @@ func (d *Decoder) ltpSynthesis(
 	bQ7 [][]int8,
 	pitchLags []int,
 	n, j, s, dLPC int, //nolint:varnamelen
-	LTPScaleQ14 float32, //nolint: gocritic
+	ltpScaleQ14 float32,
 	wQ2 int16,
 	aQ12, gainQ16, res, resLag []float32,
 ) {
@@ -1735,12 +1747,12 @@ func (d *Decoder) ltpSynthesis(
 	// then let out_end be set to (j - (s-2)*n) and let LTP_scale_Q14 be set
 	// to 16384.  Otherwise, set out_end to (j - s*n) and set LTP_scale_Q14
 	// to the Q14 LTP scaling value from Section 4.2.7.6.3.
-	var out_end int //nolint:staticcheck,varnamelen,revive
+	var outEnd int
 	if s < 2 || wQ2 == 4 {
-		out_end = -s * n
+		outEnd = -s * n
 	} else {
-		out_end = -(s - 2) * n
-		LTPScaleQ14 = 16384.0
+		outEnd = -(s - 2) * n
+		ltpScaleQ14 = 16384.0
 	}
 
 	// out[i] and lpc[i] are initially cleared to all zeros. Then, for i
@@ -1755,7 +1767,7 @@ func (d *Decoder) ltpSynthesis(
 	//                                 out[i] - \  out[i-k-1] * --------, 1.0)
 	//                                          /_               4096.0
 	//                                          k=0
-	for i := (-pitchLags[s]) - 2; i < out_end; i++ {
+	for i := (-pitchLags[s]) - 2; i < outEnd; i++ {
 		index := i + j
 
 		var (
@@ -1788,7 +1800,7 @@ func (d *Decoder) ltpSynthesis(
 		}
 
 		resVal = clampNegativeOneToOne(resVal)
-		resVal *= (4.0 * LTPScaleQ14) / gainQ16[s]
+		resVal *= (4.0 * ltpScaleQ14) / gainQ16[s]
 
 		if !writeToLag {
 			res[resIndex] = resVal
@@ -1819,7 +1831,7 @@ func (d *Decoder) ltpSynthesis(
 	// subframes.
 	if s > 0 {
 		scaledGain := gainQ16[s-1] / gainQ16[s]
-		for i := out_end; i < 0; i++ {
+		for i := outEnd; i < 0; i++ {
 			index := j + i
 			if index < 0 {
 				resLag[len(resLag)+index] *= scaledGain
@@ -1950,7 +1962,7 @@ func (d *Decoder) silkFrameReconstruction(
 	bQ7 [][]int8,
 	pitchLags []int,
 	eQ23 []int32,
-	LTPscaleQ14 float32, //nolint:gocritic
+	ltpScaleQ14 float32,
 	wQ2 int16,
 	aQ12 [][]float32,
 	gainQ16, out []float32,
@@ -2007,7 +2019,7 @@ func (d *Decoder) silkFrameReconstruction(
 				out,
 				bQ7, pitchLags,
 				n, j, subFrame, dLPC,
-				LTPscaleQ14,
+				ltpScaleQ14,
 				wQ2,
 				aQ12[aQ12Index], gainQ16, res, resLag,
 			)
@@ -2065,7 +2077,7 @@ func (d *Decoder) decodeFrame(
 	bQ7 := d.decodeLTPFilterCoefficients(signalType, subframeCount)
 
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.3
-	LTPscaleQ14 := d.decodeLTPScalingParameter(signalType, isFirstSilkFrameInOpusFrame && !skipLTPScaling)
+	ltpScaleQ14 := d.decodeLTPScalingParameter(signalType, isFirstSilkFrameInOpusFrame && !skipLTPScaling)
 
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.7
 	lcgSeed := d.decodeLinearCongruentialGeneratorSeed()
@@ -2091,7 +2103,7 @@ func (d *Decoder) decodeFrame(
 		bQ7,
 		pitchLags,
 		eQ23,
-		LTPscaleQ14,
+		ltpScaleQ14,
 		wQ2,
 		aQ12,
 		gainQ16, out,
@@ -2343,7 +2355,13 @@ func (d *Decoder) decodeStereo(
 
 // Decode decodes one SILK frame of mono or stereo audio.
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.1
-func (d *Decoder) Decode(in []byte, out []float32, isStereo bool, nanoseconds int, bandwidth Bandwidth) error { // nolint:lll
+func (d *Decoder) Decode(
+	in []byte,
+	out []float32,
+	isStereo bool,
+	nanoseconds int,
+	bandwidth Bandwidth,
+) error {
 	frameCount := silkFrameCount(nanoseconds)
 	silkFrameNanoseconds := min(nanoseconds, nanoseconds20Ms)
 
