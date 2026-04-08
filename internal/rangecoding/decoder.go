@@ -3,6 +3,8 @@
 
 package rangecoding
 
+import "math/bits"
+
 // Decoder implements rfc6716#section-4.1
 // Opus uses an entropy coder based on range coding [RANGE-CODING]
 // [MARTIN79], which is itself a rediscovery of the FIFO arithmetic code
@@ -69,8 +71,10 @@ package rangecoding
 // the current range.  Both val and rng are 32-bit unsigned integer
 // values.
 type Decoder struct {
-	data     []byte
-	bitsRead uint
+	data        []byte
+	bitsRead    uint
+	rawBitsRead uint
+	nbitsTotal  uint
 
 	rangeSize              uint32 // rng in RFC 6716
 	highAndCodedDifference uint32 // val in RFC 6716
@@ -92,6 +96,8 @@ type Decoder struct {
 func (r *Decoder) Init(data []byte) {
 	r.data = data
 	r.bitsRead = 0
+	r.rawBitsRead = 0
+	r.nbitsTotal = 9
 
 	r.rangeSize = 128
 	r.highAndCodedDifference = 127 - r.getBits(7)
@@ -178,6 +184,33 @@ func (r *Decoder) getBits(n int) uint32 {
 	return bits
 }
 
+func (r *Decoder) getRawBit() uint32 {
+	index := r.rawBitsRead / 8
+	offset := r.rawBitsRead % 8
+	r.rawBitsRead++
+	r.nbitsTotal++
+	if index >= uint(len(r.data)) {
+		return 0
+	}
+
+	byteIndex := len(r.data) - 1 - int(index) //nolint:gosec // G115: index is bounded by len(r.data) above.
+
+	return uint32((r.data[byteIndex] >> offset) & 1)
+}
+
+func (r *Decoder) getRawBits(n uint) uint32 {
+	var bits uint32
+
+	for i := uint(0); i < n && i < 32; i++ {
+		bits |= r.getRawBit() << i
+	}
+	for i := uint(32); i < n; i++ {
+		_ = r.getRawBit()
+	}
+
+	return bits
+}
+
 // minRangeSize is the minimum allowed size for rng.
 // It's equal to math.Pow(2, 23).
 const minRangeSize = 1 << 23
@@ -200,6 +233,7 @@ const minRangeSize = 1 << 23
 func (r *Decoder) normalize() {
 	for r.rangeSize <= minRangeSize {
 		r.rangeSize <<= 8
+		r.nbitsTotal += 8
 		r.highAndCodedDifference = ((r.highAndCodedDifference << 8) + (255 - r.getBits(8))) & 0x7FFFFFFF
 	}
 }
@@ -219,8 +253,70 @@ func (r *Decoder) update(scale, low, high, total uint32) {
 func (r *Decoder) SetInternalValues(data []byte, bitsRead uint, rangeSize uint32, highAndCodedDifference uint32) {
 	r.data = data
 	r.bitsRead = bitsRead
+	r.rawBitsRead = 0
+	r.nbitsTotal = bitsRead
 	r.rangeSize = rangeSize
 	r.highAndCodedDifference = highAndCodedDifference
+}
+
+// DecodeRawBits decodes raw bits packed from the end of the frame.
+// RFC 6716 Section 4.1.4 defines this LSB-first tail packing for CELT.
+func (r *Decoder) DecodeRawBits(n uint) uint32 {
+	return r.getRawBits(n)
+}
+
+// Tell returns a conservative upper bound, in whole bits, of how many bits
+// have been consumed from the current frame, per RFC 6716 Section 4.1.6.1.
+func (r *Decoder) Tell() uint {
+	lg := uint(bits.Len32(r.rangeSize)) //nolint:gosec // G115: bits.Len32 returns 0..32.
+	if lg == 0 {
+		return r.nbitsTotal
+	}
+	if r.nbitsTotal <= lg {
+		return 0
+	}
+
+	return r.nbitsTotal - lg
+}
+
+// TellFrac returns a conservative upper bound in 1/8 bit units.
+// This follows the ec_tell_frac() construction in RFC 6716 Section 4.1.6.2.
+func (r *Decoder) TellFrac() uint {
+	lg := uint(bits.Len32(r.rangeSize)) //nolint:gosec // G115: bits.Len32 returns 0..32.
+	if lg == 0 {
+		return r.nbitsTotal * 8
+	}
+	if lg < 24 {
+		return r.Tell() * 8
+	}
+
+	rQ15 := uint64(r.rangeSize >> (lg - 16))
+	for range 3 {
+		rQ15 = (rQ15 * rQ15) >> 15
+		bit := rQ15 >> 16
+		lg = 2*lg + uint(bit)
+		if bit != 0 {
+			rQ15 >>= 1
+		}
+	}
+
+	total := r.nbitsTotal * 8
+	if total <= lg {
+		return 0
+	}
+
+	return total - lg
+}
+
+// RemainingBits reports a conservative estimate of the unread payload bits.
+// RFC 6716 Section 4.1.4 allows range and raw-bit cursor overlap.
+func (r *Decoder) RemainingBits() int {
+	return len(r.data)*8 - int(r.bitsRead) - int(r.rawBitsRead) //nolint:gosec // G115: decode cursors are frame-sized.
+}
+
+// FinalRange exposes the current range coder range state for tests.
+func (r *Decoder) FinalRange() uint32 {
+	return r.rangeSize
 }
 
 func localMin(a, b uint) uint {

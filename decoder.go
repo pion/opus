@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/pion/opus/internal/bitdepth"
+	"github.com/pion/opus/internal/celt"
 	silkresample "github.com/pion/opus/internal/resample/silk"
 	"github.com/pion/opus/internal/silk"
 )
@@ -16,12 +17,17 @@ const (
 	maxOpusFrameSize                = 1275
 	maxOpusPacketDurationNanosecond = 120000000
 	maxSilkFrameSampleCount         = 320
+	maxCeltFrameSampleCount         = 960
+	celtSampleRate                  = 48000
 )
 
 // Decoder decodes the Opus bitstream into PCM.
 type Decoder struct {
 	silkDecoder            silk.Decoder
 	silkBuffer             []float32
+	celtDecoder            celt.Decoder
+	celtBuffer             []float32
+	previousMode           configurationMode
 	resampleBuffer         []float32
 	resampleChannelIn      [2][]float32
 	resampleChannelOut     [2][]float32
@@ -45,6 +51,7 @@ func NewDecoderWithOutput(sampleRate, channels int) (Decoder, error) {
 	decoder := Decoder{
 		silkDecoder: silk.NewDecoder(),
 		silkBuffer:  make([]float32, maxSilkFrameSampleCount),
+		celtDecoder: celt.NewDecoder(),
 	}
 	if err := decoder.Init(sampleRate, channels); err != nil {
 		return Decoder{}, err
@@ -143,6 +150,26 @@ func (d *Decoder) resampleSilkChannel(
 	return nil
 }
 
+func (d *Decoder) resetModeState(mode configurationMode) {
+	if d.previousMode == mode {
+		return
+	}
+
+	switch mode {
+	case configurationModeSilkOnly:
+		d.silkDecoder = silk.NewDecoder()
+	case configurationModeCELTOnly:
+		d.celtDecoder.Reset()
+		clear(d.celtBuffer)
+	case configurationModeHybrid:
+		d.silkDecoder = silk.NewDecoder()
+		d.celtDecoder.Reset()
+		clear(d.celtBuffer)
+	}
+
+	d.previousMode = mode
+}
+
 func (c Configuration) silkFrameSampleCount() int {
 	if c.mode() != configurationModeSilkOnly {
 		return 0
@@ -160,6 +187,28 @@ func (c Configuration) silkFrameSampleCount() int {
 	}
 
 	return 0
+}
+
+func (c Configuration) celtFrameSampleCount() int {
+	if c.mode() != configurationModeCELTOnly {
+		return 0
+	}
+	if c.frameDuration() == frameDuration20ms {
+		return maxCeltFrameSampleCount
+	}
+
+	return int(int64(c.frameDuration().nanoseconds()) * int64(celtSampleRate) / 1000000000)
+}
+
+func (c Configuration) decodedSampleRate() int {
+	switch c.mode() {
+	case configurationModeSilkOnly:
+		return c.bandwidth().SampleRate()
+	case configurationModeCELTOnly:
+		return celtSampleRate
+	default:
+		return 0
+	}
 }
 
 func parseFrameLength(in []byte) (frameLength int, bytesRead int, err error) {
@@ -389,10 +438,30 @@ func (d *Decoder) decode(in []byte, out []float32) (bandwidth Bandwidth, isStere
 		return 0, false, 0, err
 	}
 
-	if cfg.mode() != configurationModeSilkOnly {
+	switch cfg.mode() {
+	case configurationModeSilkOnly:
+		d.resetModeState(configurationModeSilkOnly)
+
+		return d.decodeSilkFrames(cfg, tocHeader, encodedFrames, out)
+	case configurationModeCELTOnly:
+		d.resetModeState(configurationModeCELTOnly)
+
+		return 0, false, 0, fmt.Errorf("%w: %d", errUnsupportedConfigurationMode, cfg.mode())
+	case configurationModeHybrid:
+		d.resetModeState(configurationModeHybrid)
+
+		return 0, false, 0, fmt.Errorf("%w: %d", errUnsupportedConfigurationMode, cfg.mode())
+	default:
 		return 0, false, 0, fmt.Errorf("%w: %d", errUnsupportedConfigurationMode, cfg.mode())
 	}
+}
 
+func (d *Decoder) decodeSilkFrames(
+	cfg Configuration,
+	tocHeader tableOfContentsHeader,
+	encodedFrames [][]byte,
+	out []float32,
+) (bandwidth Bandwidth, isStereo bool, sampleCount int, err error) {
 	frameSampleCount := cfg.silkFrameSampleCount()
 	if tocHeader.isStereo() {
 		frameSampleCount *= 2
