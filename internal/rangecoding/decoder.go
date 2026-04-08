@@ -109,29 +109,27 @@ func (r *Decoder) Init(data []byte) {
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.1.3.3
 func (r *Decoder) DecodeSymbolWithICDF(cumulativeDistributionTable []uint) uint32 {
-	var k, scale, total, symbol, low, high uint32 //nolint:varnamelen
-
-	total = uint32(cumulativeDistributionTable[0]) //nolint:gosec // G115
+	total := uint32(cumulativeDistributionTable[0]) //nolint:gosec // G115
 	cumulativeDistributionTable = cumulativeDistributionTable[1:]
 
-	scale = r.rangeSize / total
-	symbol = r.highAndCodedDifference/scale + 1
+	scale := r.rangeSize / total
+	symbol := r.highAndCodedDifference/scale + 1
 	symbol = total - uint32(localMin(uint(symbol), uint(total))) //nolint:gosec // G115
 
-	// nolint: revive
-	for k = 0; uint32(cumulativeDistributionTable[k]) <= symbol; k++ { //nolint:gosec // G115
+	symbolIndex := uint32(0)
+	for uint32(cumulativeDistributionTable[symbolIndex]) <= symbol { //nolint:gosec // G115
+		symbolIndex++
 	}
 
-	high = uint32(cumulativeDistributionTable[k]) //nolint:gosec // G115
-	if k != 0 {
-		low = uint32(cumulativeDistributionTable[k-1]) //nolint:gosec // G115
-	} else {
-		low = 0
+	high := uint32(cumulativeDistributionTable[symbolIndex]) //nolint:gosec // G115
+	low := uint32(0)
+	if symbolIndex != 0 {
+		low = uint32(cumulativeDistributionTable[symbolIndex-1]) //nolint:gosec // G115
 	}
 
 	r.update(scale, low, high, total)
 
-	return k
+	return symbolIndex
 }
 
 // DecodeSymbolLogP decodes a single binary symbol.
@@ -141,20 +139,19 @@ func (r *Decoder) DecodeSymbolWithICDF(cumulativeDistributionTable []uint) uint3
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.1.3.2
 func (r *Decoder) DecodeSymbolLogP(logp uint) uint32 {
-	var k uint32 //nolint:varnamelen
 	scale := r.rangeSize >> logp
+	symbol := uint32(0)
 
 	if r.highAndCodedDifference >= scale {
 		r.highAndCodedDifference -= scale
 		r.rangeSize -= scale
-		k = 0
 	} else {
 		r.rangeSize = scale
-		k = 1
+		symbol = 1
 	}
 	r.normalize()
 
-	return k
+	return symbol
 }
 
 func (r *Decoder) getBit() uint32 {

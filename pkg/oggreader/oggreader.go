@@ -126,7 +126,7 @@ func (o *OggReader) readHeaders() (*OggHeader, error) {
 
 // ParseNextPage reads from stream and returns Ogg page segments, header,
 // and an error if there is incomplete page data.
-func (o *OggReader) ParseNextPage() ([][]byte, *OggPageHeader, error) { // nolint:cyclop
+func (o *OggReader) ParseNextPage() ([][]byte, *OggPageHeader, error) {
 	header := make([]byte, pageHeaderLen)
 
 	n, err := io.ReadFull(o.stream, header)
@@ -164,37 +164,45 @@ func (o *OggReader) ParseNextPage() ([][]byte, *OggPageHeader, error) { // nolin
 	}
 
 	if o.doChecksum {
-		var checksum uint32
-		updateChecksum := func(v byte) {
-			checksum = (checksum << 8) ^ o.checksumTable[byte(checksum>>24)^v]
-		}
-
-		for index := range header {
-			// Don't include expected checksum in our generation
-			if index > 21 && index < 26 {
-				updateChecksum(0)
-
-				continue
-			}
-
-			updateChecksum(header[index])
-		}
-		for _, s := range sizeBuffer {
-			updateChecksum(s)
-		}
-
-		for i := range segments {
-			for index := range segments[i] {
-				updateChecksum(segments[i][index])
-			}
-		}
-
-		if binary.LittleEndian.Uint32(header[22:22+4]) != checksum {
-			return nil, nil, errChecksumMismatch
+		if err = o.validateChecksum(header, sizeBuffer, segments); err != nil {
+			return nil, nil, err
 		}
 	}
 
 	return segments, pageHeader, nil
+}
+
+func (o *OggReader) validateChecksum(header, sizeBuffer []byte, segments [][]byte) error {
+	var checksum uint32
+	updateChecksum := func(v byte) {
+		checksum = (checksum << 8) ^ o.checksumTable[byte(checksum>>24)^v]
+	}
+
+	for index := range header {
+		// Don't include expected checksum in our generation
+		if index > 21 && index < 26 {
+			updateChecksum(0)
+
+			continue
+		}
+
+		updateChecksum(header[index])
+	}
+	for _, s := range sizeBuffer {
+		updateChecksum(s)
+	}
+
+	for i := range segments {
+		for index := range segments[i] {
+			updateChecksum(segments[i][index])
+		}
+	}
+
+	if binary.LittleEndian.Uint32(header[22:22+4]) != checksum {
+		return errChecksumMismatch
+	}
+
+	return nil
 }
 
 // ResetReader resets the internal stream of OggReader. This is useful
@@ -208,8 +216,8 @@ func generateChecksumTable() *[256]uint32 {
 	var table [256]uint32
 	const poly = 0x04c11db7
 
-	for i := range table {
-		r := uint32(i) << 24 // nolint:gosec // G115 false positive
+	for tableIndex := range uint32(256) {
+		r := tableIndex << 24
 
 		for range 8 {
 			if (r & 0x80000000) != 0 {
@@ -217,7 +225,7 @@ func generateChecksumTable() *[256]uint32 {
 			} else {
 				r <<= 1
 			}
-			table[i] = (r & 0xffffffff) // #nosec G602
+			table[tableIndex] = r
 		}
 	}
 
