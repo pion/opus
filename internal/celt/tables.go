@@ -49,6 +49,36 @@ var (
 	icdfSmallEnergy    = []uint{4, 2, 3, 4}
 )
 
+// tfSelectTable is the RFC 6716 Section 4.3.1/Table 60-63 mapping from
+// {LM, transient, tf_select, tf_change} to the final per-band TF adjustment.
+var tfSelectTable = [maxLM + 1][8]int8{ //nolint:gochecknoglobals
+	{0, -1, 0, -1, 0, -1, 0, -1},
+	{0, -1, 0, -2, 1, 0, 1, -1},
+	{0, -2, 0, -3, 2, 0, 1, -1},
+	{0, -2, 0, -3, 3, 0, 1, -1},
+}
+
+// bandCaps is the static caps cache for the 48 kHz CELT mode used by the
+// reference init_caps() helper when bounding dynamic allocation boosts.
+var bandCaps = [(maxLM + 1) * 2 * maxBands]uint8{ //nolint:gochecknoglobals
+	224, 224, 224, 224, 224, 224, 224, 224, 160, 160, 160, 160, 185, 185,
+	185, 178, 178, 168, 134, 61, 37,
+	224, 224, 224, 224, 224, 224, 224, 224, 240, 240, 240, 240, 207, 207,
+	207, 198, 198, 183, 144, 66, 40,
+	160, 160, 160, 160, 160, 160, 160, 160, 185, 185, 185, 185, 193, 193,
+	193, 183, 183, 172, 138, 64, 38,
+	240, 240, 240, 240, 240, 240, 240, 240, 207, 207, 207, 207, 204, 204,
+	204, 193, 193, 180, 143, 66, 40,
+	185, 185, 185, 185, 185, 185, 185, 185, 193, 193, 193, 193, 193, 193,
+	193, 183, 183, 172, 138, 65, 39,
+	207, 207, 207, 207, 207, 207, 207, 207, 204, 204, 204, 204, 201, 201,
+	201, 188, 188, 176, 141, 66, 40,
+	193, 193, 193, 193, 193, 193, 193, 193, 193, 193, 193, 193, 194, 194,
+	194, 184, 184, 173, 139, 65, 39,
+	204, 204, 204, 204, 204, 204, 204, 204, 201, 201, 201, 201, 198, 198,
+	198, 187, 187, 175, 140, 66, 40,
+}
+
 // prediction/decay coefficients and eProbModel are the coarse-energy model
 // constants used by unquant_coarse_energy() in RFC 6716 Section 4.3.2.1.
 var energyPredictionCoefficients = [...]float32{ //nolint:gochecknoglobals
