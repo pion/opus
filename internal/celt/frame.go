@@ -28,6 +28,7 @@ type frameSideInfo struct {
 	transient       bool
 	shortBlockCount int
 	intraEnergy     bool
+	coarseEnergy    [2][maxBands]float32
 }
 
 type postFilter struct {
@@ -38,10 +39,9 @@ type postFilter struct {
 	tapset  int
 }
 
-// decodeFrameSideInfo consumes the initial CELT symbols through the intra-energy
-// flag in the order specified by RFC 6716 Table 56. Coarse energy decoding,
-// TF changes, allocation, and PVQ residual decoding are intentionally left to
-// the following CELT slices.
+// decodeFrameSideInfo consumes the initial CELT symbols through coarse energy
+// in the order specified by RFC 6716 Table 56. TF changes, allocation, and PVQ
+// residual decoding are intentionally left to the following CELT slices.
 func (d *Decoder) decodeFrameSideInfo(data []byte, cfg frameConfig) (frameSideInfo, error) {
 	info, err := d.validateFrameConfig(cfg)
 	if err != nil {
@@ -61,8 +61,19 @@ func (d *Decoder) decodeFrameSideInfo(data []byte, cfg frameConfig) (frameSideIn
 	}
 	d.decodeTransientFlag(&info)
 	d.decodeIntraEnergyFlag(&info)
+	d.prepareCoarseEnergyHistory(&info)
+	d.decodeCoarseEnergy(&info)
 
 	return info, nil
+}
+
+func (d *Decoder) prepareCoarseEnergyHistory(info *frameSideInfo) {
+	if info.channelCount != 1 {
+		return
+	}
+	for band := range d.previousLogE[0] {
+		d.previousLogE[0][band] = maxFloat32(d.previousLogE[0][band], d.previousLogE[1][band])
+	}
 }
 
 func (d *Decoder) validateFrameConfig(cfg frameConfig) (frameSideInfo, error) {
@@ -156,4 +167,88 @@ func (d *Decoder) decodeIntraEnergyFlag(info *frameSideInfo) {
 	}
 
 	info.intraEnergy = d.rangeDecoder.DecodeSymbolLogP(3) == 1
+}
+
+// decodeCoarseEnergy decodes the RFC 6716 Section 4.3.2.1 fixed-resolution
+// coarse energy deltas and updates the CELT previous-frame energy state.
+func (d *Decoder) decodeCoarseEnergy(info *frameSideInfo) {
+	probModel := eProbModel[info.lm][boolIndex(info.intraEnergy)]
+	previousBandPrediction := [2]float32{}
+	coef := energyPredictionCoefficients[info.lm]
+	beta := energyBetaCoefficients[info.lm]
+	if info.intraEnergy {
+		coef = 0
+		beta = energyIntraBeta
+	}
+
+	for band := info.startBand; band < info.endBand; band++ {
+		for channel := range info.channelCount {
+			qi := d.decodeCoarseEnergyDelta(info, probModel[:], band)
+			q := float32(qi)
+			oldEnergy := maxFloat32(-9, d.previousLogE[channel][band])
+			energy := coef*oldEnergy + previousBandPrediction[channel] + q
+
+			d.previousLogE[channel][band] = energy
+			info.coarseEnergy[channel][band] = energy
+			previousBandPrediction[channel] += q - beta*q
+		}
+	}
+	if info.channelCount == 1 {
+		copy(d.previousLogE[1][:], d.previousLogE[0][:])
+		copy(info.coarseEnergy[1][:], info.coarseEnergy[0][:])
+	}
+}
+
+func (d *Decoder) decodeCoarseEnergyDelta(info *frameSideInfo, probModel []uint8, band int) int {
+	bitsLeft := int(info.totalBits) - int(d.rangeDecoder.Tell())
+	switch {
+	case bitsLeft >= 15:
+		probIndex := 2 * minInt(band, maxBands-1)
+
+		return d.rangeDecoder.DecodeLaplace(
+			uint32(probModel[probIndex])<<7,
+			uint32(probModel[probIndex+1])<<6,
+		)
+	case bitsLeft >= 2:
+		return smallEnergyDelta(d.rangeDecoder.DecodeSymbolWithICDF(icdfSmallEnergy))
+	case bitsLeft >= 1:
+		return -int(d.rangeDecoder.DecodeSymbolLogP(1))
+	default:
+		return -1
+	}
+}
+
+func smallEnergyDelta(symbol uint32) int {
+	switch symbol {
+	case 1:
+		return -1
+	case 2:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func boolIndex(v bool) int {
+	if v {
+		return 1
+	}
+
+	return 0
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+
+	return b
+}
+
+func maxFloat32(a, b float32) float32 {
+	if a > b {
+		return a
+	}
+
+	return b
 }
