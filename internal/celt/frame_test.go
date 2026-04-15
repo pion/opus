@@ -356,6 +356,142 @@ func TestDecodeCoarseEnergy(t *testing.T) {
 	})
 }
 
+func TestDecodeTimeFrequencyChanges(t *testing.T) {
+	t.Run("decodes non-transient tf_change and tf_select", func(t *testing.T) {
+		decoder := NewDecoder()
+		decoder.rangeDecoder = rangeDecoderWithBinaryOne()
+		info := frameSideInfo{
+			lm:           1,
+			totalBits:    256,
+			startBand:    0,
+			endBand:      1,
+			channelCount: 1,
+		}
+
+		decoder.decodeTimeFrequencyChanges(&info)
+
+		assert.Equal(t, 1, info.tfSelect)
+		assert.Equal(t, -2, info.tfChange[0])
+	})
+
+	t.Run("decodes transient tf_change and tf_select", func(t *testing.T) {
+		decoder := NewDecoder()
+		decoder.rangeDecoder = rangeDecoderWithBinaryOne()
+		info := frameSideInfo{
+			lm:           2,
+			totalBits:    256,
+			startBand:    0,
+			endBand:      1,
+			channelCount: 1,
+			transient:    true,
+		}
+
+		decoder.decodeTimeFrequencyChanges(&info)
+
+		assert.Equal(t, 1, info.tfSelect)
+		assert.Equal(t, -1, info.tfChange[0])
+	})
+
+	t.Run("maps default transient changes when budget is exhausted", func(t *testing.T) {
+		decoder := NewDecoder()
+		info := frameSideInfo{
+			lm:           3,
+			totalBits:    0,
+			startBand:    0,
+			endBand:      2,
+			channelCount: 1,
+			transient:    true,
+		}
+
+		decoder.decodeTimeFrequencyChanges(&info)
+
+		assert.Zero(t, info.tfSelect)
+		assert.Equal(t, 3, info.tfChange[0])
+		assert.Equal(t, 3, info.tfChange[1])
+	})
+}
+
+func TestDecodeSpread(t *testing.T) {
+	t.Run("decodes spread decision when enough bits remain", func(t *testing.T) {
+		decoder := NewDecoder()
+		decoder.rangeDecoder = rangeDecoderWithCDFSymbol(31, 32)
+		info := frameSideInfo{totalBits: 256}
+
+		decoder.decodeSpread(&info)
+
+		assert.Equal(t, 3, info.spread)
+	})
+
+	t.Run("defaults to normal spread without enough bits", func(t *testing.T) {
+		decoder := NewDecoder()
+		info := frameSideInfo{totalBits: 0}
+
+		decoder.decodeSpread(&info)
+
+		assert.Equal(t, defaultSpreadDecision, info.spread)
+	})
+}
+
+func TestDecodeDynamicAllocation(t *testing.T) {
+	t.Run("decodes boosts until the band cap", func(t *testing.T) {
+		decoder := NewDecoder()
+		decoder.rangeDecoder = rangeDecoderWithBinaryOne()
+		info := frameSideInfo{
+			lm:           0,
+			totalBits:    256,
+			startBand:    0,
+			endBand:      1,
+			channelCount: 1,
+		}
+		totalBitsEighth := info.totalBits << bitResolution
+
+		remaining := decoder.decodeDynamicAllocation(&info, totalBitsEighth)
+
+		assert.Equal(t, 72, info.bandBoost[0])
+		assert.Less(t, remaining, totalBitsEighth)
+	})
+
+	t.Run("stops immediately on a zero boost flag", func(t *testing.T) {
+		decoder := NewDecoder()
+		decoder.rangeDecoder = rangeDecoderWithBinaryZero()
+		info := frameSideInfo{
+			lm:           0,
+			totalBits:    256,
+			startBand:    0,
+			endBand:      1,
+			channelCount: 1,
+		}
+		totalBitsEighth := info.totalBits << bitResolution
+
+		remaining := decoder.decodeDynamicAllocation(&info, totalBitsEighth)
+
+		assert.Zero(t, info.bandBoost[0])
+		assert.Equal(t, totalBitsEighth, remaining)
+	})
+}
+
+func TestDecodeAllocationTrim(t *testing.T) {
+	t.Run("decodes trim when six bits remain", func(t *testing.T) {
+		decoder := NewDecoder()
+		decoder.rangeDecoder = rangeDecoderWithCDFSymbol(87, 128)
+		info := frameSideInfo{}
+
+		decoder.decodeAllocationTrim(&info, uint(256)<<bitResolution)
+
+		assert.Equal(t, 6, info.allocationTrim)
+	})
+
+	t.Run("defaults when six bits are unavailable", func(t *testing.T) {
+		decoder := NewDecoder()
+		decoder.rangeDecoder = rangeDecoderWithCDFSymbol(87, 128)
+		info := frameSideInfo{}
+
+		decoder.decodeAllocationTrim(&info, decoder.rangeDecoder.TellFrac()+47)
+
+		assert.Equal(t, defaultAllocationTrim, info.allocationTrim)
+	})
+}
+
 func rangeDecoderWithBinaryOne() rangecoding.Decoder {
 	decoder := rangecoding.Decoder{}
 	decoder.SetInternalValues(nil, 40, 1<<31, 0)
@@ -363,14 +499,22 @@ func rangeDecoderWithBinaryOne() rangecoding.Decoder {
 	return decoder
 }
 
+func rangeDecoderWithBinaryZero() rangecoding.Decoder {
+	decoder := rangecoding.Decoder{}
+	decoder.SetInternalValues(nil, 40, 1<<31, (1<<31)-1)
+
+	return decoder
+}
+
 func rangeDecoderWithSmallEnergyCDFSymbol(symbol uint32) rangecoding.Decoder {
-	const (
-		smallEnergyTotal = 4
-		scale            = 1 << 24
-	)
+	return rangeDecoderWithCDFSymbol(symbol, 4)
+}
+
+func rangeDecoderWithCDFSymbol(symbol, total uint32) rangecoding.Decoder {
+	const scale = 1 << 24
 
 	decoder := rangecoding.Decoder{}
-	decoder.SetInternalValues(nil, 0, smallEnergyTotal*scale, (smallEnergyTotal-symbol-1)*scale)
+	decoder.SetInternalValues(nil, 0, total*scale, (total-symbol-1)*scale)
 
 	return decoder
 }

@@ -6,8 +6,18 @@ package celt
 import "fmt"
 
 const (
-	postFilterPitchBase = 16
-	postFilterGainStep  = 0.09375
+	postFilterPitchBase               = 16
+	postFilterGainStep                = 0.09375
+	bitResolution                     = 3
+	defaultSpreadDecision             = 2
+	defaultAllocationTrim             = 5
+	initialDynamicAllocationLogP      = 6
+	minDynamicAllocationLogP          = 2
+	allocationTrimBitCost             = 6
+	firstTimeFrequencyChangeLogP      = 4
+	firstTransientFrequencyChangeLogP = 2
+	nextTimeFrequencyChangeLogP       = 5
+	nextTransientFrequencyChangeLogP  = 4
 )
 
 type frameConfig struct {
@@ -29,6 +39,11 @@ type frameSideInfo struct {
 	shortBlockCount int
 	intraEnergy     bool
 	coarseEnergy    [2][maxBands]float32
+	tfChange        [maxBands]int
+	tfSelect        int
+	spread          int
+	bandBoost       [maxBands]int
+	allocationTrim  int
 }
 
 type postFilter struct {
@@ -39,8 +54,8 @@ type postFilter struct {
 	tapset  int
 }
 
-// decodeFrameSideInfo consumes the initial CELT symbols through coarse energy
-// in the order specified by RFC 6716 Table 56. TF changes, allocation, and PVQ
+// decodeFrameSideInfo consumes the initial CELT symbols through the allocation
+// header in the order specified by RFC 6716 Table 56. Pulse allocation and PVQ
 // residual decoding are intentionally left to the following CELT slices.
 func (d *Decoder) decodeFrameSideInfo(data []byte, cfg frameConfig) (frameSideInfo, error) {
 	info, err := d.validateFrameConfig(cfg)
@@ -63,6 +78,7 @@ func (d *Decoder) decodeFrameSideInfo(data []byte, cfg frameConfig) (frameSideIn
 	d.decodeIntraEnergyFlag(&info)
 	d.prepareCoarseEnergyHistory(&info)
 	d.decodeCoarseEnergy(&info)
+	d.decodeAllocationHeader(&info)
 
 	return info, nil
 }
@@ -97,10 +113,12 @@ func (d *Decoder) validateFrameConfig(cfg frameConfig) (frameSideInfo, error) {
 	}
 
 	return frameSideInfo{
-		lm:           lm,
-		startBand:    cfg.startBand,
-		endBand:      cfg.endBand,
-		channelCount: cfg.channelCount,
+		lm:             lm,
+		startBand:      cfg.startBand,
+		endBand:        cfg.endBand,
+		channelCount:   cfg.channelCount,
+		spread:         defaultSpreadDecision,
+		allocationTrim: defaultAllocationTrim,
 	}, nil
 }
 
@@ -224,6 +242,122 @@ func (d *Decoder) decodeCoarseEnergyDelta(info *frameSideInfo, probModel []uint8
 	default:
 		return -int(d.rangeDecoder.DecodeSymbolLogP(1))
 	}
+}
+
+func (d *Decoder) decodeAllocationHeader(info *frameSideInfo) {
+	d.decodeTimeFrequencyChanges(info)
+	d.decodeSpread(info)
+	totalBitsEighth := d.decodeDynamicAllocation(info, info.totalBits<<bitResolution)
+	d.decodeAllocationTrim(info, totalBitsEighth)
+}
+
+// decodeTimeFrequencyChanges decodes the RFC 6716 Section 4.3.1 per-band
+// tf_change flags and optional tf_select bit, then maps them through Tables 60-63.
+func (d *Decoder) decodeTimeFrequencyChanges(info *frameSideInfo) {
+	logP := firstTimeFrequencyChangeLogP
+	if info.transient {
+		logP = firstTransientFrequencyChangeLogP
+	}
+
+	budget := info.totalBits
+	tell := d.rangeDecoder.Tell()
+	tfSelectReserved := info.lm > 0 && tell+uint(logP)+1 <= budget
+	if tfSelectReserved {
+		budget--
+	}
+
+	current := 0
+	changed := 0
+	for band := info.startBand; band < info.endBand; band++ {
+		if tell+uint(logP) <= budget {
+			current ^= int(d.rangeDecoder.DecodeSymbolLogP(uint(logP)))
+			tell = d.rangeDecoder.Tell()
+			changed |= current
+		}
+		info.tfChange[band] = current
+
+		if info.transient {
+			logP = nextTransientFrequencyChangeLogP
+		} else {
+			logP = nextTimeFrequencyChangeLogP
+		}
+	}
+
+	info.tfSelect = 0
+	table := tfSelectTable[info.lm]
+	if tfSelectReserved &&
+		table[4*boolIndex(info.transient)+changed] !=
+			table[4*boolIndex(info.transient)+2+changed] {
+		info.tfSelect = int(d.rangeDecoder.DecodeSymbolLogP(1))
+	}
+
+	for band := info.startBand; band < info.endBand; band++ {
+		info.tfChange[band] = int(table[4*boolIndex(info.transient)+2*info.tfSelect+info.tfChange[band]])
+	}
+}
+
+func (d *Decoder) decodeSpread(info *frameSideInfo) {
+	info.spread = defaultSpreadDecision
+	if d.rangeDecoder.Tell()+4 <= info.totalBits {
+		info.spread = int(d.rangeDecoder.DecodeSymbolWithICDF(icdfSpread))
+	}
+}
+
+// decodeDynamicAllocation decodes RFC 6716 Section 4.3.3 band boost offsets in
+// 1/8-bit units and returns the boost-adjusted total bit budget in 1/8-bit units.
+func (d *Decoder) decodeDynamicAllocation(info *frameSideInfo, totalBitsEighth uint) uint {
+	caps := allocationCaps(info.lm, info.channelCount)
+	dynamicAllocationLogP := initialDynamicAllocationLogP
+	tellFrac := d.rangeDecoder.TellFrac()
+
+	for band := info.startBand; band < info.endBand; band++ {
+		width := info.channelCount * (int(bandEdges[band+1]-bandEdges[band]) << info.lm)
+		quanta := min(width<<bitResolution, max(allocationTrimBitCost<<bitResolution, width))
+		quantaBits := uint(quanta) // #nosec G115 -- quanta is positive by construction from CELT band widths.
+		loopLogP := dynamicAllocationLogP
+		boost := 0
+
+		for tellFrac+uint(loopLogP<<bitResolution) < totalBitsEighth && boost < caps[band] {
+			flag := d.rangeDecoder.DecodeSymbolLogP(uint(loopLogP))
+			tellFrac = d.rangeDecoder.TellFrac()
+			if flag == 0 {
+				break
+			}
+
+			boost += quanta
+			if quantaBits >= totalBitsEighth {
+				totalBitsEighth = 0
+			} else {
+				totalBitsEighth -= quantaBits
+			}
+			loopLogP = 1
+		}
+
+		info.bandBoost[band] = boost
+		if boost > 0 {
+			dynamicAllocationLogP = max(minDynamicAllocationLogP, dynamicAllocationLogP-1)
+		}
+	}
+
+	return totalBitsEighth
+}
+
+func (d *Decoder) decodeAllocationTrim(info *frameSideInfo, totalBitsEighth uint) {
+	info.allocationTrim = defaultAllocationTrim
+	if d.rangeDecoder.TellFrac()+uint(allocationTrimBitCost<<bitResolution) <= totalBitsEighth {
+		info.allocationTrim = int(d.rangeDecoder.DecodeSymbolWithICDF(icdfAllocationTrim))
+	}
+}
+
+func allocationCaps(lm, channelCount int) [maxBands]int {
+	caps := [maxBands]int{}
+	indexBase := maxBands * (2*lm + channelCount - 1)
+	for band := range maxBands {
+		width := int(bandEdges[band+1]-bandEdges[band]) << lm
+		caps[band] = (int(bandCaps[indexBase+band]) + 64) * channelCount * width >> 2
+	}
+
+	return caps
 }
 
 func smallEnergyDelta(symbol uint32) int {
