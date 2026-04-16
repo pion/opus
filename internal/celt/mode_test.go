@@ -54,7 +54,7 @@ func TestBandEdges(t *testing.T) {
 
 	edges, err := mode.BandEdges(0)
 	require.NoError(t, err)
-	assert.Equal(t, []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 16, 20, 24, 28, 32, 40, 48, 60, 78, 100}, edges)
+	assert.Equal(t, []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 16, 20, 24, 28, 34, 40, 48, 60, 78, 100}, edges)
 
 	edges, err = mode.BandEdges(3)
 	require.NoError(t, err)
@@ -107,9 +107,9 @@ func TestStaticTables(t *testing.T) {
 	assert.Equal(t, int16(0), bandEdges[0])
 	assert.Equal(t, int16(100), bandEdges[len(bandEdges)-1])
 
-	assert.Len(t, bandAllocation, maxBands)
+	assert.Len(t, bandAllocation, 11)
 	assert.Equal(t, uint8(90), bandAllocation[1][0])
-	assert.Equal(t, uint8(188), bandAllocation[20][10])
+	assert.Equal(t, uint8(104), bandAllocation[10][20])
 
 	assert.Equal(t, []uint{32768, 32767, 32768}, icdfSilence)
 	assert.Equal(t, []uint{32, 7, 9, 30, 32}, icdfSpread)

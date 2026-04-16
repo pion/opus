@@ -18,7 +18,7 @@ var (
 
 // Float32ToSigned16 quantizes a float32 PCM sample to signed 16-bit PCM.
 func Float32ToSigned16(sample float32) int16 {
-	sample64 := math.Round(float64(sample * 32768))
+	sample64 := math.Floor(0.5 + float64(sample*32768))
 	sample64 = math.Max(sample64, -32768)
 	sample64 = math.Min(sample64, 32767)
 
