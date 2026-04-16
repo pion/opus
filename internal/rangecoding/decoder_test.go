@@ -271,11 +271,44 @@ func TestDecodeUniform(t *testing.T) {
 	})
 }
 
+func TestDecodeLaplace(t *testing.T) {
+	zeroFrequency := uint32(72 << 7)
+	decay := uint32(127 << 6)
+	firstDecayFrequency := laplaceFirstDecayFrequency(zeroFrequency, decay) + laplaceMinProbability
+
+	for _, test := range []struct {
+		name   string
+		symbol uint32
+		want   int
+	}{
+		{name: "zero delta", symbol: 0, want: 0},
+		{name: "first negative delta", symbol: zeroFrequency, want: -1},
+		{name: "first positive delta", symbol: zeroFrequency + firstDecayFrequency, want: 1},
+		{name: "second negative delta", symbol: zeroFrequency + 2*firstDecayFrequency, want: -2},
+		{name: "minimum frequency tail", symbol: laplaceTotal - 1, want: 30},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			decoder := decoderWithBin15Symbol(test.symbol)
+
+			assert.Equal(t, test.want, decoder.DecodeLaplace(zeroFrequency, decay))
+		})
+	}
+}
+
 func decoderWithUniformSymbol(symbol, total uint32) *Decoder {
 	const scale = 1 << 24
 
 	decoder := &Decoder{}
 	decoder.SetInternalValues(nil, 0, total*scale, (total-symbol-1)*scale)
+
+	return decoder
+}
+
+func decoderWithBin15Symbol(symbol uint32) *Decoder {
+	const scale = 1 << 16
+
+	decoder := &Decoder{}
+	decoder.SetInternalValues(nil, 0, laplaceTotal*scale, (laplaceTotal-symbol-1)*scale)
 
 	return decoder
 }

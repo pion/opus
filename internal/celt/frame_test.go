@@ -225,9 +225,152 @@ func TestDecodeTransientAndIntraFlags(t *testing.T) {
 	})
 }
 
+func TestDecodeCoarseEnergy(t *testing.T) {
+	t.Run("decodes a Laplace-coded inter energy delta", func(t *testing.T) {
+		decoder := NewDecoder()
+		decoder.rangeDecoder.SetInternalValues(nil, 0, 1<<31, 32767<<16)
+		decoder.previousLogE[0][0] = 4
+		info := frameSideInfo{
+			lm:           1,
+			totalBits:    256,
+			startBand:    0,
+			endBand:      1,
+			channelCount: 1,
+		}
+
+		decoder.decodeCoarseEnergy(&info)
+
+		assert.InDelta(t, 3.1875, decoder.previousLogE[0][0], 0.000001)
+		assert.Equal(t, decoder.previousLogE, info.coarseEnergy)
+	})
+
+	t.Run("mono history uses and preserves the louder previous channel", func(t *testing.T) {
+		decoder := NewDecoder()
+		decoder.previousLogE[0][0] = 1
+		decoder.previousLogE[1][0] = 4
+		info := frameSideInfo{
+			lm:           0,
+			totalBits:    0,
+			startBand:    0,
+			endBand:      1,
+			channelCount: 1,
+		}
+
+		decoder.prepareCoarseEnergyHistory(&info)
+		decoder.decodeCoarseEnergy(&info)
+
+		assert.Equal(t, float32(2.59375), decoder.previousLogE[0][0])
+		assert.Equal(t, float32(2.59375), decoder.previousLogE[1][0])
+		assert.Equal(t, decoder.previousLogE, info.coarseEnergy)
+	})
+
+	t.Run("stereo preserves untouched bands and independent channel prediction", func(t *testing.T) {
+		decoder := NewDecoder()
+		decoder.previousLogE[0][0] = 5
+		decoder.previousLogE[1][0] = 6
+		decoder.previousLogE[0][1] = 4
+		decoder.previousLogE[1][1] = 8
+		decoder.previousLogE[0][2] = 7
+		decoder.previousLogE[1][2] = 9
+		info := frameSideInfo{
+			lm:           0,
+			totalBits:    0,
+			startBand:    1,
+			endBand:      2,
+			channelCount: 2,
+		}
+
+		decoder.decodeCoarseEnergy(&info)
+
+		assert.Equal(t, float32(5), decoder.previousLogE[0][0])
+		assert.Equal(t, float32(6), decoder.previousLogE[1][0])
+		assert.Equal(t, float32(2.59375), decoder.previousLogE[0][1])
+		assert.Equal(t, float32(6.1875), decoder.previousLogE[1][1])
+		assert.Equal(t, float32(7), decoder.previousLogE[0][2])
+		assert.Equal(t, float32(9), decoder.previousLogE[1][2])
+		assert.Equal(t, decoder.previousLogE, info.coarseEnergy)
+	})
+
+	t.Run("intra mode ignores previous frame energy", func(t *testing.T) {
+		decoder := NewDecoder()
+		decoder.previousLogE[0][0] = 7
+		info := frameSideInfo{
+			lm:           2,
+			totalBits:    0,
+			startBand:    0,
+			endBand:      1,
+			channelCount: 1,
+			intraEnergy:  true,
+		}
+
+		decoder.decodeCoarseEnergy(&info)
+
+		assert.Equal(t, float32(-1), decoder.previousLogE[0][0])
+		assert.Equal(t, decoder.previousLogE, info.coarseEnergy)
+	})
+
+	t.Run("uses bounded one-bit fallback near the end of the frame", func(t *testing.T) {
+		decoder := NewDecoder()
+		decoder.rangeDecoder = rangeDecoderWithBinaryOne()
+		info := frameSideInfo{
+			lm:           0,
+			totalBits:    decoder.rangeDecoder.Tell() + 1,
+			startBand:    0,
+			endBand:      1,
+			channelCount: 1,
+		}
+
+		decoder.decodeCoarseEnergy(&info)
+
+		assert.Equal(t, float32(-1), decoder.previousLogE[0][0])
+		assert.Equal(t, decoder.previousLogE, info.coarseEnergy)
+	})
+
+	t.Run("uses small-energy icdf when two bits remain", func(t *testing.T) {
+		for _, test := range []struct {
+			name          string
+			uniformSymbol uint32
+			wantEnergy    float32
+		}{
+			{name: "zero delta", uniformSymbol: 0, wantEnergy: 0},
+			{name: "negative delta", uniformSymbol: 2, wantEnergy: -1},
+			{name: "positive delta", uniformSymbol: 3, wantEnergy: 1},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				decoder := NewDecoder()
+				decoder.rangeDecoder = rangeDecoderWithSmallEnergyCDFSymbol(test.uniformSymbol)
+				info := frameSideInfo{
+					lm:           0,
+					totalBits:    decoder.rangeDecoder.Tell() + 2,
+					startBand:    0,
+					endBand:      1,
+					channelCount: 1,
+				}
+
+				decoder.decodeCoarseEnergy(&info)
+
+				assert.Equal(t, test.wantEnergy, decoder.previousLogE[0][0])
+				assert.Equal(t, decoder.previousLogE, info.coarseEnergy)
+			})
+		}
+	})
+}
+
 func rangeDecoderWithBinaryOne() rangecoding.Decoder {
 	decoder := rangecoding.Decoder{}
 	decoder.SetInternalValues(nil, 40, 1<<31, 0)
+
+	return decoder
+}
+
+func rangeDecoderWithSmallEnergyCDFSymbol(symbol uint32) rangecoding.Decoder {
+	const (
+		smallEnergyTotal = 4
+		scale            = 1 << 24
+	)
+
+	decoder := rangecoding.Decoder{}
+	decoder.SetInternalValues(nil, 0, smallEnergyTotal*scale, (smallEnergyTotal-symbol-1)*scale)
 
 	return decoder
 }

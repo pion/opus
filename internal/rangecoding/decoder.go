@@ -80,7 +80,12 @@ type Decoder struct {
 	highAndCodedDifference uint32 // val in RFC 6716
 }
 
-const maxUniformRangeCoderBits = 8
+const (
+	maxUniformRangeCoderBits = 8
+	laplaceTotal             = 32768
+	laplaceMinProbability    = 1
+	laplaceGuaranteedDeltas  = 16
+)
 
 // Init sets the state of the Decoder
 // Let b0 be an 8-bit unsigned integer containing first input byte (or
@@ -175,6 +180,51 @@ func (r *Decoder) DecodeUniform(total uint32) (uint32, bool) {
 	}
 
 	return limit, false
+}
+
+func laplaceFirstDecayFrequency(fs0 uint32, decay uint32) uint32 {
+	frequencyTotal := uint32(laplaceTotal) - laplaceMinProbability*(2*laplaceGuaranteedDeltas) - fs0
+
+	return frequencyTotal * (16384 - decay) >> 15
+}
+
+// DecodeLaplace decodes the ec_laplace_decode() symbol used by the CELT layer.
+//
+// RFC 6716 Section 4.3.2.1 describes coarse energy deltas as Laplace-distributed
+// prediction errors; the reference implementation decodes them with this helper.
+func (r *Decoder) DecodeLaplace(fs0 uint32, decay uint32) int {
+	value := 0
+	symbol := r.decodeUniformSymbol(laplaceTotal)
+	low := uint32(0)
+	frequency := fs0
+
+	if symbol >= frequency {
+		value++
+		low = frequency
+		frequency = laplaceFirstDecayFrequency(fs0, decay) + laplaceMinProbability
+		for frequency > laplaceMinProbability && symbol >= low+2*frequency {
+			frequency *= 2
+			low += frequency
+			frequency = ((frequency - 2*laplaceMinProbability) * decay) >> 15
+			frequency += laplaceMinProbability
+			value++
+		}
+		if frequency <= laplaceMinProbability {
+			extra := (symbol - low) >> 1
+			value += int(extra)
+			low += 2 * extra * laplaceMinProbability
+		}
+		if symbol < low+frequency {
+			value = -value
+		} else {
+			low += frequency
+		}
+	}
+
+	high := min(low+frequency, uint32(laplaceTotal))
+	r.update(r.rangeSize/laplaceTotal, low, high, laplaceTotal)
+
+	return value
 }
 
 // DecodeSymbolLogP decodes a single binary symbol.
