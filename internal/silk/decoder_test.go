@@ -154,6 +154,23 @@ func TestDecodeBufferSize(t *testing.T) {
 	assert.Equal(t, errOutBufferTooSmall, err)
 }
 
+func TestDecodeWithRange(t *testing.T) {
+	decoder := NewDecoder()
+	assert.ErrorIs(
+		t,
+		decoder.DecodeWithRange(nil, make([]float32, 320), false, nanoseconds20Ms, BandwidthWideband),
+		errOutBufferTooSmall,
+	)
+
+	rangeDecoder := rangecoding.Decoder{}
+	rangeDecoder.Init(testSilkFrame())
+
+	err := decoder.DecodeWithRange(&rangeDecoder, make([]float32, 320), false, nanoseconds20Ms, BandwidthWideband)
+
+	assert.NoError(t, err)
+	assert.NotZero(t, rangeDecoder.FinalRange())
+}
+
 func TestNormalizeLineSpectralFrequencyStageOne(t *testing.T) {
 	d := &Decoder{rangeDecoder: createRangeDecoder(testSilkFrame(), 47, 722810880, 387065757)}
 

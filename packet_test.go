@@ -115,7 +115,7 @@ func TestDecodeRejectsEmptyPacket(t *testing.T) {
 
 	decoder := NewDecoder()
 
-	bandwidth, isStereo, sampleCount, err := decoder.decode(nil, make([]float32, 0))
+	bandwidth, isStereo, sampleCount, _, err := decoder.decode(nil, make([]float32, 0))
 
 	require.Error(t, err)
 	assert.Zero(t, bandwidth)
@@ -207,7 +207,7 @@ func TestDecodePacketFrames(t *testing.T) {
 		t.Parallel()
 
 		decoder := NewDecoder()
-		_, _, _, err := decoder.decode([]byte{tocByte(frameCodeTwoEqualFrames) | 0b100}, decoder.silkBuffer)
+		_, _, _, _, err := decoder.decode([]byte{tocByte(frameCodeTwoEqualFrames) | 0b100}, decoder.silkBuffer)
 
 		require.NoError(t, err)
 		assert.Equal(t, maxSilkFrameSampleCount*4, len(decoder.silkBuffer))
