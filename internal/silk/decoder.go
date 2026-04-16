@@ -40,6 +40,10 @@ type Decoder struct {
 	// https://www.rfc-editor.org/rfc/rfc6716#section-4.2.7.9.1
 	finalOutValues []float32
 
+	previousGainQ16 int32
+	sLPCQ14Buf      [maxSilkLPCOrder]int32
+	outBuf          [maxSilkOutBufferLength]int16
+
 	// n0Q15 are the LSF coefficients decoded for the prior frame
 	// see normalizeLSFInterpolation
 	n0Q15 []int16
@@ -56,14 +60,16 @@ type Decoder struct {
 // NewDecoder creates a new Silk Decoder.
 func NewDecoder() Decoder {
 	return Decoder{
-		sideDecoder:    newChannelDecoder(),
-		finalOutValues: make([]float32, 306),
+		sideDecoder:     newChannelDecoder(),
+		finalOutValues:  make([]float32, 306),
+		previousGainQ16: 65536,
 	}
 }
 
 func newChannelDecoder() *Decoder {
 	return &Decoder{
-		finalOutValues: make([]float32, 306),
+		finalOutValues:  make([]float32, 306),
+		previousGainQ16: 65536,
 	}
 }
 
@@ -74,6 +80,9 @@ func (d *Decoder) resetPredictionState() {
 	d.previousLogGain = 10
 	d.previousFrameLPCValues = nil
 	clear(d.finalOutValues)
+	d.previousGainQ16 = 65536
+	clear(d.sLPCQ14Buf[:])
+	clear(d.outBuf[:])
 	d.n0Q15 = nil
 }
 
@@ -1780,7 +1789,7 @@ func (d *Decoder) samplesInSubframe(bandwidth Bandwidth) int {
 
 // https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.1
 //
-//nolint:gocognit,cyclop
+//nolint:gocognit,cyclop,unused // Kept as the RFC-prose reference path while fixed-point reconstruction is evaluated.
 func (d *Decoder) ltpSynthesis(
 	out []float32,
 	bQ7 [][]int8,
@@ -2002,6 +2011,8 @@ func (d *Decoder) lpcSynthesis(
 // of -1.0 to 1.0.
 //
 // https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9
+//
+//nolint:unused // Kept as the RFC-prose reference path while fixed-point reconstruction is evaluated.
 func (d *Decoder) silkFrameReconstruction(
 	signalType frameSignalType, bandwidth Bandwidth,
 	subframeCount int,
@@ -2078,6 +2089,211 @@ func (d *Decoder) silkFrameReconstruction(
 	}
 }
 
+func silkLTPMemLength(bandwidth Bandwidth) int {
+	switch bandwidth {
+	case BandwidthNarrowband:
+		return 160
+	case BandwidthMediumband:
+		return 240
+	case BandwidthWideband:
+		return 320
+	}
+
+	return 0
+}
+
+//nolint:cyclop // Mirrors silk_decode_core() setup from the RFC 6716 C reference.
+func (d *Decoder) silkFrameReconstructionFixed(
+	signalType frameSignalType, bandwidth Bandwidth,
+	subframeCount int,
+	dLPC int,
+	bQ7 [][]int8,
+	pitchLags []int,
+	eQ23 []int32,
+	ltpScaleQ14 float32,
+	wQ2 int16,
+	aQ12 [][]float32,
+	gainQ16, out []float32,
+) {
+	frameLength := len(out)
+	if frameLength == 0 {
+		return
+	}
+
+	predCoefQ12 := make([][maxSilkLPCOrder]int16, len(aQ12))
+	for setIndex := range aQ12 {
+		for i := range min(dLPC, len(aQ12[setIndex])) {
+			predCoefQ12[setIndex][i] = int16(aQ12[setIndex][i]) //nolint:gosec // G115
+		}
+	}
+
+	ltpCoefQ14 := make([][silkLTPOrder]int16, subframeCount)
+	if signalType == frameSignalTypeVoiced {
+		for subframe := range min(subframeCount, len(bQ7)) {
+			for i := range min(silkLTPOrder, len(bQ7[subframe])) {
+				ltpCoefQ14[subframe][i] = int16(bQ7[subframe][i]) << 7
+			}
+		}
+	}
+
+	gainsQ16 := make([]int32, len(gainQ16))
+	for i, gain := range gainQ16 {
+		gainsQ16[i] = int32(gain) //nolint:gosec // G115
+	}
+
+	excQ14 := make([]int32, len(eQ23))
+	for i, excitation := range eQ23 {
+		excQ14[i] = excitation << 6
+	}
+
+	xq := make([]int16, frameLength)
+	d.decodeCoreFixed(
+		xq,
+		excQ14,
+		signalType,
+		bandwidth,
+		dLPC,
+		predCoefQ12,
+		ltpCoefQ14,
+		pitchLags,
+		gainsQ16,
+		int32(ltpScaleQ14),
+		wQ2,
+	)
+
+	for i, sample := range xq {
+		out[i] = float32(sample) / 32768.0
+	}
+
+	ltpMemLength := silkLTPMemLength(bandwidth)
+	mvLen := ltpMemLength - frameLength
+	if mvLen > 0 {
+		copy(d.outBuf[:mvLen], d.outBuf[frameLength:frameLength+mvLen])
+		copy(d.outBuf[mvLen:ltpMemLength], xq)
+	} else {
+		copy(d.outBuf[:ltpMemLength], xq[frameLength-ltpMemLength:])
+	}
+}
+
+// decodeCoreFixed mirrors the RFC 6716 fixed-point silk_decode_core() loop.
+//
+//nolint:cyclop,gocognit,gosec,nestif // Directly mirrors the C reference's fixed-point decode_core loop.
+func (d *Decoder) decodeCoreFixed(
+	xq []int16,
+	excQ14 []int32,
+	signalType frameSignalType,
+	bandwidth Bandwidth,
+	dLPC int,
+	predCoefQ12 [][maxSilkLPCOrder]int16,
+	ltpCoefQ14 [][silkLTPOrder]int16,
+	pitchLags []int,
+	gainsQ16 []int32,
+	ltpScaleQ14 int32,
+	wQ2 int16,
+) {
+	n := d.samplesInSubframe(bandwidth)
+	ltpMemLength := silkLTPMemLength(bandwidth)
+	interpolatedNLSF := wQ2 < 4
+	sLPCQ14 := make([]int32, maxSilkSubframeLength+maxSilkLPCOrder)
+	sLTPQ15 := make([]int32, 2*maxSilkFrameLength)
+	sLTP := make([]int16, maxSilkFrameLength)
+	resQ14 := make([]int32, maxSilkSubframeLength)
+	copy(sLPCQ14[:maxSilkLPCOrder], d.sLPCQ14Buf[:])
+	sLTPBufIndex := ltpMemLength
+	if d.previousGainQ16 == 0 {
+		d.previousGainQ16 = 65536
+	}
+
+	for subframe := 0; subframe*n < len(xq); subframe++ {
+		subframeOffset := subframe * n
+		coefIndex := subframe >> 1
+		if coefIndex >= len(predCoefQ12) {
+			coefIndex = len(predCoefQ12) - 1
+		}
+		aQ12 := predCoefQ12[coefIndex][:]
+		gainQ16 := gainsQ16[min(subframe, len(gainsQ16)-1)]
+		gainQ10 := gainQ16 >> 6
+		invGainQ31 := inverse32VarQ(gainQ16, 47)
+		gainAdjQ16 := int32(1 << 16)
+		if gainQ16 != d.previousGainQ16 {
+			gainAdjQ16 = div32VarQ(d.previousGainQ16, gainQ16, 16)
+			for i := range maxSilkLPCOrder {
+				sLPCQ14[i] = smulww(gainAdjQ16, sLPCQ14[i])
+			}
+		}
+		d.previousGainQ16 = gainQ16
+
+		if signalType == frameSignalTypeVoiced {
+			lag := pitchLags[min(subframe, len(pitchLags)-1)]
+			if subframe == 0 || (subframe == 2 && interpolatedNLSF) {
+				startIndex := max(0, ltpMemLength-lag-dLPC-silkLTPOrder/2)
+				if subframe == 2 {
+					copy(d.outBuf[ltpMemLength:], xq[:2*n])
+				}
+				lpcAnalysisFilterFixed(
+					sLTP[startIndex:],
+					d.outBuf[startIndex+subframe*n:],
+					aQ12,
+					ltpMemLength-startIndex,
+					dLPC,
+				)
+				if subframe == 0 {
+					invGainQ31 = smulwb(invGainQ31, ltpScaleQ14) << 2
+				}
+				for i := 0; i < lag+silkLTPOrder/2; i++ {
+					sLTPQ15[sLTPBufIndex-i-1] = smulwb(invGainQ31, int32(sLTP[ltpMemLength-i-1]))
+				}
+			} else if gainAdjQ16 != 1<<16 {
+				for i := 0; i < lag+silkLTPOrder/2; i++ {
+					sLTPQ15[sLTPBufIndex-i-1] = smulww(gainAdjQ16, sLTPQ15[sLTPBufIndex-i-1])
+				}
+			}
+
+			predLagIndex := sLTPBufIndex - lag + silkLTPOrder/2
+			for i := range n {
+				ltpPredQ13 := int32(2)
+				ltpPredQ13 = smlaWB(ltpPredQ13, sLTPQ15[predLagIndex], int32(ltpCoefQ14[subframe][0]))
+				ltpPredQ13 = smlaWB(ltpPredQ13, sLTPQ15[predLagIndex-1], int32(ltpCoefQ14[subframe][1]))
+				ltpPredQ13 = smlaWB(ltpPredQ13, sLTPQ15[predLagIndex-2], int32(ltpCoefQ14[subframe][2]))
+				ltpPredQ13 = smlaWB(ltpPredQ13, sLTPQ15[predLagIndex-3], int32(ltpCoefQ14[subframe][3]))
+				ltpPredQ13 = smlaWB(ltpPredQ13, sLTPQ15[predLagIndex-4], int32(ltpCoefQ14[subframe][4]))
+				predLagIndex++
+
+				resQ14[i] = excQ14[subframeOffset+i] + (ltpPredQ13 << 1)
+				sLTPQ15[sLTPBufIndex] = resQ14[i] << 1
+				sLTPBufIndex++
+			}
+		} else {
+			copy(resQ14[:n], excQ14[subframeOffset:subframeOffset+n])
+		}
+
+		for i := range n {
+			lpcPredQ10 := int32(dLPC >> 1)
+			for k := range dLPC {
+				lpcPredQ10 = smlaWB(lpcPredQ10, sLPCQ14[maxSilkLPCOrder+i-k-1], int32(aQ12[k]))
+			}
+			sLPCQ14[maxSilkLPCOrder+i] = resQ14[i] + (lpcPredQ10 << 4)
+			xq[subframeOffset+i] = saturate16(rshiftRound32(smulww(sLPCQ14[maxSilkLPCOrder+i], gainQ10), 8))
+		}
+
+		copy(sLPCQ14[:maxSilkLPCOrder], sLPCQ14[n:n+maxSilkLPCOrder])
+	}
+
+	copy(d.sLPCQ14Buf[:], sLPCQ14[:maxSilkLPCOrder])
+}
+
+func lpcAnalysisFilterFixed(out, in []int16, b []int16, length, order int) {
+	for ix := order; ix < length; ix++ {
+		out32Q12 := smulbb(int32(in[ix-1]), int32(b[0]))
+		for j := 1; j < order; j++ {
+			out32Q12 = smlaBB(out32Q12, int32(in[ix-1-j]), int32(b[j]))
+		}
+		out32Q12 = (int32(in[ix]) << 12) - out32Q12
+		out[ix] = saturate16(rshiftRound32(out32Q12, 12))
+	}
+	clear(out[:min(order, len(out))])
+}
+
 func (d *Decoder) decodeFrame(
 	out []float32,
 	voiceActivityDetected bool,
@@ -2121,7 +2337,7 @@ func (d *Decoder) decodeFrame(
 	aQ12 = d.generateAQ12(nlsfQ15, bandwidth, aQ12)
 
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.1
-	lagMax, pitchLags := d.decodePitchLags(signalType, bandwidth, nanoseconds, isFirstSilkFrameInOpusFrame)
+	_, pitchLags := d.decodePitchLags(signalType, bandwidth, nanoseconds, isFirstSilkFrameInOpusFrame)
 
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.2
 	bQ7 := d.decodeLTPFilterCoefficients(signalType, subframeCount)
@@ -2145,11 +2361,10 @@ func (d *Decoder) decodeFrame(
 	eQ23 := d.decodeExcitation(signalType, quantizationOffsetType, lcgSeed, pulsecounts, lsbcounts)
 
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9
-	d.silkFrameReconstruction(
+	d.silkFrameReconstructionFixed(
 		signalType, bandwidth,
 		subframeCount,
 		dLPC,
-		lagMax,
 		bQ7,
 		pitchLags,
 		eQ23,
@@ -2231,6 +2446,19 @@ func (d *Decoder) stereoPhaseOneSampleCount(bandwidth Bandwidth) int {
 	return 0
 }
 
+func (d *Decoder) stereoPhaseOneDenominatorQ16(bandwidth Bandwidth) int32 {
+	switch bandwidth {
+	case BandwidthNarrowband:
+		return 1024 // (1 << 16) / 64
+	case BandwidthMediumband:
+		return 682 // (1 << 16) / 96
+	case BandwidthWideband:
+		return 512 // (1 << 16) / 128
+	}
+
+	return 0
+}
+
 func (d *Decoder) delayMid(out []float32) {
 	if len(out) == 0 {
 		return
@@ -2261,37 +2489,61 @@ func (d *Decoder) delayMono(out []float32) {
 	d.wasStereo = false
 }
 
+func silkSampleToPCM16(sample float32) int16 {
+	switch {
+	case sample >= 32767.0/32768.0:
+		return math.MaxInt16
+	case sample <= -1:
+		return math.MinInt16
+	default:
+		return int16(sample * 32768) //nolint:gosec // Samples come from the fixed-point SILK core.
+	}
+}
+
 // RFC 6716 Section 4.2.8 converts mid-side stereo to left-right stereo.
+// Keep this stage fixed-point too: stereo_MS_to_LR.c interpolates Q13
+// predictors and rounds the predicted side sample before the final L/R sum.
 func (d *Decoder) stereoUnmix(mid, side, out []float32, w0Q13, w1Q13 int32, bandwidth Bandwidth) {
 	phaseOneSampleCount := d.stereoPhaseOneSampleCount(bandwidth)
-	previousW0Q13 := d.previousStereoWeights[0]
-	previousW1Q13 := d.previousStereoWeights[1]
-	midPrev2 := d.previousMidValues[0]
-	midPrev1 := d.previousMidValues[1]
-	sidePrev := d.previousSideValue
+	pred0Q13 := d.previousStereoWeights[0]
+	pred1Q13 := d.previousStereoWeights[1]
+	denomQ16 := d.stereoPhaseOneDenominatorQ16(bandwidth)
+	delta0Q13 := rshiftRound32(smulbb(w0Q13-pred0Q13, denomQ16), 16)
+	delta1Q13 := rshiftRound32(smulbb(w1Q13-pred1Q13, denomQ16), 16)
+	midPrev2Q0 := silkSampleToPCM16(d.previousMidValues[0])
+	midPrev1Q0 := silkSampleToPCM16(d.previousMidValues[1])
+	sidePrevQ0 := silkSampleToPCM16(d.previousSideValue)
 
 	for i := range mid {
-		interpSample := min(i, phaseOneSampleCount)
+		if i < phaseOneSampleCount {
+			pred0Q13 += delta0Q13
+			pred1Q13 += delta1Q13
+		} else {
+			pred0Q13 = w0Q13
+			pred1Q13 = w1Q13
+		}
 
-		w0 := float32(previousW0Q13)/8192.0 +
-			float32(interpSample)*float32(w0Q13-previousW0Q13)/(8192.0*float32(phaseOneSampleCount))
-		w1 := float32(previousW1Q13)/8192.0 +
-			float32(interpSample)*float32(w1Q13-previousW1Q13)/(8192.0*float32(phaseOneSampleCount))
-		p0 := (midPrev2 + 2*midPrev1 + mid[i]) / 4.0
+		midQ0 := silkSampleToPCM16(mid[i])
+		sideQ0 := silkSampleToPCM16(side[i])
+		predictedSideQ8 := int32(sidePrevQ0) << 8
+		sumQ11 := (int32(midPrev2Q0) + 2*int32(midPrev1Q0) + int32(midQ0)) << 9
+		predictedSideQ8 = smlaWB(predictedSideQ8, sumQ11, pred0Q13)
+		predictedSideQ8 = smlaWB(predictedSideQ8, int32(midPrev1Q0)<<11, pred1Q13)
+		predictedSideQ0 := saturate16(rshiftRound32(predictedSideQ8, 8))
 
-		out[i*2] = clampNegativeOneToOne((1+w1)*midPrev1 + sidePrev + w0*p0)
-		out[i*2+1] = clampNegativeOneToOne((1-w1)*midPrev1 - sidePrev - w0*p0)
+		out[i*2] = float32(saturate16(int32(midPrev1Q0)+int32(predictedSideQ0))) / 32768
+		out[i*2+1] = float32(saturate16(int32(midPrev1Q0)-int32(predictedSideQ0))) / 32768
 
-		midPrev2 = midPrev1
-		midPrev1 = mid[i]
-		sidePrev = side[i]
+		midPrev2Q0 = midPrev1Q0
+		midPrev1Q0 = midQ0
+		sidePrevQ0 = sideQ0
 	}
 
 	d.previousStereoWeights[0] = w0Q13
 	d.previousStereoWeights[1] = w1Q13
-	d.previousMidValues[0] = midPrev2
-	d.previousMidValues[1] = midPrev1
-	d.previousSideValue = sidePrev
+	d.previousMidValues[0] = float32(midPrev2Q0) / 32768
+	d.previousMidValues[1] = float32(midPrev1Q0) / 32768
+	d.previousSideValue = float32(sidePrevQ0) / 32768
 	d.wasStereo = true
 }
 

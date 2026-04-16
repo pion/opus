@@ -112,8 +112,8 @@ func TestStereoUnmix(t *testing.T) {
 
 	d.stereoUnmix(mid, side, out, 0, 0, BandwidthNarrowband)
 
-	assert.Equal(t, []float32{0, 0, 1, 1}, out)
-	assert.Equal(t, [2]float32{1, 0}, d.previousMidValues)
+	assert.Equal(t, []float32{0, 0, 32767.0 / 32768.0, 32767.0 / 32768.0}, out)
+	assert.Equal(t, [2]float32{32767.0 / 32768.0, 0}, d.previousMidValues)
 	assert.Equal(t, float32(0), d.previousSideValue)
 	assert.True(t, d.wasStereo)
 }
@@ -774,9 +774,11 @@ func TestDecode(t *testing.T) {
 			if i > 0 {
 				expectedSample = expectedOut[i-1]
 			}
-			// The decoder keeps this stage in float, so cross-frame LPC state
-			// updates accumulate a few extra LSBs versus the old fixture.
-			assert.InDelta(t, expectedSample, out[i], 4*floatEqualityThreshold)
+			// SILK reconstruction mirrors the fixed-point C decoder and emits
+			// PCM16-stepped samples. The fixture was generated from the earlier
+			// RFC-prose float reconstruction, so allow one PCM16 quantization
+			// interval while still catching larger synthesis regressions.
+			assert.InDelta(t, expectedSample, out[i], 1.0/32768.0)
 		}
 
 		previousSample = expectedOut[len(expectedOut)-1]

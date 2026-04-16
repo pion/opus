@@ -22,6 +22,12 @@ const (
 
 	pulsecountLargestPartitionSize = 16
 
+	maxSilkFrameLength     = 320
+	maxSilkSubframeLength  = 80
+	maxSilkOutBufferLength = maxSilkFrameLength + 2*maxSilkSubframeLength
+	maxSilkLPCOrder        = 16
+	silkLTPOrder           = 5
+
 	nanoseconds10Ms = 10000000
 	nanoseconds20Ms = 20000000
 	nanoseconds40Ms = 40000000
@@ -200,10 +206,80 @@ func smulwb(a, b int32) int32 {
 	return int32((int64(a) * int64(int16(b))) >> 16) //nolint:gosec // G115
 }
 
+func smlaWB(a, b, c int32) int32 {
+	return a + smulwb(b, c)
+}
+
+func smulww(a, b int32) int32 {
+	return smulwb(a, b) + a*rshiftRound32(b, 16)
+}
+
+func smulbb(a, b int32) int32 {
+	return int32(int16(a)) * int32(int16(b)) //nolint:gosec // G115: mirrors silk_SMULBB low-16-bit multiply.
+}
+
+func smlaBB(a, b, c int32) int32 {
+	return a + smulbb(b, c)
+}
+
 // smlaWW mirrors silk_SMLAWW() from the RFC 6716 C macros. The inverse helper
 // uses it for the Newton-Raphson refinement step in silk_INVERSE32_varQ().
 func smlaWW(a, b, c int32) int32 {
 	return a + smulwb(b, c) + b*rshiftRound32(c, 16)
+}
+
+func lshiftSat32(v int32, shift int) int32 {
+	if shift <= 0 {
+		return v
+	}
+	low := int32(math.MinInt32 >> shift)
+	high := int32(math.MaxInt32 >> shift)
+	v = clamp(low, v, high)
+
+	return v << shift
+}
+
+// div32VarQ mirrors silk_DIV32_varQ() from the RFC 6716 C reference
+// (Inlines.h). The fixed-point SILK core uses this approximate normalized
+// division when rescaling LPC/LTP state across subframe gain changes.
+func div32VarQ(a32, b32 int32, qRes int) int32 {
+	if b32 == 0 {
+		if a32 < 0 {
+			return math.MinInt32
+		}
+
+		return math.MaxInt32
+	}
+
+	aHeadrm := clz32(absInt32(a32)) - 1
+	a32Nrm := a32 << aHeadrm
+	bHeadrm := clz32(absInt32(b32)) - 1
+	b32Nrm := b32 << bHeadrm
+	b32Inv := (math.MaxInt32 >> 2) / (b32Nrm >> 16)
+	result := smulwb(a32Nrm, b32Inv)
+	a32Nrm -= smmul(b32Nrm, result) << 3
+	result = smlaWB(result, a32Nrm, b32Inv)
+
+	lshift := 29 + aHeadrm - bHeadrm - qRes
+	if lshift < 0 {
+		return lshiftSat32(result, -lshift)
+	}
+	if lshift < 32 {
+		return result >> lshift
+	}
+
+	return 0
+}
+
+func saturate16(v int32) int16 {
+	if v > math.MaxInt16 {
+		return math.MaxInt16
+	}
+	if v < math.MinInt16 {
+		return math.MinInt16
+	}
+
+	return int16(v)
 }
 
 // inverse32VarQ mirrors silk_INVERSE32_varQ() from the RFC 6716 C reference
