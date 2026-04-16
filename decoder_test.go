@@ -123,6 +123,29 @@ func TestNewDecoderWithOutput(t *testing.T) {
 	assert.ErrorIs(t, err, errInvalidChannelCount)
 }
 
+func TestInitResetsCeltState(t *testing.T) {
+	decoder := NewDecoder()
+	_, stereo, sampleCount, decodedChannelCount, err := decoder.decode(
+		[]byte{byte(16<<3) | byte(frameCodeOneFrame), 0xff, 0xff},
+		nil,
+	)
+	assert.NoError(t, err)
+	assert.False(t, stereo)
+	assert.Positive(t, sampleCount)
+	assert.Equal(t, 1, decodedChannelCount)
+	assert.NotZero(t, decoder.celtDecoder.FinalRange())
+
+	decoder.celtBuffer = []float32{1}
+	decoder.rangeFinal = 42
+
+	err = decoder.Init(48000, 1)
+
+	assert.NoError(t, err)
+	assert.Zero(t, decoder.celtDecoder.FinalRange())
+	assert.Empty(t, decoder.celtBuffer)
+	assert.Zero(t, decoder.rangeFinal)
+}
+
 func TestDecodeToFloat32(t *testing.T) {
 	decoder, err := NewDecoderWithOutput(16000, 2)
 	assert.NoError(t, err)
@@ -159,7 +182,7 @@ func TestDecodeSilkFrameDurations(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			decoder := NewDecoder()
-			_, _, _, err := decoder.decode([]byte{byte(test.configuration<<3) | byte(frameCodeOneFrame)}, nil)
+			_, _, _, _, err := decoder.decode([]byte{byte(test.configuration<<3) | byte(frameCodeOneFrame)}, nil)
 			assert.NoError(t, err)
 			assert.Len(t, decoder.silkBuffer, test.sampleCount)
 		})
@@ -189,29 +212,232 @@ func TestDecodedSampleRate(t *testing.T) {
 	assert.Equal(t, 16000, Configuration(8).decodedSampleRate())
 	assert.Equal(t, celtSampleRate, Configuration(16).decodedSampleRate())
 	assert.Equal(t, celtSampleRate, Configuration(31).decodedSampleRate())
-	assert.Equal(t, 0, Configuration(12).decodedSampleRate())
+	assert.Equal(t, celtSampleRate, Configuration(12).decodedSampleRate())
 }
 
-func TestDecodeCeltOnlyStillUnsupported(t *testing.T) {
+func TestDecodeCeltOnly(t *testing.T) {
 	decoder := NewDecoder()
 
-	bandwidth, isStereo, sampleCount, err := decoder.decode([]byte{byte(16<<3) | byte(frameCodeOneFrame)}, nil)
+	bandwidth, isStereo, sampleCount, _, err := decoder.decode([]byte{byte(16<<3) | byte(frameCodeOneFrame)}, nil)
 
-	assert.ErrorIs(t, err, errUnsupportedConfigurationMode)
-	assert.Zero(t, bandwidth)
+	assert.NoError(t, err)
+	assert.Equal(t, BandwidthNarrowband, bandwidth)
 	assert.False(t, isStereo)
-	assert.Zero(t, sampleCount)
+	assert.Equal(t, 120, sampleCount)
+	assert.Zero(t, decoder.rangeFinal)
 	assert.Equal(t, configurationModeCELTOnly, decoder.previousMode)
 }
 
-func TestDecodeHybridStillUnsupported(t *testing.T) {
+func TestDecodeHybrid(t *testing.T) {
 	decoder := NewDecoder()
 
-	bandwidth, isStereo, sampleCount, err := decoder.decode([]byte{byte(12<<3) | byte(frameCodeOneFrame)}, nil)
+	bandwidth, isStereo, sampleCount, _, err := decoder.decode([]byte{byte(12<<3) | byte(frameCodeOneFrame)}, nil)
 
-	assert.ErrorIs(t, err, errUnsupportedConfigurationMode)
-	assert.Zero(t, bandwidth)
+	assert.NoError(t, err)
+	assert.Equal(t, BandwidthSuperwideband, bandwidth)
 	assert.False(t, isStereo)
-	assert.Zero(t, sampleCount)
+	assert.Equal(t, 480, sampleCount)
 	assert.Equal(t, configurationModeHybrid, decoder.previousMode)
+}
+
+func TestResetModeStateCopiesSilkResamplerAcrossHybridTransitions(t *testing.T) {
+	decoder := NewDecoder()
+	assert.NoError(t, decoder.silkResampler[0].Init(BandwidthWideband.SampleRate(), celtSampleRate))
+	decoder.silkResamplerBandwidth = BandwidthWideband
+	decoder.silkResamplerChannels = 1
+	decoder.previousMode = configurationModeSilkOnly
+
+	decoder.resetModeState(configurationModeHybrid)
+
+	assert.Equal(t, 1, decoder.hybridSilkChannels)
+
+	decoder.previousMode = configurationModeHybrid
+	decoder.silkResamplerBandwidth = 0
+	decoder.silkResamplerChannels = 0
+
+	decoder.resetModeState(configurationModeSilkOnly)
+
+	assert.Equal(t, BandwidthWideband, decoder.silkResamplerBandwidth)
+	assert.Equal(t, 1, decoder.silkResamplerChannels)
+}
+
+func TestDecodeHybridRedundancyHeader(t *testing.T) {
+	// These deterministic payloads drive the RFC 6716 Section 4.5.1 Hybrid
+	// redundancy parser through both valid transition directions.
+	for _, test := range []struct {
+		name       string
+		frame      []byte
+		celtToSilk bool
+		celtData   int
+	}{
+		{
+			name: "silk to celt",
+			frame: []byte{
+				255, 240, 20, 244, 193, 153, 114, 153, 174, 176, 113, 79, 114, 176, 30, 111,
+				78, 251, 135, 241, 38, 152, 99, 238, 115, 216, 157, 159, 172, 149, 251, 21,
+			},
+			celtToSilk: false,
+			celtData:   28,
+		},
+		{
+			name: "celt to silk",
+			frame: []byte{
+				255, 248, 200, 183, 233, 107, 204, 67, 193, 228, 222, 25, 186, 202, 13, 26,
+				79, 90, 131, 149, 102, 178, 120, 213, 146, 125, 92, 227, 83, 96, 134, 146,
+			},
+			celtToSilk: true,
+			celtData:   5,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			decoder := NewDecoder()
+			decoder.rangeDecoder.Init(test.frame)
+
+			redundancy := decoder.decodeHybridRedundancyHeader(test.frame)
+
+			assert.True(t, redundancy.present)
+			assert.Equal(t, test.celtToSilk, redundancy.celtToSilk)
+			assert.Equal(t, test.celtData, redundancy.celtDataLen)
+			assert.Equal(t, test.frame[test.celtData:], redundancy.data)
+		})
+	}
+}
+
+func TestDecodeSilkOnlyRedundancyHeader(t *testing.T) {
+	decoder := NewDecoder()
+	frame := make([]byte, 32)
+	// Start after the SILK payload so the remaining bytes become redundant CELT
+	// data, as described by RFC 6716 Section 4.5.1.2.
+	decoder.rangeDecoder.SetInternalValues(frame, 32, 1<<30, 0)
+
+	redundancy, err := decoder.decodeSilkOnlyRedundancyHeader(frame, BandwidthMediumband)
+
+	assert.NoError(t, err)
+	assert.True(t, redundancy.present)
+	assert.True(t, redundancy.celtToSilk)
+	assert.Equal(t, 1, redundancy.celtDataLen)
+	assert.Equal(t, frame[1:], redundancy.data)
+
+	_, expectedEndBand, err := decoder.celtDecoder.Mode().BandRangeForSampleRate(BandwidthWideband.SampleRate())
+	assert.NoError(t, err)
+	assert.Equal(t, expectedEndBand, redundancy.endBand)
+}
+
+func TestDecodeHybridRedundantFrame(t *testing.T) {
+	decoder := NewDecoder()
+	redundancy := hybridRedundancy{data: []byte{0xff, 0xff}}
+	endBand, err := decoder.celtEndBandForSilkBandwidth(BandwidthWideband)
+	assert.NoError(t, err)
+
+	err = decoder.decodeHybridRedundantFrame(&redundancy, false, 1, endBand)
+
+	assert.NoError(t, err)
+	assert.Len(t, redundancy.audio, hybridRedundantFrameSampleCount)
+	assert.NotZero(t, redundancy.rng)
+}
+
+func TestAddHybridSilkMapsChannels(t *testing.T) {
+	for _, test := range []struct {
+		name               string
+		streamChannelCount int
+		outputChannelCount int
+		silk48             []float32
+		expected           []float32
+	}{
+		{
+			name:               "mono",
+			streamChannelCount: 1,
+			outputChannelCount: 1,
+			silk48:             []float32{0.25},
+			expected:           []float32{0.25},
+		},
+		{
+			name:               "mono to stereo",
+			streamChannelCount: 1,
+			outputChannelCount: 2,
+			silk48:             []float32{0.25},
+			expected:           []float32{0.25, 0.25},
+		},
+		{
+			name:               "stereo to mono",
+			streamChannelCount: 2,
+			outputChannelCount: 1,
+			silk48:             []float32{0.25, 0.5},
+			expected:           []float32{0.375},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			decoder := NewDecoder()
+			out := make([]float32, len(test.expected))
+
+			decoder.addHybridSilk(out, test.silk48, test.streamChannelCount, test.outputChannelCount, 1)
+
+			assert.Equal(t, test.expected, out)
+		})
+	}
+}
+
+func TestDecodeSilkFramesAddsHybridTransitionAudio(t *testing.T) {
+	decoder := NewDecoder()
+	decoder.previousMode = configurationModeHybrid
+
+	bandwidth, isStereo, sampleCount, decodedChannelCount, err := decoder.decodeSilkFrames(
+		Configuration(8),
+		tableOfContentsHeader(byte(8<<3)|byte(frameCodeOneFrame)),
+		[][]byte{nil},
+		nil,
+	)
+
+	assert.NoError(t, err)
+	assert.Equal(t, BandwidthWideband, bandwidth)
+	assert.False(t, isStereo)
+	assert.Equal(t, 160, sampleCount)
+	assert.Equal(t, 1, decodedChannelCount)
+	assert.Len(t, decoder.silkCeltAdditions, 1)
+	assert.Len(t, decoder.silkCeltAdditions[0].audio, hybridFadeSampleCount)
+}
+
+func TestApplySilkRedundancyFades(t *testing.T) {
+	decoder := NewDecoder()
+	decoder.resampleBuffer = make([]float32, 600)
+	for i := range decoder.resampleBuffer {
+		decoder.resampleBuffer[i] = 0.25
+	}
+
+	leadingAudio := make([]float32, 2*hybridFadeSampleCount)
+	trailingAudio := make([]float32, 2*hybridFadeSampleCount)
+	for i := range leadingAudio {
+		leadingAudio[i] = 0.5
+		trailingAudio[i] = 0.75
+	}
+	decoder.silkCeltAdditions = append(decoder.silkCeltAdditions, silkCeltAddition{
+		audio:        []float32{0.125},
+		startSample:  0,
+		channelCount: 1,
+	})
+	decoder.silkRedundancyFades = append(
+		decoder.silkRedundancyFades,
+		silkRedundancyFade{
+			celtToSilk:       true,
+			audio:            leadingAudio,
+			startSample:      1,
+			frameSampleCount: 2 * hybridFadeSampleCount,
+			channelCount:     1,
+		},
+		silkRedundancyFade{
+			audio:            trailingAudio,
+			startSample:      2 * hybridFadeSampleCount,
+			frameSampleCount: 2 * hybridFadeSampleCount,
+			channelCount:     1,
+		},
+	)
+
+	decoder.applySilkRedundancyFades(1)
+
+	assert.Equal(t, float32(0.375), decoder.resampleBuffer[0])
+	assert.Equal(t, float32(0.5), decoder.resampleBuffer[1])
+	assert.NotEqual(t, float32(0.25), decoder.resampleBuffer[1+hybridFadeSampleCount])
+	assert.NotEqual(t, float32(0.25), decoder.resampleBuffer[3*hybridFadeSampleCount+60])
+	assert.Empty(t, decoder.silkCeltAdditions)
+	assert.Empty(t, decoder.silkRedundancyFades)
 }

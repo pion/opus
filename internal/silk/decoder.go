@@ -2362,6 +2362,36 @@ func (d *Decoder) Decode(
 	nanoseconds int,
 	bandwidth Bandwidth,
 ) error {
+	d.rangeDecoder.Init(in)
+
+	return d.decodeWithInitializedRange(out, isStereo, nanoseconds, bandwidth)
+}
+
+// DecodeWithRange decodes one SILK frame from an Opus range decoder shared
+// with the CELT layer, as required by RFC 6716 hybrid packets.
+func (d *Decoder) DecodeWithRange(
+	rangeDecoder *rangecoding.Decoder,
+	out []float32,
+	isStereo bool,
+	nanoseconds int,
+	bandwidth Bandwidth,
+) error {
+	if rangeDecoder == nil {
+		return errOutBufferTooSmall
+	}
+	d.rangeDecoder = *rangeDecoder
+	err := d.decodeWithInitializedRange(out, isStereo, nanoseconds, bandwidth)
+	*rangeDecoder = d.rangeDecoder
+
+	return err
+}
+
+func (d *Decoder) decodeWithInitializedRange(
+	out []float32,
+	isStereo bool,
+	nanoseconds int,
+	bandwidth Bandwidth,
+) error {
 	frameCount := silkFrameCount(nanoseconds)
 	silkFrameNanoseconds := min(nanoseconds, nanoseconds20Ms)
 
@@ -2377,8 +2407,6 @@ func (d *Decoder) Decode(
 	case (subframeSize * sfCount * frameCount * channelCount) > len(out):
 		return errOutBufferTooSmall
 	}
-
-	d.rangeDecoder.Init(in)
 
 	midVoiceActivityDetected, midLowBitRateRedundancy := d.decodeHeaderBits(frameCount)
 	if midLowBitRateRedundancy {
