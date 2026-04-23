@@ -271,6 +271,27 @@ func TestDecodeUniform(t *testing.T) {
 	})
 }
 
+func TestDecodeCumulative(t *testing.T) {
+	decoder := decoderWithUniformSymbol(2, 5)
+
+	symbol := decoder.DecodeCumulative(5)
+	decoder.UpdateCumulative(symbol, symbol+1, 5)
+
+	assert.Equal(t, uint32(2), symbol)
+	assert.NotZero(t, decoder.FinalRange())
+}
+
+func TestSetStorageSize(t *testing.T) {
+	decoder := &Decoder{}
+	decoder.Init([]byte{0x00, 0x01, 0x02})
+
+	decoder.SetStorageSize(2)
+	assert.Equal(t, -8, decoder.RemainingBits())
+
+	decoder.SetStorageSize(-1)
+	assert.Equal(t, -24, decoder.RemainingBits())
+}
+
 func TestDecodeLaplace(t *testing.T) {
 	zeroFrequency := uint32(72 << 7)
 	decay := uint32(127 << 6)
