@@ -44,6 +44,8 @@ type frameSideInfo struct {
 	spread          int
 	bandBoost       [maxBands]int
 	allocationTrim  int
+	allocation      allocationState
+	antiCollapseRsv int
 }
 
 type postFilter struct {
@@ -79,6 +81,7 @@ func (d *Decoder) decodeFrameSideInfo(data []byte, cfg frameConfig) (frameSideIn
 	d.prepareCoarseEnergyHistory(&info)
 	d.decodeCoarseEnergy(&info)
 	d.decodeAllocationHeader(&info)
+	d.decodeAllocationAndFineEnergy(&info)
 
 	return info, nil
 }
@@ -249,6 +252,22 @@ func (d *Decoder) decodeAllocationHeader(info *frameSideInfo) {
 	d.decodeSpread(info)
 	totalBitsEighth := d.decodeDynamicAllocation(info, info.totalBits<<bitResolution)
 	d.decodeAllocationTrim(info, totalBitsEighth)
+}
+
+// decodeAllocationAndFineEnergy follows RFC 6716 Section 4.3.3 after the
+// allocation header: reserve the Section 4.3.5 anti-collapse bit, compute
+// shape/fine-energy budgets, then decode the first fine-energy refinement pass.
+func (d *Decoder) decodeAllocationAndFineEnergy(info *frameSideInfo) {
+	totalBits := int(info.totalBits)           //nolint:gosec // G115: CELT frame bit counts are packet-bounded.
+	tellFrac := int(d.rangeDecoder.TellFrac()) //nolint:gosec // G115: entropy cursor is packet-bounded.
+	bits := (totalBits << bitResolution) - tellFrac - 1
+	info.antiCollapseRsv = 0
+	if info.transient && info.lm >= 2 && bits >= (info.lm+2)<<bitResolution {
+		info.antiCollapseRsv = 1 << bitResolution
+	}
+	bits -= info.antiCollapseRsv
+	info.allocation = d.computeAllocation(info, bits)
+	d.decodeFineEnergy(info, info.allocation.fineQuant)
 }
 
 // decodeTimeFrequencyChanges decodes the RFC 6716 Section 4.3.1 per-band
