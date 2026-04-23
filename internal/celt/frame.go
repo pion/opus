@@ -3,7 +3,11 @@
 
 package celt
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/pion/opus/internal/rangecoding"
+)
 
 const (
 	postFilterPitchBase               = 16
@@ -21,31 +25,33 @@ const (
 )
 
 type frameConfig struct {
-	frameSampleCount int
-	startBand        int
-	endBand          int
-	channelCount     int
+	frameSampleCount   int
+	startBand          int
+	endBand            int
+	channelCount       int
+	outputChannelCount int
 }
 
 type frameSideInfo struct {
-	lm              int
-	totalBits       uint
-	startBand       int
-	endBand         int
-	channelCount    int
-	silence         bool
-	postFilter      postFilter
-	transient       bool
-	shortBlockCount int
-	intraEnergy     bool
-	coarseEnergy    [2][maxBands]float32
-	tfChange        [maxBands]int
-	tfSelect        int
-	spread          int
-	bandBoost       [maxBands]int
-	allocationTrim  int
-	allocation      allocationState
-	antiCollapseRsv int
+	lm                 int
+	totalBits          uint
+	startBand          int
+	endBand            int
+	channelCount       int
+	outputChannelCount int
+	silence            bool
+	postFilter         postFilter
+	transient          bool
+	shortBlockCount    int
+	intraEnergy        bool
+	coarseEnergy       [2][maxBands]float32
+	tfChange           [maxBands]int
+	tfSelect           int
+	spread             int
+	bandBoost          [maxBands]int
+	allocationTrim     int
+	allocation         allocationState
+	antiCollapseRsv    int
 }
 
 type postFilter struct {
@@ -59,14 +65,22 @@ type postFilter struct {
 // decodeFrameSideInfo consumes the initial CELT symbols through the allocation
 // header in the order specified by RFC 6716 Table 56. Pulse allocation and PVQ
 // residual decoding are intentionally left to the following CELT slices.
-func (d *Decoder) decodeFrameSideInfo(data []byte, cfg frameConfig) (frameSideInfo, error) {
+func (d *Decoder) decodeFrameSideInfo(
+	data []byte,
+	cfg frameConfig,
+	rangeDecoder *rangecoding.Decoder,
+) (frameSideInfo, error) {
 	info, err := d.validateFrameConfig(cfg)
 	if err != nil {
 		return frameSideInfo{}, err
 	}
 
 	info.totalBits = uint(len(data) * 8)
-	d.rangeDecoder.Init(data)
+	if rangeDecoder != nil {
+		d.rangeDecoder = *rangeDecoder
+	} else {
+		d.rangeDecoder.Init(data)
+	}
 
 	d.decodeSilenceFlag(&info)
 	if info.silence {
@@ -114,14 +128,18 @@ func (d *Decoder) validateFrameConfig(cfg frameConfig) (frameSideInfo, error) {
 	if cfg.channelCount != 1 && cfg.channelCount != 2 {
 		return frameSideInfo{}, errInvalidChannelCount
 	}
+	if cfg.outputChannelCount != 1 && cfg.outputChannelCount != 2 {
+		return frameSideInfo{}, errInvalidChannelCount
+	}
 
 	return frameSideInfo{
-		lm:             lm,
-		startBand:      cfg.startBand,
-		endBand:        cfg.endBand,
-		channelCount:   cfg.channelCount,
-		spread:         defaultSpreadDecision,
-		allocationTrim: defaultAllocationTrim,
+		lm:                 lm,
+		startBand:          cfg.startBand,
+		endBand:            cfg.endBand,
+		channelCount:       cfg.channelCount,
+		outputChannelCount: cfg.outputChannelCount,
+		spread:             defaultSpreadDecision,
+		allocationTrim:     defaultAllocationTrim,
 	}, nil
 }
 
