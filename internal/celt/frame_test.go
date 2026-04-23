@@ -14,30 +14,31 @@ import (
 func TestDecodeFrameSideInfoValidatesConfig(t *testing.T) {
 	decoder := NewDecoder()
 	validConfig := frameConfig{
-		frameSampleCount: shortBlockSampleCount,
-		startBand:        0,
-		endBand:          maxBands,
-		channelCount:     1,
+		frameSampleCount:   shortBlockSampleCount,
+		startBand:          0,
+		endBand:            maxBands,
+		channelCount:       1,
+		outputChannelCount: 1,
 	}
 
 	cfg := validConfig
 	cfg.frameSampleCount = 720
-	_, err := decoder.decodeFrameSideInfo(nil, cfg)
+	_, err := decoder.decodeFrameSideInfo(nil, cfg, nil)
 	assert.ErrorIs(t, err, errInvalidFrameSize)
 
 	cfg = validConfig
 	cfg.startBand = -1
-	_, err = decoder.decodeFrameSideInfo(nil, cfg)
+	_, err = decoder.decodeFrameSideInfo(nil, cfg, nil)
 	assert.ErrorIs(t, err, errInvalidBand)
 
 	cfg = validConfig
 	cfg.endBand = maxBands + 1
-	_, err = decoder.decodeFrameSideInfo(nil, cfg)
+	_, err = decoder.decodeFrameSideInfo(nil, cfg, nil)
 	assert.ErrorIs(t, err, errInvalidBand)
 
 	cfg = validConfig
 	cfg.channelCount = 3
-	_, err = decoder.decodeFrameSideInfo(nil, cfg)
+	_, err = decoder.decodeFrameSideInfo(nil, cfg, nil)
 	assert.ErrorIs(t, err, errInvalidChannelCount)
 }
 
@@ -45,11 +46,12 @@ func TestDecodeFrameSideInfoSilence(t *testing.T) {
 	decoder := NewDecoder()
 
 	info, err := decoder.decodeFrameSideInfo(nil, frameConfig{
-		frameSampleCount: shortBlockSampleCount,
-		startBand:        0,
-		endBand:          maxBands,
-		channelCount:     1,
-	})
+		frameSampleCount:   shortBlockSampleCount,
+		startBand:          0,
+		endBand:            maxBands,
+		channelCount:       1,
+		outputChannelCount: 1,
+	}, nil)
 
 	require.NoError(t, err)
 	assert.True(t, info.silence)
@@ -59,15 +61,64 @@ func TestDecodeFrameSideInfoSilence(t *testing.T) {
 	assert.False(t, info.intraEnergy)
 }
 
+func TestDecodeLostFrameBypassesSilenceSideInfo(t *testing.T) {
+	decoder := NewDecoder()
+	decoder.previousLogE[0][0] = 4
+	out := make([]float32, shortBlockSampleCount)
+
+	err := decoder.Decode(nil, out, false, 1, shortBlockSampleCount, 0, maxBands)
+
+	require.NoError(t, err)
+	assert.Equal(t, float32(2.5), decoder.previousLogE[0][0])
+	assert.Equal(t, float32(2.5), decoder.previousLogE[1][0])
+	assert.Zero(t, decoder.FinalRange())
+	assert.Equal(t, 1, decoder.lossCount)
+}
+
+func TestDecodeSynthesizesNonSilenceFrame(t *testing.T) {
+	decoder := NewDecoder()
+	out := make([]float32, shortBlockSampleCount)
+
+	err := decoder.Decode(make([]byte, 8), out, false, 1, shortBlockSampleCount, 0, maxBands)
+
+	require.NoError(t, err)
+	assert.NotZero(t, vectorEnergy(out))
+	assert.NotZero(t, decoder.FinalRange())
+	assert.Zero(t, decoder.lossCount)
+}
+
+func TestDecodeWithRangeUsesSharedDecoder(t *testing.T) {
+	decoder := NewDecoder()
+	out := make([]float32, shortBlockSampleCount)
+	shared := rangecoding.Decoder{}
+	shared.Init(make([]byte, 8))
+
+	err := decoder.DecodeWithRange(
+		make([]byte, 8),
+		out,
+		false,
+		1,
+		shortBlockSampleCount,
+		0,
+		maxBands,
+		&shared,
+	)
+
+	require.NoError(t, err)
+	assert.NotZero(t, vectorEnergy(out))
+	assert.Equal(t, decoder.FinalRange(), shared.FinalRange())
+}
+
 func TestDecodeFrameSideInfoAllDefaultFlags(t *testing.T) {
 	decoder := NewDecoder()
 
 	info, err := decoder.decodeFrameSideInfo(make([]byte, 8), frameConfig{
-		frameSampleCount: shortBlockSampleCount << 1,
-		startBand:        0,
-		endBand:          maxBands,
-		channelCount:     2,
-	})
+		frameSampleCount:   shortBlockSampleCount << 1,
+		startBand:          0,
+		endBand:            maxBands,
+		channelCount:       2,
+		outputChannelCount: 2,
+	}, nil)
 
 	require.NoError(t, err)
 	assert.False(t, info.silence)
@@ -82,10 +133,11 @@ func TestDecodeFrameSideInfoAllDefaultFlags(t *testing.T) {
 func TestDecodeFrameSideInfoRangeTrace(t *testing.T) {
 	decoder := NewDecoder()
 	info, err := decoder.validateFrameConfig(frameConfig{
-		frameSampleCount: shortBlockSampleCount << 1,
-		startBand:        0,
-		endBand:          maxBands,
-		channelCount:     2,
+		frameSampleCount:   shortBlockSampleCount << 1,
+		startBand:          0,
+		endBand:            maxBands,
+		channelCount:       2,
+		outputChannelCount: 2,
 	})
 	require.NoError(t, err)
 	info.totalBits = 64
