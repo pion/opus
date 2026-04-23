@@ -111,6 +111,18 @@ func (r *Decoder) Init(data []byte) {
 	r.normalize()
 }
 
+// SetStorageSize adjusts the logical frame size without resetting decoder
+// state. Opus hybrid redundancy removes tail bytes from the CELT range coder
+// after the shared decoder has already consumed SILK symbols.
+func (r *Decoder) SetStorageSize(size int) {
+	if size < 0 {
+		size = 0
+	}
+	if size < len(r.data) {
+		r.data = r.data[:size]
+	}
+}
+
 // DecodeSymbolWithICDF decodes a single symbol
 // with a table-based context of up to 8 bits.
 //
@@ -151,6 +163,18 @@ func (r *Decoder) decodeAndUpdateUniformSymbol(total uint32) uint32 {
 	r.update(r.rangeSize/total, symbol, symbol+1, total)
 
 	return symbol
+}
+
+// DecodeCumulative decodes the cumulative frequency index used by CELT's
+// custom range-coded symbols. Call UpdateCumulative with the selected interval.
+func (r *Decoder) DecodeCumulative(total uint32) uint32 {
+	return r.decodeUniformSymbol(total)
+}
+
+// UpdateCumulative commits a custom cumulative interval previously selected
+// from DecodeCumulative.
+func (r *Decoder) UpdateCumulative(low, high, total uint32) {
+	r.update(r.rangeSize/total, low, high, total)
 }
 
 // DecodeUniform decodes an RFC 6716 Section 4.1.5 ec_dec_uint() symbol.
