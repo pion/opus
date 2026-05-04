@@ -15,14 +15,14 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
 
 type conformanceKey struct {
-	vectorSet string
-	rate      int
-	channels  int
-	vector    string
+	rate     int
+	channels int
+	vector   string
 }
 
 type conformanceResult struct {
@@ -48,58 +48,56 @@ func TestRFC6716Conformance(t *testing.T) {
 		"01", "02", "03", "04", "05", "06",
 		"07", "08", "09", "10", "11", "12",
 	}
-	vectorSets := []string{"rfc6716", "rfc8251"}
 
 	refDir, vectorRoot := conformanceDataPaths(t)
 
 	opusCompare := buildRFC6716ReferenceTools(t, refDir)
 	results := make(map[conformanceKey]conformanceResult)
+	var resultsMu sync.Mutex
 
-	for _, vectorSet := range vectorSets {
-		vectorDir := filepath.Join(vectorRoot, vectorSet)
-		t.Run(vectorSet, func(t *testing.T) {
-			for _, rate := range rates {
-				for _, channels := range channelCounts {
-					t.Run(fmt.Sprintf("rate_%d/channels_%d", rate, channels), func(t *testing.T) {
-						for _, vector := range vectors {
-							key := conformanceKey{
-								vectorSet: vectorSet,
-								rate:      rate,
-								channels:  channels,
-								vector:    vector,
-							}
-							ran := false
+	t.Run("vectors", func(t *testing.T) {
+		for _, rate := range rates {
+			for _, channels := range channelCounts {
+				for _, vector := range vectors {
+					key := conformanceKey{
+						rate:     rate,
+						channels: channels,
+						vector:   vector,
+					}
+					t.Run(
+						fmt.Sprintf("rate_%d/channels_%d/testvector%s", rate, channels, vector),
+						func(t *testing.T) {
+							t.Parallel()
+
 							quality := ""
-							passed := t.Run("testvector"+vector, func(t *testing.T) {
-								ran = true
-								bitstream := filepath.Join(vectorDir, "testvector"+vector+".bit")
-								referencePCM := filepath.Join(vectorDir, "testvector"+vector+".dec")
-								alternateReferencePCM := filepath.Join(vectorDir, "testvector"+vector+"m.dec")
-								goPCM := filepath.Join(t.TempDir(), "go.pcm")
+							defer func() {
+								resultsMu.Lock()
+								results[key] = conformanceResult{passed: !t.Failed(), quality: quality}
+								resultsMu.Unlock()
+							}()
 
-								decodeRFC6716Vector(t, rate, channels, bitstream, goPCM)
-								quality = compareRFC6716Output(
-									t,
-									opusCompare,
-									rate,
-									channels,
-									referencePCM,
-									alternateReferencePCM,
-									goPCM,
-								)
-							})
-							if ran {
-								results[key] = conformanceResult{passed: passed, quality: quality}
-							}
-						}
-					})
+							bitstream := conformanceBitstreamPath(t, vectorRoot, vector)
+							referencePCMs := conformanceReferencePCMs(vectorRoot, vector)
+							goPCM := filepath.Join(t.TempDir(), "go.pcm")
+
+							decodeRFC6716Vector(t, rate, channels, bitstream, goPCM)
+							quality = compareRFC6716Output(
+								t,
+								opusCompare,
+								rate,
+								channels,
+								referencePCMs,
+								goPCM,
+							)
+						},
+					)
 				}
 			}
-		})
-	}
+		}
+	})
 
-	printConformanceMatrix(results, vectorSets, rates, channelCounts, vectors)
-	writeConformanceMarkdown(t, os.Getenv(envConformanceMarkdown), results, vectorSets, rates, channelCounts, vectors)
+	printConformanceMatrix(results, rates, channelCounts, vectors)
+	writeConformanceMarkdown(t, os.Getenv(envConformanceMarkdown), results, rates, channelCounts, vectors)
 }
 
 func conformanceDataPaths(t *testing.T) (refDir, vectorRoot string) {
@@ -118,42 +116,62 @@ func compareRFC6716Output(
 	t *testing.T,
 	opusCompare string,
 	rate, channels int,
-	referencePCM, alternateReferencePCM, goPCM string,
+	referencePCMs []string,
+	goPCM string,
 ) string {
 	t.Helper()
 
-	out, err := runOpusCompare(opusCompare, rate, channels, referencePCM, goPCM)
-	if err == nil {
-		quality := opusCompareQuality(out)
-		printOpusCompareQuality(t, quality)
+	checkedReference := false
+	var failures []string
+	for _, referencePCM := range referencePCMs {
+		if _, err := os.Stat(referencePCM); err != nil {
+			continue
+		}
+		checkedReference = true
+		out, err := runOpusCompare(opusCompare, rate, channels, referencePCM, goPCM)
+		if err == nil {
+			quality := opusCompareQuality(out)
+			printOpusCompareQuality(t, quality)
 
-		return quality
+			return quality
+		}
+		failures = append(failures, fmt.Sprintf("%s: %v\n%s", referencePCM, err, out))
 	}
-	primaryErr := err
-	primaryOut := out
-
-	if _, err := os.Stat(alternateReferencePCM); err != nil {
-		t.Fatalf("opus_compare failed: %v\n%s", primaryErr, primaryOut)
-
-		return ""
+	if !checkedReference {
+		t.Fatalf("no reference PCM found among %v", referencePCMs)
 	}
 
-	out, err = runOpusCompare(opusCompare, rate, channels, alternateReferencePCM, goPCM)
-	if err != nil {
-		t.Fatalf(
-			"opus_compare failed for both references: primary=%v alternate=%v\nprimary:\n%s\nalternate:\n%s",
-			primaryErr,
-			err,
-			primaryOut,
-			out,
-		)
+	t.Fatalf("opus_compare failed for all references:\n%s", strings.Join(failures, "\n"))
 
-		return ""
+	return ""
+}
+
+func conformanceBitstreamPath(t *testing.T, vectorRoot, vector string) string {
+	t.Helper()
+
+	// RFC 8251 Section 11 keeps the decoder input bitstreams unchanged, so the
+	// newer archive is the preferred source and the RFC 6716 archive is an
+	// equivalent fallback when only the legacy bundle is available.
+	for _, vectorSet := range []string{"rfc8251", "rfc6716"} {
+		path := filepath.Join(vectorRoot, vectorSet, "testvector"+vector+".bit")
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
 	}
-	quality := opusCompareQuality(out)
-	printOpusCompareQuality(t, quality)
 
-	return quality
+	t.Fatalf("missing testvector%s.bit in RFC 8251 or RFC 6716 vectors", vector)
+
+	return ""
+}
+
+func conformanceReferencePCMs(vectorRoot, vector string) []string {
+	// RFC 8251 Section 11 permits either the original RFC 6716 output set or
+	// one of the updated output sets for the same unchanged input bitstreams.
+	return []string{
+		filepath.Join(vectorRoot, "rfc8251", "testvector"+vector+".dec"),
+		filepath.Join(vectorRoot, "rfc8251", "testvector"+vector+"m.dec"),
+		filepath.Join(vectorRoot, "rfc6716", "testvector"+vector+".dec"),
+	}
 }
 
 func buildRFC6716ReferenceTools(t *testing.T, refDir string) (opusCompare string) {
@@ -309,7 +327,6 @@ func printOpusCompareQuality(t *testing.T, quality string) {
 
 func printConformanceMatrix(
 	results map[conformanceKey]conformanceResult,
-	vectorSets []string,
 	rates []int,
 	channelCounts []int,
 	vectors []string,
@@ -318,36 +335,33 @@ func printConformanceMatrix(
 		return
 	}
 
-	fmt.Println("RFC 6716 / 8251 conformation matrix")
+	fmt.Println("Opus conformance matrix")
 	fmt.Println("Legend: numeric cells are opus_compare quality percentages; FAIL means the vector did not pass.")
+	fmt.Println("Inputs use the shared RFC 6716 / RFC 8251 bitstream corpus; accepted references follow RFC 8251 Section 11.")
 
-	for _, vectorSet := range vectorSets {
-		fmt.Printf("\nvector set: %s\n", vectorSet)
-		printConformanceMatrixRule(vectors)
-		fmt.Printf("| %-8s | %-2s |", "rate", "ch")
-		for _, vector := range vectors {
-			fmt.Printf(" %-*s |", conformanceMatrixVectorCellWidth, vector)
-		}
-		fmt.Println()
-		printConformanceMatrixRule(vectors)
-
-		for _, rate := range rates {
-			for _, channels := range channelCounts {
-				fmt.Printf("| %-8d | %-2d |", rate, channels)
-				for _, vector := range vectors {
-					key := conformanceKey{
-						vectorSet: vectorSet,
-						rate:      rate,
-						channels:  channels,
-						vector:    vector,
-					}
-					fmt.Printf(" %-*s |", conformanceMatrixVectorCellWidth, conformanceMatrixCell(results, key))
-				}
-				fmt.Println()
-			}
-		}
-		printConformanceMatrixRule(vectors)
+	printConformanceMatrixRule(vectors)
+	fmt.Printf("| %-8s | %-2s |", "rate", "ch")
+	for _, vector := range vectors {
+		fmt.Printf(" %-*s |", conformanceMatrixVectorCellWidth, vector)
 	}
+	fmt.Println()
+	printConformanceMatrixRule(vectors)
+
+	for _, rate := range rates {
+		for _, channels := range channelCounts {
+			fmt.Printf("| %-8d | %-2d |", rate, channels)
+			for _, vector := range vectors {
+				key := conformanceKey{
+					rate:     rate,
+					channels: channels,
+					vector:   vector,
+				}
+				fmt.Printf(" %-*s |", conformanceMatrixVectorCellWidth, conformanceMatrixCell(results, key))
+			}
+			fmt.Println()
+		}
+	}
+	printConformanceMatrixRule(vectors)
 }
 
 const conformanceMatrixVectorCellWidth = 5
@@ -364,7 +378,6 @@ func writeConformanceMarkdown(
 	t *testing.T,
 	path string,
 	results map[conformanceKey]conformanceResult,
-	vectorSets []string,
 	rates []int,
 	channelCounts []int,
 	vectors []string,
@@ -377,35 +390,32 @@ func writeConformanceMarkdown(
 
 	var b strings.Builder
 	b.WriteString("Legend: numeric cells are `opus_compare` quality percentages; `FAIL` means the vector did not pass.\n\n")
-	for _, vectorSet := range vectorSets {
-		fmt.Fprintf(&b, "### %s\n\n", vectorSet)
-		b.WriteString("| rate | ch |")
-		for _, vector := range vectors {
-			fmt.Fprintf(&b, " %s |", vector)
-		}
-		b.WriteString("\n| --- | --- |")
-		for range vectors {
-			b.WriteString(" --- |")
-		}
-		b.WriteString("\n")
-
-		for _, rate := range rates {
-			for _, channels := range channelCounts {
-				fmt.Fprintf(&b, "| %d | %d |", rate, channels)
-				for _, vector := range vectors {
-					key := conformanceKey{
-						vectorSet: vectorSet,
-						rate:      rate,
-						channels:  channels,
-						vector:    vector,
-					}
-					fmt.Fprintf(&b, " %s |", conformanceMatrixCell(results, key))
-				}
-				b.WriteString("\n")
-			}
-		}
-		b.WriteString("\n")
+	b.WriteString("Inputs use the shared RFC 6716 / RFC 8251 bitstream corpus; accepted references follow RFC 8251 Section 11.\n\n")
+	b.WriteString("| rate | ch |")
+	for _, vector := range vectors {
+		fmt.Fprintf(&b, " %s |", vector)
 	}
+	b.WriteString("\n| --- | --- |")
+	for range vectors {
+		b.WriteString(" --- |")
+	}
+	b.WriteString("\n")
+
+	for _, rate := range rates {
+		for _, channels := range channelCounts {
+			fmt.Fprintf(&b, "| %d | %d |", rate, channels)
+			for _, vector := range vectors {
+				key := conformanceKey{
+					rate:     rate,
+					channels: channels,
+					vector:   vector,
+				}
+				fmt.Fprintf(&b, " %s |", conformanceMatrixCell(results, key))
+			}
+			b.WriteString("\n")
+		}
+	}
+	b.WriteString("\n")
 
 	if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
 		t.Fatalf("write conformance markdown: %v", err)
@@ -428,7 +438,16 @@ func conformanceMatrixCell(results map[conformanceKey]conformanceResult, key con
 }
 
 func conformanceFinalRange(d *Decoder) (uint32, error) {
-	return d.silkDecoder.FinalRange(), nil
+	switch d.previousMode {
+	case configurationModeCELTOnly:
+		return d.celtDecoder.FinalRange(), nil
+	case configurationModeSilkOnly:
+		return d.rangeFinal, nil
+	case configurationModeHybrid:
+		return d.rangeFinal, nil
+	default:
+		return 0, fmt.Errorf("unsupported final range mode: %s", d.previousMode)
+	}
 }
 
 func conformancePacketSamplesPerChannel(packet []byte, rate int) (int, error) {

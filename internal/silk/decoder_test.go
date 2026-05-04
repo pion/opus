@@ -38,6 +38,37 @@ func createRangeDecoder(
 	return d
 }
 
+func TestResetPredictionForBandwidthChange(t *testing.T) {
+	decoder := NewDecoder()
+	decoder.haveDecoded = true
+	decoder.isPreviousFrameVoiced = true
+	decoder.previousLag = 77
+	decoder.previousLogGain = 22
+	decoder.previousFrameLPCValues = []float32{1}
+	decoder.finalOutValues[0] = 1
+	decoder.n0Q15 = []int16{1}
+
+	decoder.resetPredictionForBandwidthChange(BandwidthNarrowband)
+	assert.Equal(t, BandwidthNarrowband, decoder.previousBandwidth)
+	assert.True(t, decoder.haveDecoded)
+	assert.True(t, decoder.isPreviousFrameVoiced)
+	assert.Equal(t, 77, decoder.previousLag)
+	assert.Equal(t, int32(22), decoder.previousLogGain)
+	assert.Equal(t, []float32{1}, decoder.previousFrameLPCValues)
+	assert.Equal(t, float32(1), decoder.finalOutValues[0])
+	assert.Equal(t, []int16{1}, decoder.n0Q15)
+
+	decoder.resetPredictionForBandwidthChange(BandwidthWideband)
+	assert.Equal(t, BandwidthWideband, decoder.previousBandwidth)
+	assert.False(t, decoder.haveDecoded)
+	assert.False(t, decoder.isPreviousFrameVoiced)
+	assert.Equal(t, 100, decoder.previousLag)
+	assert.Equal(t, int32(10), decoder.previousLogGain)
+	assert.Nil(t, decoder.previousFrameLPCValues)
+	assert.Equal(t, make([]float32, len(decoder.finalOutValues)), decoder.finalOutValues)
+	assert.Nil(t, decoder.n0Q15)
+}
+
 func TestDecodeUnsupportedFrameDuration(t *testing.T) {
 	d := &Decoder{}
 	assert.ErrorIs(t, errUnsupportedSilkFrameDuration, d.Decode(testSilkFrame(), []float32{}, false, 1, BandwidthWideband))
@@ -169,6 +200,75 @@ func TestDecodeWithRange(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.NotZero(t, rangeDecoder.FinalRange())
+}
+
+func TestDecodeWithRangeToChannelsSupportsStereoStreamMonoOutput(t *testing.T) {
+	decoder := NewDecoder()
+	rangeDecoder := rangecoding.Decoder{}
+	rangeDecoder.Init(testSilkFrame())
+
+	err := decoder.DecodeWithRangeToChannels(
+		&rangeDecoder,
+		make([]float32, 320),
+		true,
+		1,
+		nanoseconds20Ms,
+		BandwidthWideband,
+	)
+
+	assert.NoError(t, err)
+}
+
+func TestDecodeLowBitrateRedundancyFlags(t *testing.T) {
+	decoder := NewDecoder()
+	decoder.rangeDecoder.Init(make([]byte, 8))
+
+	assert.Equal(t, []bool{false, false}, decoder.decodeLowBitrateRedundancyFlags(2, false))
+	assert.Equal(t, []bool{true}, decoder.decodeLowBitrateRedundancyFlags(1, true))
+
+	flags40Ms := decoder.decodeLowBitrateRedundancyFlags(2, true)
+	flags60Ms := decoder.decodeLowBitrateRedundancyFlags(3, true)
+	assert.Len(t, flags40Ms, 2)
+	assert.Len(t, flags60Ms, 3)
+	assert.True(t, flags40Ms[0] || flags40Ms[1])
+	assert.True(t, flags60Ms[0] || flags60Ms[1] || flags60Ms[2])
+}
+
+func TestConsumeLowBitrateRedundancyFrameSkipsUncodedFrame(t *testing.T) {
+	decoder := NewDecoder()
+
+	err := decoder.consumeLowBitrateRedundancyFrame(
+		nil,
+		nil,
+		false,
+		false,
+		false,
+		false,
+		false,
+		nanoseconds20Ms,
+		BandwidthWideband,
+	)
+
+	assert.NoError(t, err)
+}
+
+func TestConsumeLowBitrateRedundancyFrameDecodesMidFrame(t *testing.T) {
+	decoder := NewDecoder()
+	decoder.rangeDecoder.Init(testSilkFrame())
+
+	err := decoder.consumeLowBitrateRedundancyFrame(
+		make([]float32, 320),
+		nil,
+		true,
+		false,
+		false,
+		true,
+		false,
+		nanoseconds20Ms,
+		BandwidthWideband,
+	)
+
+	assert.NoError(t, err)
 }
 
 func TestNormalizeLineSpectralFrequencyStageOne(t *testing.T) {

@@ -53,6 +53,15 @@ func TestLog2AmpAndDenormaliseBands(t *testing.T) {
 	assert.Equal(t, float32(-1), minFloat32(2, -1))
 }
 
+func TestLimitOutputBandwidth(t *testing.T) {
+	freq := []float32{1, 2, 3, 4, 5, 6}
+	limitOutputBandwidth(&frameSideInfo{outputSampleRate: sampleRate}, freq)
+	assert.Equal(t, []float32{1, 2, 3, 4, 5, 6}, freq)
+
+	limitOutputBandwidth(&frameSideInfo{outputSampleRate: 16000}, freq)
+	assert.Equal(t, []float32{1, 2, 0, 0, 0, 0}, freq)
+}
+
 func TestDenormaliseAndSynthesizeLayouts(t *testing.T) {
 	tests := []struct {
 		name               string
@@ -242,7 +251,7 @@ func TestInverseMDCTAndDeemphasisHelpers(t *testing.T) {
 
 	decoder := NewDecoder()
 	out := make([]float32, 4)
-	decoder.deemphasisAndInterleave([]float32{32768, 0}, []float32{16384, 0}, out, 2, 2)
+	decoder.deemphasisAndInterleave([]float32{32768, 0}, []float32{16384, 0}, out, 2, 2, sampleRate)
 	assert.Equal(t, float32(1), out[0])
 	assert.Equal(t, float32(0.5), out[1])
 	assert.NotZero(t, decoder.preemphasisMem[0])

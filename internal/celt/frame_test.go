@@ -42,6 +42,18 @@ func TestDecodeFrameSideInfoValidatesConfig(t *testing.T) {
 	assert.ErrorIs(t, err, errInvalidChannelCount)
 }
 
+func TestFrameSampleCountAtRate(t *testing.T) {
+	samples, err := frameSampleCountAtRate(shortBlockSampleCount, 8000)
+	require.NoError(t, err)
+	assert.Equal(t, 20, samples)
+
+	_, err = frameSampleCountAtRate(shortBlockSampleCount, 44100)
+	assert.ErrorIs(t, err, errInvalidSampleRate)
+
+	_, err = frameSampleCountAtRate(shortBlockSampleCount+1, 8000)
+	assert.ErrorIs(t, err, errInvalidFrameSize)
+}
+
 func TestDecodeFrameSideInfoSilence(t *testing.T) {
 	decoder := NewDecoder()
 
