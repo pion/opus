@@ -30,6 +30,7 @@ type frameConfig struct {
 	endBand            int
 	channelCount       int
 	outputChannelCount int
+	outputSampleRate   int
 }
 
 type frameSideInfo struct {
@@ -39,6 +40,7 @@ type frameSideInfo struct {
 	endBand            int
 	channelCount       int
 	outputChannelCount int
+	outputSampleRate   int
 	silence            bool
 	postFilter         postFilter
 	transient          bool
@@ -114,22 +116,20 @@ func (d *Decoder) prepareCoarseEnergyHistory(info *frameSideInfo) {
 }
 
 func (d *Decoder) validateFrameConfig(cfg frameConfig) (frameSideInfo, error) {
+	cfg.outputSampleRate = normalizeOutputSampleRate(cfg.outputSampleRate)
 	// RFC 6716 Section 4.3.3 defines LM as log2(frame_size/120).
 	lm, err := d.Mode().LMForFrameSampleCount(cfg.frameSampleCount)
 	if err != nil {
 		return frameSideInfo{}, err
 	}
-	if cfg.startBand < 0 || cfg.startBand >= d.Mode().BandCount() {
-		return frameSideInfo{}, errInvalidBand
+	if _, err = frameSampleCountAtRate(cfg.frameSampleCount, cfg.outputSampleRate); err != nil {
+		return frameSideInfo{}, err
 	}
-	if cfg.endBand <= cfg.startBand || cfg.endBand > d.Mode().BandCount() {
-		return frameSideInfo{}, errInvalidBand
+	if err = d.validateBandRange(cfg.startBand, cfg.endBand); err != nil {
+		return frameSideInfo{}, err
 	}
-	if cfg.channelCount != 1 && cfg.channelCount != 2 {
-		return frameSideInfo{}, errInvalidChannelCount
-	}
-	if cfg.outputChannelCount != 1 && cfg.outputChannelCount != 2 {
-		return frameSideInfo{}, errInvalidChannelCount
+	if err = validateChannelCounts(cfg.channelCount, cfg.outputChannelCount); err != nil {
+		return frameSideInfo{}, err
 	}
 
 	return frameSideInfo{
@@ -138,9 +138,59 @@ func (d *Decoder) validateFrameConfig(cfg frameConfig) (frameSideInfo, error) {
 		endBand:            cfg.endBand,
 		channelCount:       cfg.channelCount,
 		outputChannelCount: cfg.outputChannelCount,
+		outputSampleRate:   cfg.outputSampleRate,
 		spread:             defaultSpreadDecision,
 		allocationTrim:     defaultAllocationTrim,
 	}, nil
+}
+
+func normalizeOutputSampleRate(outputSampleRate int) int {
+	if outputSampleRate == 0 {
+		return sampleRate
+	}
+
+	return outputSampleRate
+}
+
+func (d *Decoder) validateBandRange(startBand int, endBand int) error {
+	if startBand < 0 || startBand >= d.Mode().BandCount() {
+		return errInvalidBand
+	}
+	if endBand <= startBand || endBand > d.Mode().BandCount() {
+		return errInvalidBand
+	}
+
+	return nil
+}
+
+func validateChannelCounts(channelCount int, outputChannelCount int) error {
+	if channelCount != 1 && channelCount != 2 {
+		return errInvalidChannelCount
+	}
+	if outputChannelCount != 1 && outputChannelCount != 2 {
+		return errInvalidChannelCount
+	}
+
+	return nil
+}
+
+// frameSampleCountAtRate validates an Opus API output rate and maps a 48 kHz
+// CELT-domain frame size into the emitted PCM length.
+func frameSampleCountAtRate(frameSampleCount int, outputSampleRate int) (int, error) {
+	switch outputSampleRate {
+	case 8000, 12000, 16000, 24000, sampleRate:
+	default:
+		return 0, errInvalidSampleRate
+	}
+	if sampleRate%outputSampleRate != 0 {
+		return 0, errInvalidSampleRate
+	}
+	downsample := sampleRate / outputSampleRate
+	if frameSampleCount%downsample != 0 {
+		return 0, errInvalidFrameSize
+	}
+
+	return frameSampleCount / downsample, nil
 }
 
 func (d *Decoder) decodeSilenceFlag(info *frameSideInfo) {

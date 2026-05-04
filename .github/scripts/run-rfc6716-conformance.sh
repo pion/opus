@@ -280,7 +280,7 @@ main() {
   export OPUS_CONFORMANCE_MARKDOWN="${matrix_file}"
 
   set +e
-  go test -v -tags conformance -run TestRFC6716Conformance . 2>&1 | tee "${log_file}"
+  go test -v -timeout 60m -tags conformance -run TestRFC6716Conformance . 2>&1 | tee "${log_file}"
   local test_status="${PIPESTATUS[0]}"
   set -e
 

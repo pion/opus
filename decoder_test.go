@@ -125,7 +125,7 @@ func TestNewDecoderWithOutput(t *testing.T) {
 
 func TestInitResetsCeltState(t *testing.T) {
 	decoder := NewDecoder()
-	_, stereo, sampleCount, decodedChannelCount, err := decoder.decode(
+	_, _, stereo, sampleCount, decodedChannelCount, err := decoder.decode(
 		[]byte{byte(16<<3) | byte(frameCodeOneFrame), 0xff, 0xff},
 		nil,
 	)
@@ -159,6 +159,30 @@ func TestDecodeToFloat32(t *testing.T) {
 	assert.ErrorIs(t, err, errOutBufferTooSmall)
 }
 
+func TestDecodeCeltAtBandwidthSampleRateSkipsSilkResampler(t *testing.T) {
+	decoder, err := NewDecoderWithOutput(8000, 1)
+	assert.NoError(t, err)
+	out := make([]float32, 20)
+
+	sampleCount, err := decoder.DecodeToFloat32([]byte{byte(16<<3) | byte(frameCodeOneFrame)}, out)
+
+	assert.NoError(t, err)
+	assert.Equal(t, 20, sampleCount)
+	assert.Zero(t, decoder.silkResamplerBandwidth)
+}
+
+func TestDecodeHybridAtBandwidthSampleRateSkipsSilkResampler(t *testing.T) {
+	decoder, err := NewDecoderWithOutput(24000, 1)
+	assert.NoError(t, err)
+	out := make([]float32, 240)
+
+	sampleCount, err := decoder.DecodeToFloat32([]byte{byte(12<<3) | byte(frameCodeOneFrame)}, out)
+
+	assert.NoError(t, err)
+	assert.Equal(t, 240, sampleCount)
+	assert.Zero(t, decoder.silkResamplerBandwidth)
+}
+
 func TestDecodeToInt16(t *testing.T) {
 	decoder, err := NewDecoderWithOutput(8000, 1)
 	assert.NoError(t, err)
@@ -182,7 +206,7 @@ func TestDecodeSilkFrameDurations(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			decoder := NewDecoder()
-			_, _, _, _, err := decoder.decode([]byte{byte(test.configuration<<3) | byte(frameCodeOneFrame)}, nil)
+			_, _, _, _, _, err := decoder.decode([]byte{byte(test.configuration<<3) | byte(frameCodeOneFrame)}, nil)
 			assert.NoError(t, err)
 			assert.Len(t, decoder.silkBuffer, test.sampleCount)
 		})
@@ -218,7 +242,7 @@ func TestDecodedSampleRate(t *testing.T) {
 func TestDecodeCeltOnly(t *testing.T) {
 	decoder := NewDecoder()
 
-	bandwidth, isStereo, sampleCount, _, err := decoder.decode([]byte{byte(16<<3) | byte(frameCodeOneFrame)}, nil)
+	bandwidth, _, isStereo, sampleCount, _, err := decoder.decode([]byte{byte(16<<3) | byte(frameCodeOneFrame)}, nil)
 
 	assert.NoError(t, err)
 	assert.Equal(t, BandwidthNarrowband, bandwidth)
@@ -231,7 +255,7 @@ func TestDecodeCeltOnly(t *testing.T) {
 func TestDecodeHybrid(t *testing.T) {
 	decoder := NewDecoder()
 
-	bandwidth, isStereo, sampleCount, _, err := decoder.decode([]byte{byte(12<<3) | byte(frameCodeOneFrame)}, nil)
+	bandwidth, _, isStereo, sampleCount, _, err := decoder.decode([]byte{byte(12<<3) | byte(frameCodeOneFrame)}, nil)
 
 	assert.NoError(t, err)
 	assert.Equal(t, BandwidthSuperwideband, bandwidth)
@@ -341,28 +365,28 @@ func TestAddHybridSilkMapsChannels(t *testing.T) {
 		name               string
 		streamChannelCount int
 		outputChannelCount int
-		silk48             []float32
+		silkPCM            []float32
 		expected           []float32
 	}{
 		{
 			name:               "mono",
 			streamChannelCount: 1,
 			outputChannelCount: 1,
-			silk48:             []float32{0.25},
+			silkPCM:            []float32{0.25},
 			expected:           []float32{0.25},
 		},
 		{
 			name:               "mono to stereo",
 			streamChannelCount: 1,
 			outputChannelCount: 2,
-			silk48:             []float32{0.25},
+			silkPCM:            []float32{0.25},
 			expected:           []float32{0.25, 0.25},
 		},
 		{
 			name:               "stereo to mono",
 			streamChannelCount: 2,
 			outputChannelCount: 1,
-			silk48:             []float32{0.25, 0.5},
+			silkPCM:            []float32{0.25, 0.5},
 			expected:           []float32{0.375},
 		},
 	} {
@@ -370,7 +394,7 @@ func TestAddHybridSilkMapsChannels(t *testing.T) {
 			decoder := NewDecoder()
 			out := make([]float32, len(test.expected))
 
-			decoder.addHybridSilk(out, test.silk48, test.streamChannelCount, test.outputChannelCount, 1)
+			decoder.addHybridSilk(out, test.silkPCM, test.streamChannelCount, test.outputChannelCount, 1)
 
 			assert.Equal(t, test.expected, out)
 		})
@@ -381,7 +405,7 @@ func TestDecodeSilkFramesAddsHybridTransitionAudio(t *testing.T) {
 	decoder := NewDecoder()
 	decoder.previousMode = configurationModeHybrid
 
-	bandwidth, isStereo, sampleCount, decodedChannelCount, err := decoder.decodeSilkFrames(
+	bandwidth, _, isStereo, sampleCount, decodedChannelCount, err := decoder.decodeSilkFrames(
 		Configuration(8),
 		tableOfContentsHeader(byte(8<<3)|byte(frameCodeOneFrame)),
 		[][]byte{nil},

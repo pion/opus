@@ -63,12 +63,18 @@ var celtWindow120 = [shortBlockSampleCount]float32{ //nolint:gochecknoglobals
 }
 
 // SmoothFade applies the RFC 6716 CELT transition window over one 2.5 ms
-// overlap. The decoder mixes in 48 kHz CELT time, so the reference window
-// increment is always one sample here.
+// overlap at the internal 48 kHz CELT rate.
 func SmoothFade(in1, in2, out []float32, overlap int, channels int) {
+	SmoothFadeWithSampleRate(in1, in2, out, overlap, channels, sampleRate)
+}
+
+// SmoothFadeWithSampleRate applies the CELT transition window at an Opus API
+// output rate. RFC 6716 indexes the 48 kHz window by 48000/Fs for lower rates.
+func SmoothFadeWithSampleRate(in1, in2, out []float32, overlap int, channels int, outputSampleRate int) {
+	inc := sampleRate / outputSampleRate
 	for channel := range channels {
 		for i := range overlap {
-			w := celtWindow120[i] * celtWindow120[i]
+			w := celtWindow120[i*inc] * celtWindow120[i*inc]
 			index := i*channels + channel
 			out[index] = w*in2[index] + (1-w)*in1[index]
 		}
@@ -100,10 +106,12 @@ func (d *Decoder) denormaliseAndSynthesize(
 	frameSampleCount := len(x)
 	freqX := make([]float32, frameSampleCount)
 	denormaliseBands(info, x, freqX, bandEnergy[0])
+	limitOutputBandwidth(info, freqX)
 	var freqY []float32
 	if info.channelCount == 2 {
 		freqY = make([]float32, frameSampleCount)
 		denormaliseBands(info, y, freqY, bandEnergy[1])
+		limitOutputBandwidth(info, freqY)
 	}
 	if info.outputChannelCount == 2 && info.channelCount == 1 {
 		freqY = make([]float32, frameSampleCount)
@@ -120,14 +128,14 @@ func (d *Decoder) denormaliseAndSynthesize(
 	d.applyPostfilter(info, timeX, 0)
 	if info.outputChannelCount == 1 {
 		d.updatePostfilterState(info)
-		d.deemphasisAndInterleave(timeX, nil, out, frameSampleCount, 1)
+		d.deemphasisAndInterleave(timeX, nil, out, frameSampleCount, 1, info.outputSampleRate)
 
 		return
 	}
 	timeY := d.inverseTransformChannel(freqY, 1, info)
 	d.applyPostfilter(info, timeY, 1)
 	d.updatePostfilterState(info)
-	d.deemphasisAndInterleave(timeX, timeY, out, frameSampleCount, 2)
+	d.deemphasisAndInterleave(timeX, timeY, out, frameSampleCount, 2, info.outputSampleRate)
 }
 
 // antiCollapse implements RFC 6716 Section 4.3.5 by injecting low-energy
@@ -343,6 +351,22 @@ func denormaliseBands(info *frameSideInfo, x []float32, freq []float32, bandEner
 	}
 }
 
+// limitOutputBandwidth zeros bins above the requested API output rate before
+// synthesis, matching RFC 6716's lower-rate CELT output path.
+func limitOutputBandwidth(info *frameSideInfo, freq []float32) {
+	outputSampleRate := info.outputSampleRate
+	if outputSampleRate == 0 {
+		outputSampleRate = sampleRate
+	}
+	if outputSampleRate == sampleRate {
+		return
+	}
+	bound := len(freq) * outputSampleRate / sampleRate
+	for i := bound; i < len(freq); i++ {
+		freq[i] = 0
+	}
+}
+
 // inverseTransformChannel performs the RFC 6716 Section 4.3.7 IMDCT path for
 // one channel and carries the weighted overlap-add tail into the next frame.
 func (d *Decoder) inverseTransformChannel(freq []float32, channel int, info *frameSideInfo) []float32 {
@@ -480,16 +504,37 @@ func celtWindow(i int) float32 {
 
 // deemphasisAndInterleave applies the decoder-side pre-emphasis inversion after
 // RFC 6716 synthesis and writes interleaved PCM samples for the caller.
-func (d *Decoder) deemphasisAndInterleave(x []float32, y []float32, out []float32, frameSampleCount int, channelCount int) {
+func (d *Decoder) deemphasisAndInterleave(
+	timeX []float32,
+	timeY []float32,
+	out []float32,
+	frameSampleCount int,
+	channelCount int,
+	outputSampleRate int,
+) {
+	if outputSampleRate == 0 {
+		outputSampleRate = sampleRate
+	}
+	downsample := sampleRate / outputSampleRate
+	outputSample := 0
 	for sample := range frameSampleCount {
-		left := x[sample] + d.preemphasisMem[0]
+		left := timeX[sample] + d.preemphasisMem[0]
 		d.preemphasisMem[0] = 0.85000610 * left
-		out[sample*channelCount] = left / 32768
-		if channelCount == 2 {
-			right := y[sample] + d.preemphasisMem[1]
-			d.preemphasisMem[1] = 0.85000610 * right
-			out[sample*channelCount+1] = right / 32768
+		if sample%downsample != 0 {
+			if channelCount == 2 {
+				right := timeY[sample] + d.preemphasisMem[1]
+				d.preemphasisMem[1] = 0.85000610 * right
+			}
+
+			continue
 		}
+		out[outputSample*channelCount] = left / 32768
+		if channelCount == 2 {
+			right := timeY[sample] + d.preemphasisMem[1]
+			d.preemphasisMem[1] = 0.85000610 * right
+			out[outputSample*channelCount+1] = right / 32768
+		}
+		outputSample++
 	}
 }
 

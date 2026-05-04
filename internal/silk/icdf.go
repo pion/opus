@@ -35,6 +35,12 @@ var (
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.2
 	icdfStereoMidOnly = []uint{256, 192, 256}
 
+	// RFC 6716 Section 4.2.4/Table 4: per-frame LBRR flags for 40 ms and
+	// 60 ms Opus frames. Symbol zero has zero probability because the global
+	// LBRR flag is only set when at least one per-frame LBRR frame is present.
+	icdfLowBitrateRedundancyFlags40Ms = []uint{256, 0, 53, 106, 256}
+	icdfLowBitrateRedundancyFlags60Ms = []uint{256, 0, 41, 61, 90, 131, 146, 174, 256}
+
 	// +----------+-----------------------------+
 	// | VAD Flag | PDF                         |
 	// +----------+-----------------------------+

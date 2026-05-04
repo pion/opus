@@ -68,7 +68,23 @@ func (d *Decoder) Decode(
 	startBand int,
 	endBand int,
 ) error {
-	return d.decode(in, out, isStereo, outputChannelCount, frameSampleCount, startBand, endBand, nil)
+	return d.DecodeToSampleRate(in, out, isStereo, outputChannelCount, frameSampleCount, startBand, endBand, sampleRate)
+}
+
+// DecodeToSampleRate decodes one CELT frame into interleaved float PCM at the
+// requested Opus API sample rate. RFC 6716 keeps the MDCT mode at 48 kHz and
+// decimates during CELT deemphasis for lower output rates.
+func (d *Decoder) DecodeToSampleRate(
+	in []byte,
+	out []float32,
+	isStereo bool,
+	outputChannelCount int,
+	frameSampleCount int,
+	startBand int,
+	endBand int,
+	outputSampleRate int,
+) error {
+	return d.decode(in, out, isStereo, outputChannelCount, frameSampleCount, startBand, endBand, outputSampleRate, nil)
 }
 
 // DecodeWithRange decodes one CELT frame using an Opus range decoder shared
@@ -83,7 +99,43 @@ func (d *Decoder) DecodeWithRange(
 	endBand int,
 	rangeDecoder *rangecoding.Decoder,
 ) error {
-	return d.decode(in, out, isStereo, outputChannelCount, frameSampleCount, startBand, endBand, rangeDecoder)
+	return d.DecodeWithRangeToSampleRate(
+		in,
+		out,
+		isStereo,
+		outputChannelCount,
+		frameSampleCount,
+		startBand,
+		endBand,
+		sampleRate,
+		rangeDecoder,
+	)
+}
+
+// DecodeWithRangeToSampleRate decodes one CELT frame with a shared range coder
+// and emits PCM at the requested Opus API sample rate.
+func (d *Decoder) DecodeWithRangeToSampleRate(
+	in []byte,
+	out []float32,
+	isStereo bool,
+	outputChannelCount int,
+	frameSampleCount int,
+	startBand int,
+	endBand int,
+	outputSampleRate int,
+	rangeDecoder *rangecoding.Decoder,
+) error {
+	return d.decode(
+		in,
+		out,
+		isStereo,
+		outputChannelCount,
+		frameSampleCount,
+		startBand,
+		endBand,
+		outputSampleRate,
+		rangeDecoder,
+	)
 }
 
 func (d *Decoder) decode(
@@ -94,6 +146,7 @@ func (d *Decoder) decode(
 	frameSampleCount int,
 	startBand int,
 	endBand int,
+	outputSampleRate int,
 	rangeDecoder *rangecoding.Decoder,
 ) error {
 	channelCount := 1
@@ -103,7 +156,11 @@ func (d *Decoder) decode(
 	if outputChannelCount != 1 && outputChannelCount != 2 {
 		return errInvalidChannelCount
 	}
-	if len(out) < frameSampleCount*outputChannelCount {
+	outputFrameSampleCount, err := frameSampleCountAtRate(frameSampleCount, outputSampleRate)
+	if err != nil {
+		return err
+	}
+	if len(out) < outputFrameSampleCount*outputChannelCount {
 		return errInvalidFrameSize
 	}
 
@@ -113,6 +170,7 @@ func (d *Decoder) decode(
 		endBand:            endBand,
 		channelCount:       channelCount,
 		outputChannelCount: outputChannelCount,
+		outputSampleRate:   outputSampleRate,
 	}
 	// The reference decoder routes empty and one-byte CELT frames to PLC before
 	// trying to parse side information.
@@ -121,7 +179,7 @@ func (d *Decoder) decode(
 		if validateErr != nil {
 			return validateErr
 		}
-		d.decodeLostFrame(&lostInfo, out[:frameSampleCount*outputChannelCount])
+		d.decodeLostFrame(&lostInfo, out[:outputFrameSampleCount*outputChannelCount])
 
 		return nil
 	}

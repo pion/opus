@@ -86,6 +86,12 @@ func TestParsePacketFramesRFC6716MalformedRules(t *testing.T) {
 			packet: []byte{tocCode3, 0b01000001, 5},
 		},
 		{
+			// RFC 8251 §4 parses padding by decrementing the remaining packet
+			// length as each continuation byte is consumed.
+			name:   "R6 code 3 continuation padding exceeds packet payload",
+			packet: []byte{tocCode3, 0b01000001, 255, 0},
+		},
+		{
 			// RFC 6716 §3.4 [R6]: for CBR code 3, (N-2-P) must be a non-negative
 			// integer multiple of M.
 			name:   "R6 code 3 CBR payload not divisible by frame count",
@@ -115,7 +121,7 @@ func TestDecodeRejectsEmptyPacket(t *testing.T) {
 
 	decoder := NewDecoder()
 
-	bandwidth, isStereo, sampleCount, _, err := decoder.decode(nil, make([]float32, 0))
+	bandwidth, _, isStereo, sampleCount, _, err := decoder.decode(nil, make([]float32, 0))
 
 	require.Error(t, err)
 	assert.Zero(t, bandwidth)
@@ -207,10 +213,10 @@ func TestDecodePacketFrames(t *testing.T) {
 		t.Parallel()
 
 		decoder := NewDecoder()
-		_, _, _, _, err := decoder.decode([]byte{tocByte(frameCodeTwoEqualFrames) | 0b100}, decoder.silkBuffer)
+		_, _, _, _, _, err := decoder.decode([]byte{tocByte(frameCodeTwoEqualFrames) | 0b100}, decoder.silkBuffer)
 
 		require.NoError(t, err)
-		assert.Equal(t, maxSilkFrameSampleCount*4, len(decoder.silkBuffer))
+		assert.Equal(t, maxSilkFrameSampleCount*2, len(decoder.silkBuffer))
 	})
 
 	t.Run("Decode rejects empty packets", func(t *testing.T) {
