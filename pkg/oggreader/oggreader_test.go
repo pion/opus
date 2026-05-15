@@ -370,6 +370,7 @@ func buildOpusIDHeader(
 		header = append(header, streamCount, coupledCount)
 		for _, coefficient := range demixingMatrix {
 			packed := make([]byte, 2)
+			//nolint:gosec // Test data needs the int16 bit pattern encoded verbatim.
 			binary.LittleEndian.PutUint16(packed, uint16(coefficient))
 			header = append(header, packed...)
 		}
