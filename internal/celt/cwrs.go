@@ -101,3 +101,47 @@ func cwrsPreviousRow(u []uint32, n int, value0 uint32) {
 	}
 	u[n-1] = value
 }
+
+// encodePulses writes a CWRS index for the PVQ pulse vector y to the range
+// encoder. It is the inverse of decodePulses.
+func encodePulses(y []int, n, k int, rangeEncoder *rangecoding.Encoder) {
+	if k <= 0 {
+		return
+	}
+	index := cwrsEncode(y, n, k)
+	u := cwrsUrow(n, k)
+	total := u[k] + u[k+1]
+	rangeEncoder.EncodeUniform(total, index)
+}
+
+// cwrsEncode maps a PVQ pulse vector to its unique CWRS codeword index.
+// It is the exact inverse of cwrsDecode for a fixed (n, k) codebook.
+func cwrsEncode(y []int, n, k int) uint32 {
+	if n <= 0 || k <= 0 {
+		return 0
+	}
+
+	u := cwrsUrow(n, k)
+	var index uint32
+
+	for j := range n {
+		magnitude := y[j]
+		if magnitude < 0 {
+			magnitude = -magnitude
+		}
+		if magnitude > k {
+			return 0
+		}
+
+		remaining := k - magnitude
+		index += u[remaining]
+		if y[j] < 0 {
+			index += u[k+1]
+		}
+
+		cwrsPreviousRow(u, remaining+2, 0)
+		k = remaining
+	}
+
+	return index
+}

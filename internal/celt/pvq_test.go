@@ -7,6 +7,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/pion/opus/internal/rangecoding"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -49,6 +50,66 @@ func TestAlgUnquant(t *testing.T) {
 	assert.Equal(t, uint(1), mask)
 	assert.InDelta(t, 1, vectorEnergy(x), 0.000001)
 	assert.Len(t, state.pulseScratch, len(x))
+}
+
+func TestPVQSearchBasic(t *testing.T) {
+	// Target with energy in first few dimensions
+	x := []float32{3, 2, 1, 0}
+	iy := pvqSearch(x, len(x), 3)
+
+	pulses := 0
+	for _, v := range iy {
+		if v < 0 {
+			pulses -= v
+		} else {
+			pulses += v
+		}
+	}
+	assert.Equal(t, 3, pulses)
+
+	// Signs should match target
+	assert.Greater(t, iy[0], 0)
+	assert.Greater(t, iy[1], 0)
+}
+
+func TestPVQSearchZeroPulses(t *testing.T) {
+	x := []float32{1, 2, 3}
+	iy := pvqSearch(x, len(x), 0)
+	for _, v := range iy {
+		assert.Equal(t, 0, v)
+	}
+}
+
+func TestAlgQuantRoundTrip(t *testing.T) {
+	n := 4
+	pulseCount := 2
+	spread := spreadNormal
+	gain := float32(2)
+
+	// Original target
+	original := []float32{3, 1, 0, -1}
+
+	// Encode
+	var enc rangecoding.Encoder
+	enc.Init()
+	xEnc := make([]float32, n)
+	copy(xEnc, original)
+	mask := algQuant(xEnc, n, pulseCount, spread, 1, &enc, gain)
+	assert.NotZero(t, mask)
+
+	bits := enc.Done()
+
+	// Decode
+	var dec rangecoding.Decoder
+	dec.Init(bits)
+	state := bandDecodeState{}
+	xDec := make([]float32, n)
+	algUnquant(xDec, n, pulseCount, spread, 1, &dec, gain, &state)
+
+	// Encoder output and decoder output should match
+	for i := range n {
+		assert.InDelta(t, xEnc[i], xDec[i], 0.0001)
+	}
 }
 
 func TestStereoMerge(t *testing.T) {

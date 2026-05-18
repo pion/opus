@@ -131,6 +131,76 @@ func expRotation(x []float32, length int, direction int, stride int, pulses int,
 	}
 }
 
+// pvqSearch finds the best PVQ pulse vector y for target x with K pulses.
+// Uses greedy per-pulse allocation: each pulse goes to the dimension that
+// maximizes (x[i]·y[i])^2 / ||y||^2.
+func pvqSearch(x []float32, n, k int) []int {
+	y := make([]int, n)
+
+	absX := make([]float32, n)
+	sign := make([]float32, n)
+	for i := range n {
+		if x[i] >= 0 {
+			absX[i] = x[i]
+			sign[i] = 1
+		} else {
+			absX[i] = -x[i]
+			sign[i] = -1
+		}
+	}
+
+	var dot, ener float32
+	for range k {
+		bestScore := float32(-1)
+		bestIdx := 0
+		for i := range n {
+			newDot := dot + absX[i]
+			newEner := ener + float32(2*y[i]+1)
+			score := (newDot * newDot) / newEner
+			if score > bestScore {
+				bestScore = score
+				bestIdx = i
+			}
+		}
+		y[bestIdx]++
+		dot += absX[bestIdx]
+		ener += float32(2*y[bestIdx] - 1)
+	}
+
+	for i := range n {
+		if sign[i] < 0 {
+			y[i] = -y[i]
+		}
+	}
+
+	return y
+}
+
+// algQuant encodes the PVQ pulse vector for band shape and writes it to the
+// range encoder. It is the encoder-side inverse of algUnquant.
+func algQuant(
+	x []float32,
+	n, k int,
+	spread int,
+	blocks int,
+	rangeEncoder *rangecoding.Encoder,
+	gain float32,
+) uint {
+	expRotation(x, n, 1, blocks, k, spread)
+
+	iy := pvqSearch(x, n, k)
+	encodePulses(iy, n, k, rangeEncoder)
+
+	energy := 0
+	for i := range n {
+		energy += iy[i] * iy[i]
+	}
+	normaliseResidual(iy, x, n, energy, gain)
+	expRotation(x, n, -1, blocks, k, spread)
+
+	return extractCollapseMask(iy, n, blocks)
+}
+
 func expRotation1(x []float32, length int, stride int, c float32, s float32) {
 	for i := 0; i < length-stride; i++ {
 		x1 := x[i]
