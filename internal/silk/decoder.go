@@ -133,35 +133,33 @@ func (d *Decoder) resetPredictionForBandwidthChange(bandwidth Bandwidth) {
 // single flag indicating the presence of LBRR frames.
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.3
-func (d *Decoder) decodeHeaderBits(
+func (d *Decoder) decodeHeaderBitsInto(
+	dst *[]bool,
 	frameCount int,
 ) (voiceActivityDetected []bool, lowBitRateRedundancy bool) {
-	return d.decodeHeaderBitsInto(nil, frameCount)
-}
-
-func (d *Decoder) decodeHeaderBitsInto(
-	voiceActivityDetected *[]bool,
-	frameCount int,
-) (decoded []bool, lowBitRateRedundancy bool) {
-	if voiceActivityDetected == nil {
-		decoded = make([]bool, frameCount)
+	if dst == nil {
+		voiceActivityDetected = make([]bool, frameCount)
 	} else {
-		decoded = resizeZero(voiceActivityDetected, frameCount)
+		voiceActivityDetected = resizeZero(dst, frameCount)
 	}
 	for i := range frameCount {
-		decoded[i] = d.rangeDecoder.DecodeSymbolLogP(1) == 1
+		voiceActivityDetected[i] = d.rangeDecoder.DecodeSymbolLogP(1) == 1
 	}
 	lowBitRateRedundancy = d.rangeDecoder.DecodeSymbolLogP(1) == 1
 
 	return
 }
 
-func resizeZero[T any](buffer *[]T, size int) []T {
+func resize[T any](buffer *[]T, size int) []T {
 	if cap(*buffer) < size {
 		*buffer = make([]T, size)
 	}
 
-	out := (*buffer)[:size]
+	return (*buffer)[:size]
+}
+
+func resizeZero[T any](buffer *[]T, size int) []T {
+	out := resize(buffer, size)
 	clear(out)
 
 	return out
@@ -173,27 +171,27 @@ func (d *Decoder) decodeLowBitrateRedundancyFlags(frameCount int, present bool) 
 	return d.decodeLowBitrateRedundancyFlagsInto(nil, frameCount, present)
 }
 
-func (d *Decoder) decodeLowBitrateRedundancyFlagsInto(flags *[]bool, frameCount int, present bool) []bool {
-	var decoded []bool
-	if flags == nil {
-		decoded = make([]bool, frameCount)
+func (d *Decoder) decodeLowBitrateRedundancyFlagsInto(dst *[]bool, frameCount int, present bool) []bool {
+	var flags []bool
+	if dst == nil {
+		flags = make([]bool, frameCount)
 	} else {
-		decoded = resizeZero(flags, frameCount)
+		flags = resizeZero(dst, frameCount)
 	}
 	if !present {
-		return decoded
+		return flags
 	}
 
 	switch frameCount {
 	case 1:
-		decoded[0] = true
+		flags[0] = true
 	case 2:
-		d.decodeLowBitrateRedundancyFlagSymbol(decoded, icdfLowBitrateRedundancyFlags40Ms)
+		d.decodeLowBitrateRedundancyFlagSymbol(flags, icdfLowBitrateRedundancyFlags40Ms)
 	case 3:
-		d.decodeLowBitrateRedundancyFlagSymbol(decoded, icdfLowBitrateRedundancyFlags60Ms)
+		d.decodeLowBitrateRedundancyFlagSymbol(flags, icdfLowBitrateRedundancyFlags60Ms)
 	}
 
-	return decoded
+	return flags
 }
 
 // decodeLowBitrateRedundancyFlagSymbol decodes the Table 4 bitmap symbol used
@@ -1786,10 +1784,7 @@ func (d *Decoder) decodeLTPFilterCoefficients(signalType frameSignalType, subfra
 		return bQ7
 	}
 
-	if cap(d.bQ7) < subframeCount {
-		d.bQ7 = make([][]int8, subframeCount)
-	}
-	bQ7 = d.bQ7[:subframeCount]
+	bQ7 = resize(&d.bQ7, subframeCount)
 	bQ7Data := resizeZero(&d.bQ7Data, subframeCount*5)
 	for i := range bQ7 {
 		start := i * 5
