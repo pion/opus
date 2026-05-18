@@ -51,6 +51,34 @@ type Decoder struct {
 	wasStereo             bool
 	stereoMid             []float32
 	stereoSide            []float32
+	pulsecounts           []uint8
+	lsbcounts             []uint8
+	eRaw                  []int32
+	eQ23                  []int32
+	lpc                   []float32
+	res                   []float32
+	resLag                []float32
+	midVoiceActivity      []bool
+	sideVoiceActivity     []bool
+	midLBRRFlags          []bool
+	sideLBRRFlags         []bool
+	gainQ16               []float32
+	i2                    []int8
+	resQ10                []int16
+	nlsfQ15               []int16
+	w2Q18                 []uint
+	wQ9                   []int16
+	n1Q15                 []int16
+	cQ17                  []int32
+	pQ16                  []int32
+	qQ16                  []int32
+	a32Q17                []int32
+	aQ12Int               [2][]int16
+	aQ12Coefficients      [2][]float32
+	aQ12Sets              [][]float32
+	pitchLags             []int
+	bQ7                   [][]int8
+	bQ7Data               []int8
 }
 
 // NewDecoder creates a new Silk Decoder.
@@ -58,12 +86,14 @@ func NewDecoder() Decoder {
 	return Decoder{
 		sideDecoder:    newChannelDecoder(),
 		finalOutValues: make([]float32, 306),
+		aQ12Sets:       make([][]float32, 0, 2),
 	}
 }
 
 func newChannelDecoder() *Decoder {
 	return &Decoder{
 		finalOutValues: make([]float32, 306),
+		aQ12Sets:       make([][]float32, 0, 2),
 	}
 }
 
@@ -103,34 +133,67 @@ func (d *Decoder) resetPredictionForBandwidthChange(bandwidth Bandwidth) {
 // single flag indicating the presence of LBRR frames.
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.3
-func (d *Decoder) decodeHeaderBits(frameCount int) (voiceActivityDetected []bool, lowBitRateRedundancy bool) {
-	voiceActivityDetected = make([]bool, frameCount)
+func (d *Decoder) decodeHeaderBits(
+	frameCount int,
+) (voiceActivityDetected []bool, lowBitRateRedundancy bool) {
+	return d.decodeHeaderBitsInto(nil, frameCount)
+}
+
+func (d *Decoder) decodeHeaderBitsInto(
+	voiceActivityDetected *[]bool,
+	frameCount int,
+) (decoded []bool, lowBitRateRedundancy bool) {
+	if voiceActivityDetected == nil {
+		decoded = make([]bool, frameCount)
+	} else {
+		decoded = resizeZero(voiceActivityDetected, frameCount)
+	}
 	for i := range frameCount {
-		voiceActivityDetected[i] = d.rangeDecoder.DecodeSymbolLogP(1) == 1
+		decoded[i] = d.rangeDecoder.DecodeSymbolLogP(1) == 1
 	}
 	lowBitRateRedundancy = d.rangeDecoder.DecodeSymbolLogP(1) == 1
 
 	return
 }
 
+func resizeZero[T any](buffer *[]T, size int) []T {
+	if cap(*buffer) < size {
+		*buffer = make([]T, size)
+	}
+
+	out := (*buffer)[:size]
+	clear(out)
+
+	return out
+}
+
 // decodeLowBitrateRedundancyFlags expands RFC 6716 Section 4.2.4's global
 // LBRR-present bit into one flag per SILK frame.
 func (d *Decoder) decodeLowBitrateRedundancyFlags(frameCount int, present bool) []bool {
-	flags := make([]bool, frameCount)
+	return d.decodeLowBitrateRedundancyFlagsInto(nil, frameCount, present)
+}
+
+func (d *Decoder) decodeLowBitrateRedundancyFlagsInto(flags *[]bool, frameCount int, present bool) []bool {
+	var decoded []bool
+	if flags == nil {
+		decoded = make([]bool, frameCount)
+	} else {
+		decoded = resizeZero(flags, frameCount)
+	}
 	if !present {
-		return flags
+		return decoded
 	}
 
 	switch frameCount {
 	case 1:
-		flags[0] = true
+		decoded[0] = true
 	case 2:
-		d.decodeLowBitrateRedundancyFlagSymbol(flags, icdfLowBitrateRedundancyFlags40Ms)
+		d.decodeLowBitrateRedundancyFlagSymbol(decoded, icdfLowBitrateRedundancyFlags40Ms)
 	case 3:
-		d.decodeLowBitrateRedundancyFlagSymbol(flags, icdfLowBitrateRedundancyFlags60Ms)
+		d.decodeLowBitrateRedundancyFlagSymbol(decoded, icdfLowBitrateRedundancyFlags60Ms)
 	}
 
-	return flags
+	return decoded
 }
 
 // decodeLowBitrateRedundancyFlagSymbol decodes the Table 4 bitmap symbol used
@@ -245,7 +308,7 @@ func (d *Decoder) decodeSubframeQuantizations(
 	isFirstSilkFrameInOpusFrame bool,
 ) (gainQ16 []float32) {
 	var logGain, deltaGainIndex, gainIndex int32
-	gainQ16 = make([]float32, subframeCount)
+	gainQ16 = resizeZero(&d.gainQ16, subframeCount)
 
 	for subframeIndex := range subframeCount {
 		// The subframe gains are either coded independently, or relative to the
@@ -383,7 +446,7 @@ func (d *Decoder) normalizeLineSpectralFrequencyStageTwo(
 		codebook = codebookNormalizedLSFStageTwoIndexNarrowbandOrMediumband
 	}
 
-	I2 := make([]int8, len(codebook[0]))
+	I2 := resizeZero(&d.i2, len(codebook[0]))
 	for i := range I2 {
 		// the decoder reads a symbol using the PDF corresponding
 		// to I1 from either Table 17 or Table 18 and subtracts 4 from the
@@ -428,7 +491,7 @@ func (d *Decoder) normalizeLineSpectralFrequencyStageTwo(
 	}
 
 	// stage-2 residual
-	resQ10 = make([]int16, len(I2))
+	resQ10 = resizeZero(&d.resQ10, len(I2))
 
 	// Let d_LPC be the order of the codebook, i.e., 10 for NB and MB, and 16 for WB
 	dLPC = len(I2)
@@ -488,9 +551,9 @@ func (d *Decoder) normalizeLineSpectralFrequencyCoefficients(
 	resQ10 []int16,
 	stageOneIndex uint32,
 ) (nlsfQ15 []int16) {
-	nlsfQ15 = make([]int16, dLPC)
-	w2Q18 := make([]uint, dLPC)
-	wQ9 := make([]int16, dLPC)
+	nlsfQ15 = resizeZero(&d.nlsfQ15, dLPC)
+	w2Q18 := resizeZero(&d.w2Q18, dLPC)
+	wQ9 := resizeZero(&d.wQ9, dLPC)
 
 	cb1Q8 := codebookNormalizedLSFStageOneNarrowbandOrMediumband
 	if bandwidth == BandwidthWideband {
@@ -727,7 +790,7 @@ func (d *Decoder) normalizeLSFInterpolation(n2Q15 []int16, nanoseconds int) (n1Q
 		return nil, wQ2
 	}
 
-	n1Q15 = make([]int16, len(n2Q15))
+	n1Q15 = resizeZero(&d.n1Q15, len(n2Q15))
 	for k := range n1Q15 {
 		interpolated := int32(wQ2) * (int32(n2Q15[k]) - int32(d.n0Q15[k])) >> 2 //nolint:gosec // G602
 		n1Q15[k] = int16(int32(d.n0Q15[k]) + interpolated)                      //nolint:gosec // G115
@@ -748,13 +811,13 @@ func (d *Decoder) generateAQ12(q15 []int16, bandwidth Bandwidth, aQ12 [][]float3
 	d.limitLPCCoefficientsRange(a32Q17)
 
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.5.8
-	aQ12 = append(aQ12, d.limitLPCFilterPredictionGain(a32Q17))
+	aQ12 = append(aQ12, d.limitLPCFilterPredictionGainInto(a32Q17, len(aQ12)))
 
 	return aQ12
 }
 
 func (d *Decoder) convertNormalizedLSFsToLPCCoefficients(n1Q15 []int16, bandwidth Bandwidth) (a32Q17 []int32) {
-	cQ17 := make([]int32, len(n1Q15))
+	cQ17 := resizeZero(&d.cQ17, len(n1Q15))
 	cosQ12 := q12CosineTableForLSFConverion
 
 	ordering := lsfOrderingForPolynomialEvaluationNarrowbandAndMediumband
@@ -784,8 +847,8 @@ func (d *Decoder) convertNormalizedLSFsToLPCCoefficients(n1Q15 []int16, bandwidt
 			(cosQ12[i+1]-cosQ12[i])*f + 4) >> 3
 	}
 
-	pQ16 := make([]int32, (len(n1Q15)/2)+1)
-	qQ16 := make([]int32, (len(n1Q15)/2)+1)
+	pQ16 := resizeZero(&d.pQ16, (len(n1Q15)/2)+1)
+	qQ16 := resizeZero(&d.qQ16, (len(n1Q15)/2)+1)
 
 	// Given the list of cosine values compute the coefficients of P and Q,
 	// described here via a simple recurrence.  Let p_Q16[k][j] and q_Q16[k][j]
@@ -853,7 +916,7 @@ func (d *Decoder) convertNormalizedLSFsToLPCCoefficients(n1Q15 []int16, bandwidt
 	//
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.6
 
-	a32Q17 = make([]int32, len(n1Q15))
+	a32Q17 = resizeZero(&d.a32Q17, len(n1Q15))
 	for k := range d2 {
 		a32Q17[k] = -(qQ16[k+1] - qQ16[k]) - (pQ16[k+1] + pQ16[k])
 		a32Q17[dLPC-k-1] = (qQ16[k+1] - qQ16[k]) - (pQ16[k+1] + pQ16[k])
@@ -936,8 +999,8 @@ func (d *Decoder) decodeRatelevel(voiceActivityDetected bool) uint32 {
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8.2
 func (d *Decoder) decodePulseAndLSBCounts(shellblocks int, rateLevel uint32) (pulsecounts []uint8, lsbcounts []uint8) {
-	pulsecounts = make([]uint8, shellblocks)
-	lsbcounts = make([]uint8, shellblocks)
+	pulsecounts = resizeZero(&d.pulsecounts, shellblocks)
+	lsbcounts = resizeZero(&d.lsbcounts, shellblocks)
 	for i := range shellblocks {
 		pulsecounts[i] = uint8(d.rangeDecoder.DecodeSymbolWithICDF(icdfPulseCount[rateLevel])) //nolint:gosec // g115
 
@@ -982,7 +1045,7 @@ func (d *Decoder) decodePulseAndLSBCounts(shellblocks int, rateLevel uint32) (pu
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8.3
 func (d *Decoder) decodePulseLocation(pulsecounts []uint8) (eRaw []int32) {
-	eRaw = make([]int32, len(pulsecounts)*pulsecountLargestPartitionSize)
+	eRaw = resizeZero(&d.eRaw, len(pulsecounts)*pulsecountLargestPartitionSize)
 	for i := range pulsecounts {
 		// This process skips partitions without any pulses, i.e., where
 		// the initial pulse count from Section 4.2.7.8.2 was zero, or where the
@@ -994,22 +1057,22 @@ func (d *Decoder) decodePulseLocation(pulsecounts []uint8) (eRaw []int32) {
 		}
 
 		eRawIndex := pulsecountLargestPartitionSize * i
-		samplePartition16 := make([]uint8, 2)
-		samplePartition8 := make([]uint8, 2)
-		samplePartition4 := make([]uint8, 2)
-		samplePartition2 := make([]uint8, 2)
+		var samplePartition16 [2]uint8
+		var samplePartition8 [2]uint8
+		var samplePartition4 [2]uint8
+		var samplePartition2 [2]uint8
 
 		// The location of pulses is coded by recursively partitioning each
 		// block into halves, and coding how many pulses fall on the left side
 		// of the split.  All remaining pulses must fall on the right side of
 		// the split.
-		d.partitionPulseCount(icdfPulseCountSplit16SamplePartitions, pulsecounts[i], samplePartition16)
+		d.partitionPulseCount(icdfPulseCountSplit16SamplePartitions, pulsecounts[i], samplePartition16[:])
 		for j := range 2 {
-			d.partitionPulseCount(icdfPulseCountSplit8SamplePartitions, samplePartition16[j], samplePartition8)
+			d.partitionPulseCount(icdfPulseCountSplit8SamplePartitions, samplePartition16[j], samplePartition8[:])
 			for k := range 2 {
-				d.partitionPulseCount(icdfPulseCountSplit4SamplePartitions, samplePartition8[k], samplePartition4)
+				d.partitionPulseCount(icdfPulseCountSplit4SamplePartitions, samplePartition8[k], samplePartition4[:])
 				for l := range 2 {
-					d.partitionPulseCount(icdfPulseCountSplit2SamplePartitions, samplePartition4[l], samplePartition2)
+					d.partitionPulseCount(icdfPulseCountSplit2SamplePartitions, samplePartition4[l], samplePartition2[:])
 					eRaw[eRawIndex] = int32(samplePartition2[0])
 					eRawIndex++
 
@@ -1255,7 +1318,7 @@ func (d *Decoder) decodeExcitation(
 	// and with the corresponding sign decoded in Section 4.2.7.8.5.
 	d.decodeExcitationSign(eRaw, signalType, quantizationOffsetType, pulsecounts)
 
-	eQ23 = make([]int32, len(eRaw))
+	eQ23 = resizeZero(&d.eQ23, len(eRaw))
 	for i := range eRaw {
 		// Additionally, let seed be the current pseudorandom seed, which is initialized to the
 		// value decoded from Section 4.2.7.7 for the first sample in the current SILK frame, and
@@ -1396,6 +1459,10 @@ func (d *Decoder) limitLPCCoefficientsRange(a32Q17 []int32) {
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.8
 func (d *Decoder) limitLPCFilterPredictionGain(a32Q17 []int32) (aQ12 []float32) {
+	return d.limitLPCFilterPredictionGainInto(a32Q17, 0)
+}
+
+func (d *Decoder) limitLPCFilterPredictionGainInto(a32Q17 []int32, slot int) (aQ12 []float32) {
 	// However, silk_LPC_inverse_pred_gain_QA() approximates this using
 	// fixed-point arithmetic to guarantee reproducible results across
 	// platforms and implementations.  Since small changes in the
@@ -1406,7 +1473,7 @@ func (d *Decoder) limitLPCFilterPredictionGain(a32Q17 []int32) (aQ12 []float32) 
 	//     a32_Q12[n] = (a32_Q17[n] + 16) >> 5
 	//
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.8
-	aQ12Int := make([]int16, len(a32Q17))
+	aQ12Int := resizeZero(&d.aQ12Int[slot], len(a32Q17))
 	for n := range a32Q17 {
 		aQ12Int[n] = int16((a32Q17[n] + 16) >> 5) //nolint:gosec // G115
 	}
@@ -1428,7 +1495,7 @@ func (d *Decoder) limitLPCFilterPredictionGain(a32Q17 []int32) (aQ12 []float32) 
 		}
 	}
 
-	aQ12 = make([]float32, len(aQ12Int))
+	aQ12 = resizeZero(&d.aQ12Coefficients[slot], len(aQ12Int))
 	for n := range aQ12Int {
 		aQ12[n] = float32(aQ12Int[n])
 	}
@@ -1656,7 +1723,7 @@ func (d *Decoder) decodePitchLags(
 	//
 	//     pitch_lags[k] = clamp(lag_min, lag + lag_cb[contour_index][k],
 	//                           lag_max)
-	pitchLags = make([]int, subframeCount(nanoseconds))
+	pitchLags = resizeZero(&d.pitchLags, subframeCount(nanoseconds))
 	for i := range pitchLags {
 		pitchLags[i] = int(clamp(
 			int32(lagMin),                          //nolint:gosec
@@ -1719,9 +1786,14 @@ func (d *Decoder) decodeLTPFilterCoefficients(signalType frameSignalType, subfra
 		return bQ7
 	}
 
-	bQ7 = make([][]int8, subframeCount)
+	if cap(d.bQ7) < subframeCount {
+		d.bQ7 = make([][]int8, subframeCount)
+	}
+	bQ7 = d.bQ7[:subframeCount]
+	bQ7Data := resizeZero(&d.bQ7Data, subframeCount*5)
 	for i := range bQ7 {
-		bQ7[i] = make([]int8, 5)
+		start := i * 5
+		bQ7[i] = bQ7Data[start : start+5]
 	}
 
 	// This is signaled with an explicitly-coded "periodicity index".  This
@@ -1988,7 +2060,12 @@ func (d *Decoder) lpcSynthesis(
 		// first decoded frame. The old haveDecoded guard skipped that initial
 		// handoff and left the next frame with an all-zero LPC history.
 		if len(out)-1 == i {
-			d.previousFrameLPCValues = append([]float32{}, lpc[len(lpc)-dLPC:]...)
+			if cap(d.previousFrameLPCValues) < dLPC {
+				d.previousFrameLPCValues = make([]float32, dLPC)
+			} else {
+				d.previousFrameLPCValues = d.previousFrameLPCValues[:dLPC]
+			}
+			copy(d.previousFrameLPCValues, lpc[len(lpc)-dLPC:])
 		}
 	}
 }
@@ -2022,7 +2099,7 @@ func (d *Decoder) silkFrameReconstruction(
 
 	// let lpc[i] be the result of LPC synthesis from the last d_LPC samples of the
 	//  previous subframe or zeros in the first subframe for this channel
-	lpc := make([]float32, n*subframeCount)
+	lpc := resizeZero(&d.lpc, n*subframeCount)
 
 	// For unvoiced frames (see Section 4.2.7.3), the LPC residual for i
 	// such that j <= i < (j + n) is simply a normalized copy of the
@@ -2031,8 +2108,8 @@ func (d *Decoder) silkFrameReconstruction(
 	//               e_Q23[i]
 	//     res[i] = ---------
 	//               2.0**23
-	res := make([]float32, len(eQ23))
-	resLag := make([]float32, lagMax+2)
+	res := resizeZero(&d.res, len(eQ23))
+	resLag := resizeZero(&d.resLag, int(lagMax)+2)
 	for i := range res {
 		res[i] = float32(eQ23[i]) / 8388608.0
 	}
@@ -2116,9 +2193,10 @@ func (d *Decoder) decodeFrame(
 	// (in the same channel) and the current frame
 	//
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.5
-	aQ12 := [][]float32{}
+	aQ12 := d.aQ12Sets[:0]
 	aQ12 = d.generateAQ12(n1Q15, bandwidth, aQ12)
 	aQ12 = d.generateAQ12(nlsfQ15, bandwidth, aQ12)
+	d.aQ12Sets = aQ12
 
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.1
 	lagMax, pitchLags := d.decodePitchLags(signalType, bandwidth, nanoseconds, isFirstSilkFrameInOpusFrame)
@@ -2452,6 +2530,14 @@ func (d *Decoder) consumeLowBitrateRedundancy(
 	silkFrameNanoseconds int,
 	bandwidth Bandwidth,
 ) error {
+	hasRedundancy := slices.Contains(midFlags, true)
+	if isStereo {
+		hasRedundancy = hasRedundancy || slices.Contains(sideFlags, true)
+	}
+	if !hasRedundancy {
+		return nil
+	}
+
 	discard := NewDecoder()
 	discard.rangeDecoder = d.rangeDecoder
 	frameSampleCount := discard.samplesInSubframe(bandwidth) * subframeCount(silkFrameNanoseconds)
@@ -2612,11 +2698,15 @@ func (d *Decoder) decodeWithInitializedRange(
 		return errOutBufferTooSmall
 	}
 
-	midVoiceActivityDetected, midLowBitRateRedundancy := d.decodeHeaderBits(frameCount)
+	midVoiceActivityDetected, midLowBitRateRedundancy := d.decodeHeaderBitsInto(&d.midVoiceActivity, frameCount)
 
 	frameSampleCount := subframeSize * sfCount
 	if !isStereo {
-		midLowBitrateRedundancyFlags := d.decodeLowBitrateRedundancyFlags(frameCount, midLowBitRateRedundancy)
+		midLowBitrateRedundancyFlags := d.decodeLowBitrateRedundancyFlagsInto(
+			&d.midLBRRFlags,
+			frameCount,
+			midLowBitRateRedundancy,
+		)
 		if err := d.consumeLowBitrateRedundancy(
 			midLowBitrateRedundancyFlags,
 			nil,
@@ -2630,9 +2720,17 @@ func (d *Decoder) decodeWithInitializedRange(
 		return d.decodeMono(out, midVoiceActivityDetected, frameSampleCount, silkFrameNanoseconds, bandwidth)
 	}
 
-	sideVoiceActivityDetected, sideLowBitRateRedundancy := d.decodeHeaderBits(frameCount)
-	midLowBitrateRedundancyFlags := d.decodeLowBitrateRedundancyFlags(frameCount, midLowBitRateRedundancy)
-	sideLowBitrateRedundancyFlags := d.decodeLowBitrateRedundancyFlags(frameCount, sideLowBitRateRedundancy)
+	sideVoiceActivityDetected, sideLowBitRateRedundancy := d.decodeHeaderBitsInto(&d.sideVoiceActivity, frameCount)
+	midLowBitrateRedundancyFlags := d.decodeLowBitrateRedundancyFlagsInto(
+		&d.midLBRRFlags,
+		frameCount,
+		midLowBitRateRedundancy,
+	)
+	sideLowBitrateRedundancyFlags := d.decodeLowBitrateRedundancyFlagsInto(
+		&d.sideLBRRFlags,
+		frameCount,
+		sideLowBitRateRedundancy,
+	)
 	if err := d.consumeLowBitrateRedundancy(
 		midLowBitrateRedundancyFlags,
 		sideLowBitrateRedundancyFlags,
