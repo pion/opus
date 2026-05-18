@@ -33,3 +33,43 @@ func TestCWRSDecode(t *testing.T) {
 	decodePulses(y, len(y), 2, &decoder)
 	assert.Equal(t, []int{2, 0, 0}, y)
 }
+
+func TestCWRSEncodeZeroPulses(t *testing.T) {
+	assert.Equal(t, uint32(0), cwrsEncode([]int{0, 0, 0}, 3, 0))
+}
+
+func TestCWRSEncodeRoundTrip(t *testing.T) {
+	n := 4
+	k := 3
+	row := cwrsUrow(n, k)
+	total := row[k] + row[k+1]
+
+	for index := range total {
+		vector := make([]int, n)
+		cwrsDecode(vector, n, k, index, append([]uint32(nil), row...))
+
+		encoded := cwrsEncode(vector, n, k)
+		assert.Equal(t, index, encoded)
+	}
+}
+
+func TestCWRSEncodeDecodeRoundTrip(t *testing.T) {
+	vectors := [][]int{
+		{2, 0, 0},
+		{-2, 0, 0},
+		{1, 1, 0},
+		{1, -1, 0},
+		{0, 1, 1},
+		{0, -1, 1},
+	}
+
+	for _, expected := range vectors {
+		index := cwrsEncode(expected, len(expected), 2)
+
+		got := make([]int, len(expected))
+		row := cwrsUrow(3, 2)
+		cwrsDecode(got, len(got), 2, index, row)
+
+		assert.Equal(t, expected, got)
+	}
+}

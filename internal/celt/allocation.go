@@ -48,6 +48,7 @@ func (d *Decoder) computeAllocation(info *frameSideInfo, bits int) allocationSta
 		info.channelCount,
 		info.lm,
 		&d.rangeDecoder,
+		nil,
 	)
 	state.balance = balance
 
@@ -69,6 +70,7 @@ func computeAllocation(
 	channelCount int,
 	lm int,
 	rangeDecoder *rangecoding.Decoder,
+	rangeEncoder *rangecoding.Encoder,
 ) int {
 	if total < 0 {
 		total = 0
@@ -194,6 +196,7 @@ func computeAllocation(
 		channelCount,
 		lm,
 		rangeDecoder,
+		rangeEncoder,
 	)
 }
 
@@ -220,6 +223,7 @@ func interpolateBitsToPulses(
 	channelCount int,
 	lm int,
 	rangeDecoder *rangecoding.Decoder,
+	rangeEncoder *rangecoding.Encoder,
 ) int {
 	allocationFloor := channelCount << bitResolution
 	stereo := boolIndex(channelCount > 1)
@@ -287,7 +291,13 @@ func interpolateBitsToPulses(
 		bandWidth := int(bandEdges[codedBands+1] - bandEdges[band])
 		bandBits := bits[band] + perCoeff*bandWidth + rem
 		if bandBits >= max(threshold[band], allocationFloor+(1<<bitResolution)) {
-			if rangeDecoder.DecodeSymbolLogP(1) != 0 {
+			var skipBit bool
+			if rangeDecoder != nil {
+				skipBit = rangeDecoder.DecodeSymbolLogP(1) != 0
+			} else {
+				rangeEncoder.EncodeSymbolLogP(1, 0)
+			}
+			if skipBit {
 				codedBands++
 				break
 			}
@@ -311,7 +321,13 @@ func interpolateBitsToPulses(
 	// Intensity and dual-stereo symbols are decoded only after codedBands is
 	// known, because their alphabets depend on the surviving band range.
 	if intensityReserved > 0 {
-		value, _ := rangeDecoder.DecodeUniform(uint32(codedBands + 1 - start))
+		var value uint32
+		if rangeDecoder != nil {
+			value, _ = rangeDecoder.DecodeUniform(uint32(codedBands + 1 - start))
+		} else {
+			value = uint32(codedBands)
+			rangeEncoder.EncodeUniform(uint32(codedBands+1-start), value)
+		}
 		*intensity = start + int(value)
 	} else {
 		*intensity = 0
@@ -321,7 +337,12 @@ func interpolateBitsToPulses(
 		dualStereoReserved = 0
 	}
 	if dualStereoReserved > 0 {
-		*dualStereo = int(rangeDecoder.DecodeSymbolLogP(1))
+		if rangeDecoder != nil {
+			*dualStereo = int(rangeDecoder.DecodeSymbolLogP(1))
+		} else {
+			rangeEncoder.EncodeSymbolLogP(1, 0)
+			*dualStereo = 0
+		}
 	} else {
 		*dualStereo = 0
 	}
