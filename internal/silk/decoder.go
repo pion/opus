@@ -1998,10 +1998,6 @@ func (d *Decoder) lpcSynthesis(
 	n, s, dLPC int, //nolint:varnamelen
 	aQ12, res, gainQ16, lpc []float32,
 ) {
-	// j be the index of the first sample in the residual corresponding to
-	// the current subframe.
-	j := 0
-
 	// Then, for i such that j <= i < (j + n), the result of LPC synthesis
 	// for the current subframe is
 	//
@@ -2011,58 +2007,106 @@ func (d *Decoder) lpcSynthesis(
 	//                  65536.0              /_               4096.0
 	//                                       k=0
 	//
+	normalizedAQ12, reversedAQ12 := normalizedLPCWeights(aQ12, dLPC)
+	gain := gainQ16[s] / 65536.0
+	subframeOffset := n * s
+	subframeOut := out[:n]
+	if s > 0 {
+		lpcSynthesisSteadyState(
+			subframeOut,
+			dLPC,
+			reversedAQ12,
+			res[subframeOffset:subframeOffset+n],
+			lpc[subframeOffset:subframeOffset+n],
+			lpc[subframeOffset-dLPC:subframeOffset+n],
+			gain,
+		)
+	} else {
+		d.lpcSynthesisFirstSubframe(subframeOut, dLPC, normalizedAQ12, res[:n], lpc[:n], gain)
+	}
+
+	d.savePreviousFrameLPCValues(lpc, out, n, dLPC)
+}
+
+func normalizedLPCWeights(aQ12 []float32, dLPC int) (normalizedAQ12, reversedAQ12 [16]float32) {
+	for coefficientIndex := range dLPC {
+		normalizedAQ12[coefficientIndex] = aQ12[coefficientIndex] / 4096.0
+	}
+	// The RFC recurrence applies a_Q12[0] to the newest LPC sample. The
+	// steady-state path walks a contiguous oldest-to-newest history slice.
+	for coefficientIndex := range dLPC {
+		reversedAQ12[coefficientIndex] = normalizedAQ12[dLPC-coefficientIndex-1]
+	}
+
+	return normalizedAQ12, reversedAQ12
+}
+
+func lpcSynthesisSteadyState(
+	out []float32,
+	dLPC int,
+	reversedAQ12 [16]float32,
+	subframeRes, subframeLPC, historyAndOutput []float32,
+	gain float32,
+) {
+	for sampleIndex := range out {
+		lpcVal := gain * subframeRes[sampleIndex]
+		history := historyAndOutput[sampleIndex : sampleIndex+dLPC]
+		for coefficientIndex := range dLPC {
+			lpcVal += history[coefficientIndex] * reversedAQ12[coefficientIndex]
+		}
+
+		subframeLPC[sampleIndex] = lpcVal
+		out[sampleIndex] = clampNegativeOneToOne(lpcVal)
+	}
+}
+
+func (d *Decoder) lpcSynthesisFirstSubframe(
+	out []float32,
+	dLPC int,
+	normalizedAQ12 [16]float32,
+	subframeRes, subframeLPC []float32,
+	gain float32,
+) {
 	var currentLPCVal float32
-	for i := j; i < (j + n); i++ {
-		sampleIndex := i + (n * s)
+	for sampleIndex := range out {
+		lpcVal := gain * subframeRes[sampleIndex]
 
-		lpcVal := gainQ16[s] / 65536.0
-		lpcVal *= res[sampleIndex]
-
-		for k, aQ12 := range aQ12[:dLPC] {
-			lpcIndex := sampleIndex - k - 1
-			switch {
-			case lpcIndex >= 0:
-				currentLPCVal = lpc[lpcIndex]
-			case s == 0:
-				previousIndex := len(d.previousFrameLPCValues) - 1 + (i - k)
-				if previousIndex >= 0 {
-					currentLPCVal = d.previousFrameLPCValues[previousIndex]
-				} else {
-					currentLPCVal = 0
-				}
-			default:
+		for coefficientIndex := range dLPC {
+			if lpcIndex := sampleIndex - coefficientIndex - 1; lpcIndex >= 0 {
+				currentLPCVal = subframeLPC[lpcIndex]
+			} else if previousIndex := len(d.previousFrameLPCValues) - 1 + (sampleIndex - coefficientIndex); previousIndex >= 0 {
+				currentLPCVal = d.previousFrameLPCValues[previousIndex]
+			} else {
 				currentLPCVal = 0
 			}
 
-			lpcVal += currentLPCVal * (aQ12 / 4096.0)
+			lpcVal += currentLPCVal * normalizedAQ12[coefficientIndex]
 		}
 
-		lpc[sampleIndex] = lpcVal
-
-		// Then, the signal is clamped into the final nominal range:
-		//
-		//     out[i] = clamp(-1.0, lpc[i], 1.0)
-		//
-		out[i] = clampNegativeOneToOne(lpc[sampleIndex])
-
-		//  The decoder saves the final d_LPC values, i.e., lpc[i] such that
-		// (j + n - d_LPC) <= i < (j + n), to feed into the LPC synthesis of the
-		// next subframe.  This requires storage for up to 16 values of lpc[i]
-		// (for WB frames).
-		// The final d_LPC synthesized samples become the history for the next
-		// subframe. RFC 6716 section 4.2.7.9 describes that continuity
-		// requirement, and decode_frame.c preserves this state even for the
-		// first decoded frame. The old haveDecoded guard skipped that initial
-		// handoff and left the next frame with an all-zero LPC history.
-		if len(out)-1 == i {
-			if cap(d.previousFrameLPCValues) < dLPC {
-				d.previousFrameLPCValues = make([]float32, dLPC)
-			} else {
-				d.previousFrameLPCValues = d.previousFrameLPCValues[:dLPC]
-			}
-			copy(d.previousFrameLPCValues, lpc[len(lpc)-dLPC:])
-		}
+		subframeLPC[sampleIndex] = lpcVal
+		out[sampleIndex] = clampNegativeOneToOne(lpcVal)
 	}
+}
+
+func (d *Decoder) savePreviousFrameLPCValues(lpc, out []float32, n, dLPC int) { //nolint:varnamelen
+	//  The decoder saves the final d_LPC values, i.e., lpc[i] such that
+	// (j + n - d_LPC) <= i < (j + n), to feed into the LPC synthesis of the
+	// next subframe.  This requires storage for up to 16 values of lpc[i]
+	// (for WB frames).
+	// The final d_LPC synthesized samples become the history for the next
+	// subframe. RFC 6716 section 4.2.7.9 describes that continuity
+	// requirement, and decode_frame.c preserves this state even for the
+	// first decoded frame. The old haveDecoded guard skipped that initial
+	// handoff and left the next frame with an all-zero LPC history.
+	if len(out) != n {
+		return
+	}
+	if cap(d.previousFrameLPCValues) < dLPC {
+		d.previousFrameLPCValues = make([]float32, dLPC)
+	} else {
+		d.previousFrameLPCValues = d.previousFrameLPCValues[:dLPC]
+	}
+	copy(d.previousFrameLPCValues, lpc[len(lpc)-dLPC:])
 }
 
 // The remainder of the reconstruction process for the frame does not
