@@ -108,8 +108,7 @@ func (d *Decoder) Init(sampleRate, channels int) error {
 	d.silkResamplerChannels = 0
 	d.hybridSilkResampler = [2]silkresample.Resampler{}
 	d.hybridSilkChannels = 0
-	d.silkRedundancyFades = d.silkRedundancyFades[:0]
-	d.silkCeltAdditions = d.silkCeltAdditions[:0]
+	d.clearSilkRedundancyTransitions()
 	d.rangeFinal = 0
 	d.previousMode = 0
 	d.previousRedundancy = false
@@ -163,6 +162,14 @@ func (d *Decoder) resampleSilkChannel(
 	in, out []float32,
 	channelIndex, channelCount, samplesPerChannel, resampledSamplesPerChannel int,
 ) error {
+	if channelCount == 1 {
+		// Mono samples are already contiguous, so skip deinterleave/reinterleave scratch.
+		return d.silkResampler[channelIndex].Resample(
+			in[:samplesPerChannel],
+			out[:resampledSamplesPerChannel],
+		)
+	}
+
 	if cap(d.resampleChannelIn[channelIndex]) < samplesPerChannel {
 		d.resampleChannelIn[channelIndex] = make([]float32, samplesPerChannel)
 	}
@@ -548,9 +555,27 @@ func (d *Decoder) decode(
 	tocHeader := tableOfContentsHeader(in[0])
 	cfg := tocHeader.configuration()
 
-	encodedFrames, err := parsePacketFrames(in, tocHeader)
-	if err != nil {
-		return 0, 0, false, 0, 0, err
+	var encodedFrames [][]byte
+	if tocHeader.frameCode() == frameCodeOneFrame {
+		// [R2] Code 0 uses an implicit frame length for the whole payload, so it
+		// must not exceed the 1275-byte maximum.
+		if len(in[1:]) > maxOpusFrameSize {
+			return 0, 0, false, 0, 0, fmt.Errorf(
+				"%w: frame size %d exceeds %d",
+				errMalformedPacket,
+				len(in[1:]),
+				maxOpusFrameSize,
+			)
+		}
+		var singleFrame [1][]byte
+		singleFrame[0] = in[1:]
+		encodedFrames = singleFrame[:]
+	} else {
+		var err error
+		encodedFrames, err = parsePacketFrames(in, tocHeader)
+		if err != nil {
+			return 0, 0, false, 0, 0, err
+		}
 	}
 
 	switch cfg.mode() {
@@ -1029,8 +1054,7 @@ func (d *Decoder) decodeSilkFrames(
 	frameSamplesPerChannel := cfg.silkFrameSampleCount()
 	decodedChannelCount = silkOutputChannelCount(tocHeader.isStereo(), d.channels)
 	frameSampleCount := frameSamplesPerChannel * decodedChannelCount
-	d.silkRedundancyFades = d.silkRedundancyFades[:0]
-	d.silkCeltAdditions = d.silkCeltAdditions[:0]
+	d.clearSilkRedundancyTransitions()
 	requiredSamples := frameSampleCount * len(encodedFrames)
 	if cap(out) < requiredSamples {
 		d.silkBuffer = make([]float32, requiredSamples)
@@ -1147,37 +1171,108 @@ func (d *Decoder) decodeToFloat32(
 		return 0, 0, false, err
 	}
 
+	samplesPerChannel, err = d.finishDecodeToFloat32(
+		out,
+		bandwidth,
+		decodedSampleRate,
+		sampleCount,
+		decodedChannelCount,
+	)
+	if err != nil {
+		return 0, 0, false, err
+	}
+
+	return samplesPerChannel, bandwidth, isStereo, nil
+}
+
+func (d *Decoder) finishDecodeToFloat32(
+	out []float32,
+	bandwidth Bandwidth,
+	decodedSampleRate int,
+	sampleCount int,
+	decodedChannelCount int,
+) (samplesPerChannel int, err error) {
+	defer func() {
+		if err != nil {
+			// Redundancy transitions belong to this packet only.
+			d.clearSilkRedundancyTransitions()
+		}
+	}()
+
 	samplesPerChannel = (sampleCount / decodedChannelCount) * d.sampleRate / decodedSampleRate
+	if len(out) < samplesPerChannel*d.channels {
+		return 0, errOutBufferTooSmall
+	}
+
 	requiredSamples := samplesPerChannel * decodedChannelCount
+	resampleOut, useResampleBuffer := d.prepareResampleOutput(out, requiredSamples, decodedChannelCount)
+	if err = d.writeDecodedOutput(
+		resampleOut,
+		bandwidth,
+		decodedSampleRate,
+		sampleCount,
+		decodedChannelCount,
+	); err != nil {
+		return 0, err
+	}
+	if useResampleBuffer {
+		d.applySilkRedundancyFades(decodedChannelCount)
+		d.copyResampledSamples(out, decodedChannelCount)
+	}
+
+	return samplesPerChannel, nil
+}
+
+func (d *Decoder) prepareResampleOutput(
+	out []float32,
+	requiredSamples int,
+	decodedChannelCount int,
+) (resampleOut []float32, useResampleBuffer bool) {
+	if !d.needsResampleBuffer(decodedChannelCount) {
+		// Direct output is safe when no channel remap or redundancy mix runs afterward.
+		return out[:requiredSamples], false
+	}
+
 	if cap(d.resampleBuffer) < requiredSamples {
 		d.resampleBuffer = make([]float32, requiredSamples)
 	}
 	d.resampleBuffer = d.resampleBuffer[:requiredSamples]
+
+	return d.resampleBuffer, true
+}
+
+func (d *Decoder) needsResampleBuffer(decodedChannelCount int) bool {
+	return decodedChannelCount != d.channels ||
+		len(d.silkRedundancyFades) > 0 ||
+		len(d.silkCeltAdditions) > 0
+}
+
+func (d *Decoder) clearSilkRedundancyTransitions() {
+	d.silkRedundancyFades = d.silkRedundancyFades[:0]
+	d.silkCeltAdditions = d.silkCeltAdditions[:0]
+}
+
+func (d *Decoder) writeDecodedOutput(
+	out []float32,
+	bandwidth Bandwidth,
+	decodedSampleRate int,
+	sampleCount int,
+	decodedChannelCount int,
+) error {
 	decodedMode := d.previousMode
 	switch {
 	case decodedMode == configurationModeSilkOnly &&
 		decodedSampleRate == bandwidth.SampleRate() &&
 		bandwidth != BandwidthFullband:
 		// The RFC SILK decoder resampler has delay even for same-rate copy paths.
-		if err = d.resampleSilk(d.silkBuffer[:sampleCount], d.resampleBuffer, decodedChannelCount, bandwidth); err != nil {
-			return 0, 0, false, err
-		}
+		return d.resampleSilk(d.silkBuffer[:sampleCount], out, decodedChannelCount, bandwidth)
 	case d.sampleRate == decodedSampleRate:
-		copy(d.resampleBuffer, d.silkBuffer[:sampleCount])
+		copy(out, d.silkBuffer[:sampleCount])
+
+		return nil
 	default:
-		if err = d.resampleSilk(d.silkBuffer[:sampleCount], d.resampleBuffer, decodedChannelCount, bandwidth); err != nil {
-			return 0, 0, false, err
-		}
+		return d.resampleSilk(d.silkBuffer[:sampleCount], out, decodedChannelCount, bandwidth)
 	}
-	d.applySilkRedundancyFades(decodedChannelCount)
-
-	if len(out) < samplesPerChannel*d.channels {
-		return 0, 0, false, errOutBufferTooSmall
-	}
-
-	d.copyResampledSamples(out, decodedChannelCount)
-
-	return samplesPerChannel, bandwidth, isStereo, nil
 }
 
 // applySilkRedundancyFades applies the leading/trailing 2.5 ms cross-laps from
@@ -1187,8 +1282,7 @@ func (d *Decoder) decodeToFloat32(
 func (d *Decoder) applySilkRedundancyFades(channelCount int) {
 	fades := d.silkRedundancyFades
 	additions := d.silkCeltAdditions
-	d.silkRedundancyFades = d.silkRedundancyFades[:0]
-	d.silkCeltAdditions = d.silkCeltAdditions[:0]
+	d.clearSilkRedundancyTransitions()
 	fadeSampleCount := celtFadeSampleCount(d.sampleRate)
 	for _, addition := range additions {
 		if addition.channelCount != channelCount {
@@ -1243,14 +1337,15 @@ func (d *Decoder) applySilkRedundancyFades(channelCount int) {
 }
 
 func (d *Decoder) copyResampledSamples(out []float32, channelCount int) {
+	if channelCount == d.channels {
+		copy(out, d.resampleBuffer)
+
+		return
+	}
+
 	outIndex := 0
 	for i := 0; i < len(d.resampleBuffer); i += channelCount {
 		switch {
-		case channelCount == d.channels:
-			for c := 0; c < d.channels; c++ {
-				out[outIndex] = d.resampleBuffer[i+c]
-				outIndex++
-			}
 		case channelCount == 1 && d.channels == 2:
 			out[outIndex] = d.resampleBuffer[i]
 			out[outIndex+1] = d.resampleBuffer[i]

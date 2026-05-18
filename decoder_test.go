@@ -159,6 +159,18 @@ func TestDecodeToFloat32(t *testing.T) {
 	assert.ErrorIs(t, err, errOutBufferTooSmall)
 }
 
+func TestFinishDecodeToFloat32ClearsSilkRedundancyOnError(t *testing.T) {
+	decoder := NewDecoder()
+	decoder.silkRedundancyFades = append(decoder.silkRedundancyFades, silkRedundancyFade{})
+	decoder.silkCeltAdditions = append(decoder.silkCeltAdditions, silkCeltAddition{})
+
+	_, err := decoder.finishDecodeToFloat32(nil, BandwidthWideband, 16000, 160, 1)
+
+	assert.ErrorIs(t, err, errOutBufferTooSmall)
+	assert.Empty(t, decoder.silkRedundancyFades)
+	assert.Empty(t, decoder.silkCeltAdditions)
+}
+
 func TestDecodeCeltAtBandwidthSampleRateSkipsSilkResampler(t *testing.T) {
 	decoder, err := NewDecoderWithOutput(8000, 1)
 	assert.NoError(t, err)

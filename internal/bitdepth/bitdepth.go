@@ -19,8 +19,11 @@ var (
 // Float32ToSigned16 quantizes a float32 PCM sample to signed 16-bit PCM.
 func Float32ToSigned16(sample float32) int16 {
 	sample64 := math.Round(float64(sample * 32768))
-	sample64 = math.Max(sample64, -32768)
-	sample64 = math.Min(sample64, 32767)
+	if sample64 < -32768 {
+		sample64 = -32768
+	} else if sample64 > 32767 {
+		sample64 = 32767
+	}
 
 	return int16(sample64)
 }
@@ -43,6 +46,21 @@ func ConvertFloat32LittleEndianToSigned16LittleEndian(
 	}
 	if len(in)*resampleCount*2 > len(out) {
 		return errOutBufferTooSmall
+	}
+
+	if resampleCount == 1 {
+		currIndex := 0
+		for _, sample := range in {
+			res := Float32ToSigned16(sample)
+
+			out[currIndex] = byte(res & 0b11111111)
+			currIndex++
+
+			out[currIndex] = byte(uint16(res) >> 8) // #nosec G115,G602 -- output length was checked above
+			currIndex++
+		}
+
+		return nil
 	}
 
 	currIndex := 0
