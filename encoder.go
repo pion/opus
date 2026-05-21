@@ -31,69 +31,100 @@ type Encoder struct {
 	complexity  int
 }
 
-// NewEncoder creates a new Opus encoder.
+// EncoderOption configures an Encoder during construction.
 //
-// This initial wrapper supports only 48 kHz, mono, 20 ms CELT-only packets.
-// It wraps the internal CELT encoder and emits a complete Opus packet with
-// TOC byte and one frame payload.
-func NewEncoder(sampleRate, channels int) (Encoder, error) {
+// Options are applied in the order they are passed to NewEncoder. Each option
+// returns an error if the requested value is unsupported by the current
+// encoder slice, so callers can detect unsupported configurations at
+// construction time rather than at first encode.
+type EncoderOption func(*Encoder) error
+
+// WithSampleRate sets the input sample rate in Hz. The current encoder only
+// supports 48 kHz (the CELT internal rate).
+func WithSampleRate(rate int) EncoderOption {
+	return func(e *Encoder) error {
+		if rate != celtSampleRate {
+			return errInvalidSampleRate
+		}
+		e.sampleRate = rate
+
+		return nil
+	}
+}
+
+// WithChannels sets the channel count. The current encoder only supports
+// mono (1 channel); stereo is planned in a follow-up PR.
+func WithChannels(channels int) EncoderOption {
+	return func(e *Encoder) error {
+		if channels != 1 {
+			return errInvalidChannelCount
+		}
+		e.channels = channels
+
+		return nil
+	}
+}
+
+// WithBitrate sets the target bitrate in bits per second. Valid range is
+// 6000 to 510000.
+func WithBitrate(bps int) EncoderOption {
+	return func(e *Encoder) error {
+		if bps < minBitrate || bps > maxBitrate {
+			return fmt.Errorf("%w: %d", errBitrateOutOfRange, bps)
+		}
+		e.bitrate = bps
+
+		return nil
+	}
+}
+
+// WithComplexity sets the encoder complexity on the standard Opus 0..10
+// scale. The current CELT encoder does not vary behavior by complexity, but
+// the public API accepts the value for future expansion.
+func WithComplexity(complexity int) EncoderOption {
+	return func(e *Encoder) error {
+		if complexity < 0 || complexity > 10 {
+			return fmt.Errorf("%w: %d", errInvalidComplexity, complexity)
+		}
+		e.complexity = complexity
+
+		return nil
+	}
+}
+
+// NewEncoder creates a new Opus encoder with the supplied options.
+//
+// Defaults: 48 kHz, mono, 24 kbit/s, complexity 0. Pass options to override
+// any of these. The current API surface only supports 48 kHz mono 20 ms
+// CELT-only packets; stereo, transient detection, and SILK encoding will land
+// in follow-up PRs.
+func NewEncoder(opts ...EncoderOption) (Encoder, error) {
 	encoder := Encoder{
 		celtEncoder: celt.NewEncoder(),
+		sampleRate:  celtSampleRate,
+		channels:    1,
 		bitrate:     defaultBitrate,
 		complexity:  0,
 	}
 
-	if err := encoder.Init(sampleRate, channels); err != nil {
-		return Encoder{}, err
+	for _, opt := range opts {
+		if err := opt(&encoder); err != nil {
+			return Encoder{}, err
+		}
 	}
 
 	return encoder, nil
 }
 
-// Init initializes a pre-allocated Opus encoder.
-//
-// The current API surface only supports 48 kHz mono 20 ms CELT-only packets.
-func (e *Encoder) Init(sampleRate, channels int) error {
-	if sampleRate != celtSampleRate {
-		return errInvalidSampleRate
-	}
-
-	if channels != 1 {
-		return errInvalidChannelCount
-	}
-
-	e.sampleRate = sampleRate
-	e.channels = channels
-	e.bitrate = defaultBitrate
-	e.complexity = 0
-	e.celtEncoder = celt.NewEncoder()
-
-	return nil
-}
-
-// SetBitrate sets the target bitrate in bits per second.
+// SetBitrate updates the target bitrate in bits per second.
 func (e *Encoder) SetBitrate(bps int) error {
-	if bps < minBitrate || bps > maxBitrate {
-		return fmt.Errorf("%w: %d", errBitrateOutOfRange, bps)
-	}
-
-	e.bitrate = bps
-
-	return nil
+	return WithBitrate(bps)(e)
 }
 
-// SetComplexity stores the requested encoder complexity.
-//
-// The current CELT encoder does not vary behavior by complexity, but the
-// public API accepts the standard Opus 0..10 range for future expansion.
+// SetComplexity updates the encoder complexity on the standard Opus 0..10
+// scale.
 func (e *Encoder) SetComplexity(complexity int) error {
-	if complexity < 0 || complexity > 10 {
-		return fmt.Errorf("%w: %d", errInvalidComplexity, complexity)
-	}
-
-	e.complexity = complexity
-
-	return nil
+	return WithComplexity(complexity)(e)
 }
 
 // Encode encodes S16LE PCM into a single Opus packet.
