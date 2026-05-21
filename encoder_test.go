@@ -15,22 +15,41 @@ import (
 const encoderTestFrameSampleCount = 960
 
 func TestNewEncoder(t *testing.T) {
-	encoder, err := NewEncoder(48000, 1)
+	encoder, err := NewEncoder()
 	require.NoError(t, err)
 
 	assert.Equal(t, 48000, encoder.sampleRate)
 	assert.Equal(t, 1, encoder.channels)
 	assert.Equal(t, defaultBitrate, encoder.bitrate)
 
-	_, err = NewEncoder(16000, 1)
+	_, err = NewEncoder(WithSampleRate(16000))
 	assert.ErrorIs(t, err, errInvalidSampleRate)
 
-	_, err = NewEncoder(48000, 2)
+	_, err = NewEncoder(WithChannels(2))
 	assert.ErrorIs(t, err, errInvalidChannelCount)
 }
 
+func TestNewEncoderOptions(t *testing.T) {
+	encoder, err := NewEncoder(
+		WithSampleRate(48000),
+		WithChannels(1),
+		WithBitrate(64000),
+		WithComplexity(5),
+	)
+	require.NoError(t, err)
+
+	assert.Equal(t, 64000, encoder.bitrate)
+	assert.Equal(t, 5, encoder.complexity)
+
+	_, err = NewEncoder(WithBitrate(1000))
+	assert.ErrorIs(t, err, errBitrateOutOfRange)
+
+	_, err = NewEncoder(WithComplexity(11))
+	assert.ErrorIs(t, err, errInvalidComplexity)
+}
+
 func TestEncodeFloat32RoundTrip(t *testing.T) {
-	encoder, err := NewEncoder(48000, 1)
+	encoder, err := NewEncoder()
 	require.NoError(t, err)
 
 	decoder, err := NewDecoderWithOutput(48000, 1)
@@ -55,7 +74,7 @@ func TestEncodeFloat32RoundTrip(t *testing.T) {
 }
 
 func TestEncodeS16LERoundTrip(t *testing.T) {
-	encoder, err := NewEncoder(48000, 1)
+	encoder, err := NewEncoder()
 	require.NoError(t, err)
 
 	decoder, err := NewDecoderWithOutput(48000, 1)
@@ -76,7 +95,7 @@ func TestEncodeS16LERoundTrip(t *testing.T) {
 }
 
 func TestEncodeRejectsInvalidS16LEInputLength(t *testing.T) {
-	encoder, err := NewEncoder(48000, 1)
+	encoder, err := NewEncoder()
 	require.NoError(t, err)
 
 	_, err = encoder.Encode(make([]byte, 3), make([]byte, 64))
@@ -84,7 +103,7 @@ func TestEncodeRejectsInvalidS16LEInputLength(t *testing.T) {
 }
 
 func TestEncodeFloat32RejectsInvalidFrameSize(t *testing.T) {
-	encoder, err := NewEncoder(48000, 1)
+	encoder, err := NewEncoder()
 	require.NoError(t, err)
 
 	_, err = encoder.EncodeFloat32(make([]float32, encoderTestFrameSampleCount-1), make([]byte, 64))
@@ -92,7 +111,7 @@ func TestEncodeFloat32RejectsInvalidFrameSize(t *testing.T) {
 }
 
 func TestEncodeRejectsSmallOutputBuffer(t *testing.T) {
-	encoder, err := NewEncoder(48000, 1)
+	encoder, err := NewEncoder()
 	require.NoError(t, err)
 
 	pcm := testEncoderSineFloat32()
@@ -103,7 +122,7 @@ func TestEncodeRejectsSmallOutputBuffer(t *testing.T) {
 }
 
 func TestSetBitrate(t *testing.T) {
-	encoder, err := NewEncoder(48000, 1)
+	encoder, err := NewEncoder()
 	require.NoError(t, err)
 
 	require.NoError(t, encoder.SetBitrate(32000))
@@ -114,7 +133,7 @@ func TestSetBitrate(t *testing.T) {
 }
 
 func TestSetComplexity(t *testing.T) {
-	encoder, err := NewEncoder(48000, 1)
+	encoder, err := NewEncoder()
 	require.NoError(t, err)
 
 	require.NoError(t, encoder.SetComplexity(10))
