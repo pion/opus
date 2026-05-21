@@ -275,6 +275,24 @@ func TestResampleChunking(t *testing.T) {
 	}
 }
 
+func TestResampleToInt16MatchesResample(t *testing.T) {
+	in := makeTestSignal(16000)[:320]
+
+	var floatResampler Resampler
+	assert.NoError(t, floatResampler.Init(16000, 48000))
+	floatOut := make([]float32, len(in)*3)
+	assert.NoError(t, floatResampler.Resample(in, floatOut))
+
+	var int16Resampler Resampler
+	assert.NoError(t, int16Resampler.Init(16000, 48000))
+	int16Out := make([]int16, len(floatOut))
+	assert.NoError(t, int16Resampler.ResampleToInt16(in, int16Out))
+
+	for i := range floatOut {
+		assert.Equal(t, int16(math.Round(float64(floatOut[i]*32768))), int16Out[i])
+	}
+}
+
 func TestResampleRoundTripDifference(t *testing.T) {
 	for _, test := range []struct {
 		inputSampleRate int

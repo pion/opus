@@ -80,3 +80,20 @@ func ConvertFloat32LittleEndianToSigned16LittleEndian(
 
 	return nil
 }
+
+// Signed16ToLittleEndian converts signed 16-bit PCM to little-endian bytes.
+func Signed16ToLittleEndian(in []int16, out []byte) error {
+	if len(in)*2 > len(out) {
+		return errOutBufferTooSmall
+	}
+
+	currIndex := 0
+	for _, sample := range in {
+		out[currIndex] = byte(sample & 0b11111111)
+		currIndex++
+		out[currIndex] = byte(uint16(sample) >> 8) // #nosec G115,G602 -- output length was checked above
+		currIndex++
+	}
+
+	return nil
+}

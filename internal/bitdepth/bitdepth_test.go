@@ -58,3 +58,15 @@ func TestConvertFloat32LittleEndianToSigned16LittleEndianInvalidChannelCount(t *
 func TestConvertFloat32LittleEndianToSigned16LittleEndianInvalidResampleCount(t *testing.T) {
 	assert.Error(t, ConvertFloat32LittleEndianToSigned16LittleEndian([]float32{0.3}, make([]byte, 2), 1, 0))
 }
+
+func TestSigned16ToLittleEndian(t *testing.T) {
+	in := []int16{0x2666, 0, 0x4666, 0x5c29, -1638}
+	out := make([]byte, len(in)*2)
+
+	assert.NoError(t, Signed16ToLittleEndian(in, out))
+	assert.Equal(t, []byte{0x66, 0x26, 0x00, 0x00, 0x66, 0x46, 0x29, 0x5c, 0x9a, 0xf9}, out)
+}
+
+func TestSigned16ToLittleEndianOutTooSmall(t *testing.T) {
+	assert.ErrorIs(t, errOutBufferTooSmall, Signed16ToLittleEndian([]int16{1}, make([]byte, 1)))
+}

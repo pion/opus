@@ -35,12 +35,13 @@ func silkRShiftRound(a32 int32, shift int) int32 {
 }
 
 func silkSAT16(a32 int32) int16 {
-	if a32 > math.MaxInt16 {
-		return math.MaxInt16
-	}
-	if a32 < math.MinInt16 {
+	if uint32(a32-math.MinInt16) > math.MaxUint16 { //nolint:gosec // G115
+		if a32 > math.MaxInt16 {
+			return math.MaxInt16
+		}
+
 		return math.MinInt16
 	}
 
-	return int16(a32)
+	return int16(a32) //nolint:gosec // G115
 }

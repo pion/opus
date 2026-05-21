@@ -176,21 +176,48 @@ func (r *Resampler) CopyStateFrom(src *Resampler) {
 //
 //nolint:cyclop
 func (r *Resampler) Resample(in, out []float32) error {
+	out16, outLen, err := r.resampleToSigned16(in)
+	if err != nil {
+		return err
+	}
+	if len(out) < outLen {
+		return errOutBufferTooSmall
+	}
+	for i := range outLen {
+		out[i] = float32(out16[i]) / 32768.0
+	}
+
+	return nil
+}
+
+// ResampleToInt16 converts one non-interleaved channel directly to signed 16-bit PCM.
+func (r *Resampler) ResampleToInt16(in []float32, out []int16) error {
+	out16, outLen, err := r.resampleToSigned16(in)
+	if err != nil {
+		return err
+	}
+	if len(out) < outLen {
+		return errOutBufferTooSmall
+	}
+	copy(out, out16[:outLen])
+
+	return nil
+}
+
+//nolint:cyclop
+func (r *Resampler) resampleToSigned16(in []float32) ([]int16, int, error) {
 	if r.fsInKHz == 0 {
-		return errInvalidInputSampleRate
+		return nil, 0, errInvalidInputSampleRate
 	}
 	if len(in) < r.fsInKHz {
-		return errInvalidInputLength
+		return nil, 0, errInvalidInputLength
 	}
 
 	outLen := len(in) * r.fsOutKHz
 	if outLen%r.fsInKHz != 0 {
-		return errNonIntegralInputLength
+		return nil, 0, errNonIntegralInputLength
 	}
 	outLen /= r.fsInKHz
-	if len(out) < outLen {
-		return errOutBufferTooSmall
-	}
 	if cap(r.in16) < len(in) {
 		r.in16 = make([]int16, len(in))
 	}
@@ -224,11 +251,8 @@ func (r *Resampler) Resample(in, out []float32) error {
 	}
 
 	copy(r.delayBuf[:], in16[len(in16)-r.inputDelay:])
-	for i := range outLen {
-		out[i] = float32(out16[i]) / 32768.0
-	}
 
-	return nil
+	return out16, outLen, nil
 }
 
 func inputRateID(sampleRate int) (int, error) {

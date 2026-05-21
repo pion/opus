@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/pion/opus/internal/bitdepth"
 	"github.com/pion/opus/pkg/oggreader"
 	"github.com/stretchr/testify/assert"
 )
@@ -171,6 +172,18 @@ func TestFinishDecodeToFloat32ClearsSilkRedundancyOnError(t *testing.T) {
 	assert.Empty(t, decoder.silkCeltAdditions)
 }
 
+func TestFinishDecodeToInt16ClearsSilkRedundancyOnError(t *testing.T) {
+	decoder := NewDecoder()
+	decoder.silkRedundancyFades = append(decoder.silkRedundancyFades, silkRedundancyFade{})
+	decoder.silkCeltAdditions = append(decoder.silkCeltAdditions, silkCeltAddition{})
+
+	_, _, err := decoder.finishDecodeToInt16(nil, BandwidthWideband, 16000, 160, 1)
+
+	assert.ErrorIs(t, err, errOutBufferTooSmall)
+	assert.Empty(t, decoder.silkRedundancyFades)
+	assert.Empty(t, decoder.silkCeltAdditions)
+}
+
 func TestDecodeCeltAtBandwidthSampleRateSkipsSilkResampler(t *testing.T) {
 	decoder, err := NewDecoderWithOutput(8000, 1)
 	assert.NoError(t, err)
@@ -203,6 +216,27 @@ func TestDecodeToInt16(t *testing.T) {
 	sampleCount, err := decoder.DecodeToInt16([]byte{byte(0<<3) | byte(frameCodeOneFrame)}, out)
 	assert.NoError(t, err)
 	assert.Equal(t, 80, sampleCount)
+}
+
+func TestDecodeMatchesDecodeToInt16(t *testing.T) {
+	packet := []byte{byte(8<<3) | byte(frameCodeOneFrame)}
+
+	byteDecoder, err := NewDecoderWithOutput(48000, 1)
+	assert.NoError(t, err)
+	byteOut := make([]byte, 480*2)
+	_, _, err = byteDecoder.Decode(packet, byteOut)
+	assert.NoError(t, err)
+
+	int16Decoder, err := NewDecoderWithOutput(48000, 1)
+	assert.NoError(t, err)
+	int16Out := make([]int16, 480)
+	sampleCount, err := int16Decoder.DecodeToInt16(packet, int16Out)
+	assert.NoError(t, err)
+	assert.Equal(t, 480, sampleCount)
+
+	expectedByteOut := make([]byte, sampleCount*2)
+	assert.NoError(t, bitdepth.Signed16ToLittleEndian(int16Out[:sampleCount], expectedByteOut))
+	assert.Equal(t, expectedByteOut, byteOut[:len(expectedByteOut)])
 }
 
 func TestDecodeSilkFrameDurations(t *testing.T) {
