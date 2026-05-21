@@ -17,9 +17,10 @@ const (
 	frame20msNS    = 20000000
 )
 
-// celtOnlyFullband20msMonoConfig is the TOC config number for CELT-only,
-// fullband, 20 ms frames per RFC 6716 Table 2.
-const celtOnlyFullband20msMonoConfig = 31
+// celtOnlyFullband20msConfig is the TOC config number (bits 3..7) for
+// CELT-only, fullband, 20 ms frames per RFC 6716 Table 2. The mono/stereo bit
+// is separate (bit 2 of the TOC) and not part of this constant.
+const celtOnlyFullband20msConfig = 31
 
 // Encoder encodes PCM into Opus packets.
 type Encoder struct {
@@ -32,9 +33,9 @@ type Encoder struct {
 
 // NewEncoder creates a new Opus encoder.
 //
-// This initial encoder wrapper supports only 48 kHz, mono, 20 ms CELT-only
-// packets. It wraps the internal CELT encoder and emits a complete Opus packet
-// with TOC byte and one frame payload.
+// This initial wrapper supports only 48 kHz, mono, 20 ms CELT-only packets.
+// It wraps the internal CELT encoder and emits a complete Opus packet with
+// TOC byte and one frame payload.
 func NewEncoder(sampleRate, channels int) (Encoder, error) {
 	encoder := Encoder{
 		celtEncoder: celt.NewEncoder(),
@@ -51,8 +52,7 @@ func NewEncoder(sampleRate, channels int) (Encoder, error) {
 
 // Init initializes a pre-allocated Opus encoder.
 //
-// This first public encoder slice supports only 48 kHz mono 20 ms CELT-only
-// packets.
+// The current API surface only supports 48 kHz mono 20 ms CELT-only packets.
 func (e *Encoder) Init(sampleRate, channels int) error {
 	if sampleRate != celtSampleRate {
 		return errInvalidSampleRate
@@ -84,9 +84,8 @@ func (e *Encoder) SetBitrate(bps int) error {
 
 // SetComplexity stores the requested encoder complexity.
 //
-// The initial CELT encoder slice does not yet vary behavior by complexity,
-// but the public API accepts the standard Opus 0..10 range for future
-// expansion.
+// The current CELT encoder does not vary behavior by complexity, but the
+// public API accepts the standard Opus 0..10 range for future expansion.
 func (e *Encoder) SetComplexity(complexity int) error {
 	if complexity < 0 || complexity > 10 {
 		return fmt.Errorf("%w: %d", errInvalidComplexity, complexity)
@@ -103,6 +102,11 @@ func (e *Encoder) SetComplexity(complexity int) error {
 func (e *Encoder) Encode(in []byte, out []byte) (int, error) {
 	if len(in)%2 != 0 {
 		return 0, fmt.Errorf("%w: s16le length %d not a multiple of 2", errInvalidInputLength, len(in))
+	}
+
+	expectedSamples := e.frameSampleCount() * e.channels
+	if len(in)/2 != expectedSamples {
+		return 0, fmt.Errorf("%w: got %d samples, want %d", errInvalidFrameSize, len(in)/2, expectedSamples)
 	}
 
 	pcm := make([]float32, len(in)/2)
@@ -143,7 +147,7 @@ func (e *Encoder) EncodeFloat32(in []float32, out []byte) (int, error) {
 		return 0, err
 	}
 	if len(payload) > maxOpusFrameSize {
-		return 0, errMalformedPacket
+		return 0, fmt.Errorf("%w: frame size %d exceeds %d", errMalformedPacket, len(payload), maxOpusFrameSize)
 	}
 	if len(out) < len(payload)+1 {
 		return 0, errOutBufferTooSmall
@@ -156,7 +160,7 @@ func (e *Encoder) EncodeFloat32(in []float32, out []byte) (int, error) {
 }
 
 func (e *Encoder) tocHeader() tableOfContentsHeader {
-	header := byte(celtOnlyFullband20msMonoConfig << 3)
+	header := byte(celtOnlyFullband20msConfig << 3)
 	header |= byte(frameCodeOneFrame)
 
 	return tableOfContentsHeader(header)

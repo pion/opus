@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
+
 package opus
 
 import (
@@ -42,7 +43,7 @@ func TestEncodeFloat32RoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Positive(t, n)
 
-	assert.Equal(t, byte(celtOnlyFullband20msMonoConfig<<3)|byte(frameCodeOneFrame), packet[0])
+	assert.Equal(t, byte(celtOnlyFullband20msConfig<<3)|byte(frameCodeOneFrame), packet[0])
 
 	out := make([]float32, encoderTestFrameSampleCount)
 	bandwidth, isStereo, err := decoder.DecodeFloat32(packet[:n], out)
@@ -108,8 +109,8 @@ func TestSetBitrate(t *testing.T) {
 	require.NoError(t, encoder.SetBitrate(32000))
 	assert.Equal(t, 32000, encoder.bitrate)
 
-	assert.Error(t, encoder.SetBitrate(1000))
-	assert.Error(t, encoder.SetBitrate(999999))
+	assert.ErrorIs(t, encoder.SetBitrate(1000), errBitrateOutOfRange)
+	assert.ErrorIs(t, encoder.SetBitrate(999999), errBitrateOutOfRange)
 }
 
 func TestSetComplexity(t *testing.T) {
@@ -119,8 +120,8 @@ func TestSetComplexity(t *testing.T) {
 	require.NoError(t, encoder.SetComplexity(10))
 	assert.Equal(t, 10, encoder.complexity)
 
-	assert.Error(t, encoder.SetComplexity(-1))
-	assert.Error(t, encoder.SetComplexity(11))
+	assert.ErrorIs(t, encoder.SetComplexity(-1), errInvalidComplexity)
+	assert.ErrorIs(t, encoder.SetComplexity(11), errInvalidComplexity)
 }
 
 func testEncoderSineFloat32() []float32 {
@@ -135,8 +136,9 @@ func testEncoderSineFloat32() []float32 {
 func testEncoderSineS16LE() []byte {
 	pcm := make([]byte, encoderTestFrameSampleCount*2)
 	for i := range encoderTestFrameSampleCount {
-		amplitude := 16000.0
-		sample := int16(amplitude * math.Sin(2*math.Pi*440*float64(i)/48000))
+		// math.Round breaks gosec's constant-folding so the int16() conversion
+		// is analyzed against a runtime float, not a constant expression.
+		sample := int16(math.Round(math.Sin(2*math.Pi*440*float64(i)/48000) * 16000))
 		binary.LittleEndian.PutUint16(pcm[i*2:], uint16(sample)) //nolint:gosec // G115: little-endian s16 round-trip.
 	}
 
