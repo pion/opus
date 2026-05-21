@@ -19,4 +19,14 @@ var (
 	errOutBufferTooSmall = errors.New("out isn't large enough")
 
 	errMalformedPacket = errors.New("malformed packet")
+
+	errBitrateOutOfRange = errors.New("bitrate out of range")
+
+	errInvalidComplexity = errors.New("invalid complexity")
+
+	errInvalidInputLength = errors.New("invalid input length")
+
+	errInvalidFrameSize = errors.New("invalid frame size")
+
+	errInvalidFrameByteBudget = errors.New("invalid frame byte budget")
 )
