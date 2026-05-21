@@ -295,7 +295,11 @@ func interpolateBitsToPulses(
 			if rangeDecoder != nil {
 				skipBit = rangeDecoder.DecodeSymbolLogP(1) != 0
 			} else {
-				rangeEncoder.EncodeSymbolLogP(1, 0)
+				// Encoder keeps every band that fits its threshold; emit 1 so
+				// the decoder stops the skip walk here and codedBands stays
+				// at end.
+				skipBit = true
+				rangeEncoder.EncodeSymbolLogP(1, 1)
 			}
 			if skipBit {
 				codedBands++

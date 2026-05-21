@@ -59,11 +59,11 @@ func analyzeFrame(
 
 	applyPreemphasis(frame, result.preemphasized, &state.preemphasisMem)
 
-	mcdtInput := make([]float32, shortBlockSampleCount+len(frame))
-	copy(mcdtInput, state.prevPCM)
-	copy(mcdtInput[shortBlockSampleCount:], result.preemphasized)
+	mdctInput := make([]float32, shortBlockSampleCount+len(frame))
+	copy(mdctInput, state.prevPCM)
+	copy(mdctInput[shortBlockSampleCount:], result.preemphasized)
 
-	result.mdct = forwardMDCT(mcdtInput)
+	result.mdct = forwardMDCT(mdctInput)
 	if result.mdct == nil {
 		return analysisResult{}, errInvalidFrameSize
 	}
