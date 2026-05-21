@@ -160,26 +160,22 @@ func (e *Encoder) encodeSpread(info *frameSideInfo) {
 	}
 }
 
-// encodeDynamicAllocation writes zero boost for all bands.
+// encodeDynamicAllocation mirrors decodeDynamicAllocation by emitting a zero
+// boost flag per band while budget allows. The decoder reads one flag per
+// band per RFC 6716 Section 4.3.3, so the encoder must emit the matching
+// flags in the same order to keep the range coder in sync — even when no
+// boost is applied.
 func (e *Encoder) encodeDynamicAllocation(info *frameSideInfo) uint {
 	totalBitsEighth := info.totalBits << bitResolution
 	dynamicAllocationLogP := initialDynamicAllocationLogP
 	tellFrac := e.rangeEncoder.TellFrac()
 
 	for band := info.startBand; band < info.endBand; band++ {
-		width := info.channelCount * (int(bandEdges[band+1]-bandEdges[band]) << info.lm)
-		quanta := min(width<<bitResolution, max(allocationTrimBitCost<<bitResolution, width))
-		quantaBits := uint(quanta)
-
-		for tellFrac+uint(dynamicAllocationLogP<<bitResolution) < totalBitsEighth {
-			if quantaBits >= totalBitsEighth {
-				totalBitsEighth = 0
-			} else {
-				totalBitsEighth -= quantaBits
-			}
-
-			break
+		if tellFrac+uint(dynamicAllocationLogP<<bitResolution) < totalBitsEighth {
+			e.rangeEncoder.EncodeSymbolLogP(uint(dynamicAllocationLogP), 0)
+			tellFrac = e.rangeEncoder.TellFrac()
 		}
+		info.bandBoost[band] = 0
 	}
 
 	return totalBitsEighth
@@ -212,7 +208,6 @@ func (e *Encoder) EncodeFrame(
 	if endBand <= startBand || endBand > e.mode.BandCount() {
 		return nil, errInvalidBand
 	}
-	_ = frameBytes
 
 	e.rangeEncoder.Init()
 
