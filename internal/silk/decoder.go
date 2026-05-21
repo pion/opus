@@ -1832,6 +1832,13 @@ func (d *Decoder) decodeLTPFilterCoefficients(signalType frameSignalType, subfra
 // let n be the number of samples in a subframe (40 for NB, 60 for
 // MB, and 80 for WB)
 // https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9
+// Wideband SILK uses the largest LPC order and subframe size.
+const (
+	maxSilkLPCOrder            = 16
+	maxSilkSamplesInSubframe   = 80
+	maxFirstSubframeLPCSamples = maxSilkLPCOrder + maxSilkSamplesInSubframe
+)
+
 func (d *Decoder) samplesInSubframe(bandwidth Bandwidth) int {
 	switch bandwidth {
 	case BandwidthNarrowband:
@@ -1839,7 +1846,7 @@ func (d *Decoder) samplesInSubframe(bandwidth Bandwidth) int {
 	case BandwidthMediumband:
 		return 60
 	case BandwidthWideband:
-		return 80
+		return maxSilkSamplesInSubframe
 	}
 
 	return 0
@@ -2007,7 +2014,7 @@ func (d *Decoder) lpcSynthesis(
 	//                  65536.0              /_               4096.0
 	//                                       k=0
 	//
-	normalizedAQ12, reversedAQ12 := normalizedLPCWeights(aQ12, dLPC)
+	reversedAQ12 := reversedNormalizedLPCWeights(aQ12, dLPC)
 	gain := gainQ16[s] / 65536.0
 	subframeOffset := n * s
 	subframeOut := out[:n]
@@ -2022,32 +2029,35 @@ func (d *Decoder) lpcSynthesis(
 			gain,
 		)
 	} else {
-		d.lpcSynthesisFirstSubframe(subframeOut, dLPC, normalizedAQ12, res[:n], lpc[:n], gain)
+		d.lpcSynthesisFirstSubframe(subframeOut, dLPC, reversedAQ12, res[:n], lpc[:n], gain)
 	}
 
 	d.savePreviousFrameLPCValues(lpc, out, n, dLPC)
 }
 
-func normalizedLPCWeights(aQ12 []float32, dLPC int) (normalizedAQ12, reversedAQ12 [16]float32) {
-	for coefficientIndex := range dLPC {
-		normalizedAQ12[coefficientIndex] = aQ12[coefficientIndex] / 4096.0
-	}
+func reversedNormalizedLPCWeights(aQ12 []float32, dLPC int) (reversedAQ12 [maxSilkLPCOrder]float32) {
 	// The RFC recurrence applies a_Q12[0] to the newest LPC sample. The
 	// steady-state path walks a contiguous oldest-to-newest history slice.
 	for coefficientIndex := range dLPC {
-		reversedAQ12[coefficientIndex] = normalizedAQ12[dLPC-coefficientIndex-1]
+		reversedAQ12[dLPC-coefficientIndex-1] = aQ12[coefficientIndex] / 4096.0
 	}
 
-	return normalizedAQ12, reversedAQ12
+	return reversedAQ12
 }
 
 func lpcSynthesisSteadyState(
 	out []float32,
 	dLPC int,
-	reversedAQ12 [16]float32,
+	reversedAQ12 [maxSilkLPCOrder]float32,
 	subframeRes, subframeLPC, historyAndOutput []float32,
 	gain float32,
 ) {
+	if dLPC == maxSilkLPCOrder {
+		lpcSynthesisSteadyState16(out, reversedAQ12, subframeRes, subframeLPC, historyAndOutput, gain)
+
+		return
+	}
+
 	for sampleIndex := range out {
 		lpcVal := gain * subframeRes[sampleIndex]
 		history := historyAndOutput[sampleIndex : sampleIndex+dLPC]
@@ -2060,32 +2070,62 @@ func lpcSynthesisSteadyState(
 	}
 }
 
-func (d *Decoder) lpcSynthesisFirstSubframe(
+func lpcSynthesisSteadyState16(
 	out []float32,
-	dLPC int,
-	normalizedAQ12 [16]float32,
-	subframeRes, subframeLPC []float32,
+	reversedAQ12 [maxSilkLPCOrder]float32,
+	subframeRes, subframeLPC, historyAndOutput []float32,
 	gain float32,
 ) {
-	var currentLPCVal float32
 	for sampleIndex := range out {
+		history := historyAndOutput[sampleIndex : sampleIndex+16]
 		lpcVal := gain * subframeRes[sampleIndex]
-
-		for coefficientIndex := range dLPC {
-			if lpcIndex := sampleIndex - coefficientIndex - 1; lpcIndex >= 0 {
-				currentLPCVal = subframeLPC[lpcIndex]
-			} else if previousIndex := len(d.previousFrameLPCValues) - 1 + (sampleIndex - coefficientIndex); previousIndex >= 0 {
-				currentLPCVal = d.previousFrameLPCValues[previousIndex]
-			} else {
-				currentLPCVal = 0
-			}
-
-			lpcVal += currentLPCVal * normalizedAQ12[coefficientIndex]
-		}
+		lpcVal += history[0] * reversedAQ12[0]
+		lpcVal += history[1] * reversedAQ12[1]
+		lpcVal += history[2] * reversedAQ12[2]
+		lpcVal += history[3] * reversedAQ12[3]
+		lpcVal += history[4] * reversedAQ12[4]
+		lpcVal += history[5] * reversedAQ12[5]
+		lpcVal += history[6] * reversedAQ12[6]
+		lpcVal += history[7] * reversedAQ12[7]
+		lpcVal += history[8] * reversedAQ12[8]
+		lpcVal += history[9] * reversedAQ12[9]
+		lpcVal += history[10] * reversedAQ12[10]
+		lpcVal += history[11] * reversedAQ12[11]
+		lpcVal += history[12] * reversedAQ12[12]
+		lpcVal += history[13] * reversedAQ12[13]
+		lpcVal += history[14] * reversedAQ12[14]
+		lpcVal += history[15] * reversedAQ12[15]
 
 		subframeLPC[sampleIndex] = lpcVal
 		out[sampleIndex] = clampNegativeOneToOne(lpcVal)
 	}
+}
+
+func (d *Decoder) lpcSynthesisFirstSubframe(
+	out []float32,
+	dLPC int,
+	reversedAQ12 [maxSilkLPCOrder]float32,
+	subframeRes, subframeLPC []float32,
+	gain float32,
+) {
+	var historyAndOutput [maxFirstSubframeLPCSamples]float32
+	previousFrameLPCValues := d.previousFrameLPCValues
+	if len(previousFrameLPCValues) > dLPC {
+		previousFrameLPCValues = previousFrameLPCValues[len(previousFrameLPCValues)-dLPC:]
+	}
+	copy(historyAndOutput[dLPC-len(previousFrameLPCValues):dLPC], previousFrameLPCValues)
+
+	firstSubframeLPC := historyAndOutput[dLPC : dLPC+len(subframeLPC)]
+	lpcSynthesisSteadyState(
+		out,
+		dLPC,
+		reversedAQ12,
+		subframeRes,
+		firstSubframeLPC,
+		historyAndOutput[:dLPC+len(subframeLPC)],
+		gain,
+	)
+	copy(subframeLPC, firstSubframeLPC)
 }
 
 func (d *Decoder) savePreviousFrameLPCValues(lpc, out []float32, n, dLPC int) { //nolint:varnamelen
