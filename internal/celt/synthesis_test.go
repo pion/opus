@@ -247,6 +247,7 @@ func TestInverseMDCTAndDeemphasisHelpers(t *testing.T) {
 
 	dft := inverseComplexDFT([]complex32{{r: 1}, {i: 1}})
 	assert.Len(t, dft, 2)
+	assert.Empty(t, inverseComplexDFT(nil))
 	assert.Equal(t, celtWindow120[0], celtWindow(0))
 
 	decoder := NewDecoder()

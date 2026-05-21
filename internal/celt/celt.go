@@ -10,6 +10,7 @@ const (
 	sampleRate            = 48000
 	shortBlockSampleCount = 120
 	maxLM                 = 3
+	maxFrameSampleCount   = shortBlockSampleCount << maxLM
 	maxBands              = 21
 	hybridStartBand       = 17
 )

@@ -19,6 +19,7 @@ type Decoder struct {
 	preemphasisMem [2]float32
 	rng            uint32
 	lossCount      int
+	scratch        *decoderScratch
 }
 
 // NewDecoder creates a CELT decoder with the static Opus 48 kHz mode.
@@ -149,6 +150,7 @@ func (d *Decoder) decode(
 	outputSampleRate int,
 	rangeDecoder *rangecoding.Decoder,
 ) error {
+	scratch := d.scratchBuffer()
 	channelCount := 1
 	if isStereo {
 		channelCount = 2
@@ -189,10 +191,12 @@ func (d *Decoder) decode(
 		return err
 	}
 	if info.silence {
-		x := make([]float32, frameSampleCount)
+		x := scratch.x[:frameSampleCount]
+		clear(x)
 		var y []float32
 		if isStereo {
-			y = make([]float32, frameSampleCount)
+			y = scratch.y[:frameSampleCount]
+			clear(y)
 		}
 		for channel := range info.channelCount {
 			for band := info.startBand; band < info.endBand; band++ {
@@ -213,10 +217,12 @@ func (d *Decoder) decode(
 
 	// RFC 6716 Sections 4.3.4 through 4.3.7 decode the normalized residual,
 	// optionally repair collapsed transient blocks, then synthesize PCM.
-	x := make([]float32, frameSampleCount)
+	x := scratch.x[:frameSampleCount]
+	clear(x)
 	var y []float32
 	if isStereo {
-		y = make([]float32, frameSampleCount)
+		y = scratch.y[:frameSampleCount]
+		clear(y)
 	}
 	state := bandDecodeState{
 		rangeDecoder: &d.rangeDecoder,
@@ -283,4 +289,12 @@ func (d *Decoder) Mode() *Mode {
 // FinalRange exposes the range coder state for RFC conformance tests.
 func (d *Decoder) FinalRange() uint32 {
 	return d.rangeDecoder.FinalRange()
+}
+
+func (d *Decoder) scratchBuffer() *decoderScratch {
+	if d.scratch == nil {
+		d.scratch = &decoderScratch{}
+	}
+
+	return d.scratch
 }

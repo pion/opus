@@ -42,6 +42,8 @@ type Decoder struct {
 	silkResamplerChannels  int
 	hybridSilkResampler    [2]silkresample.Resampler
 	hybridSilkChannels     int
+	hybridSilkBuffer       []float32
+	hybridSilkPCM          []float32
 	silkRedundancyFades    []silkRedundancyFade
 	silkCeltAdditions      []silkCeltAddition
 	floatBuffer            []float32
@@ -755,7 +757,7 @@ func (d *Decoder) decodeHybridFrame(
 	d.rangeDecoder.Init(encodedFrame)
 
 	silkOutputChannelCount := min(streamChannelCount, outputChannelCount)
-	silkInternal := make([]float32, silkSamplesPerChannel*silkOutputChannelCount)
+	silkInternal := resizeFloat32Buffer(&d.hybridSilkBuffer, silkSamplesPerChannel*silkOutputChannelCount)
 	if err := d.silkDecoder.DecodeWithRangeToChannels(
 		&d.rangeDecoder,
 		silkInternal,
@@ -792,7 +794,7 @@ func (d *Decoder) decodeHybridFrame(
 		return err
 	}
 
-	silkPCM := make([]float32, outputFrameSampleCount*silkOutputChannelCount)
+	silkPCM := resizeFloat32Buffer(&d.hybridSilkPCM, outputFrameSampleCount*silkOutputChannelCount)
 	if err = d.resampleHybridSilk(silkInternal, silkPCM, silkOutputChannelCount); err != nil {
 		return err
 	}
@@ -1361,6 +1363,15 @@ func float32ToInt16(in []float32, out []int16, sampleCount int) {
 	for i := range sampleCount {
 		out[i] = bitdepth.Float32ToSigned16(in[i])
 	}
+}
+
+func resizeFloat32Buffer(buffer *[]float32, sampleCount int) []float32 {
+	if cap(*buffer) < sampleCount {
+		*buffer = make([]float32, sampleCount)
+	}
+	*buffer = (*buffer)[:sampleCount]
+
+	return *buffer
 }
 
 // Decode decodes the Opus bitstream into S16LE PCM.
