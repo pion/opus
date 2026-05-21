@@ -163,9 +163,9 @@ func (e *Encoder) tocHeader() tableOfContentsHeader {
 }
 
 func (e *Encoder) frameBytes() int {
-	return e.bitrate * frame20msNS / 1000000000 / 8
+	return int(int64(e.bitrate) * frame20msNS / 1000000000 / 8)
 }
 
 func (e *Encoder) frameSampleCount() int {
-	return celtSampleRate * frame20msNS / 1000000000
+	return int(int64(celtSampleRate) * frame20msNS / 1000000000)
 }

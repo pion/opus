@@ -135,7 +135,8 @@ func testEncoderSineFloat32() []float32 {
 func testEncoderSineS16LE() []byte {
 	pcm := make([]byte, encoderTestFrameSampleCount*2)
 	for i := range encoderTestFrameSampleCount {
-		sample := int16(16000 * math.Sin(2*math.Pi*440*float64(i)/48000))
+		amplitude := 16000.0
+		sample := int16(amplitude * math.Sin(2*math.Pi*440*float64(i)/48000))
 		binary.LittleEndian.PutUint16(pcm[i*2:], uint16(sample)) //nolint:gosec // G115: little-endian s16 round-trip.
 	}
 
