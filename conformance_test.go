@@ -261,7 +261,7 @@ func decodeRFC6716Vector(t *testing.T, rate, channels int, bitstream, outPath st
 			t.Fatalf("frame %d: Go decode: %v", frame, err)
 		}
 
-		gotFinalRange, err := conformanceFinalRange(&decoder)
+		gotFinalRange, err := conformanceFinalRange(decoder)
 		if err != nil {
 			t.Fatalf("frame %d: final range unavailable: %v", frame, err)
 		}

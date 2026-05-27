@@ -64,21 +64,21 @@ type silkCeltAddition struct {
 }
 
 // NewDecoder creates a new Opus Decoder.
-func NewDecoder() Decoder {
+func NewDecoder() *Decoder {
 	decoder, _ := NewDecoderWithOutput(BandwidthFullband.SampleRate(), 1)
 
 	return decoder
 }
 
 // NewDecoderWithOutput creates a new Opus Decoder with the requested output sample rate and channel count.
-func NewDecoderWithOutput(sampleRate, channels int) (Decoder, error) {
-	decoder := Decoder{
+func NewDecoderWithOutput(sampleRate, channels int) (*Decoder, error) {
+	decoder := &Decoder{
 		silkDecoder: silk.NewDecoder(),
 		silkBuffer:  make([]float32, maxSilkFrameSampleCount),
 		celtDecoder: celt.NewDecoder(),
 	}
 	if err := decoder.Init(sampleRate, channels); err != nil {
-		return Decoder{}, err
+		return nil, err
 	}
 
 	return decoder, nil
