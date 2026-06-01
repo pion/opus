@@ -9,6 +9,7 @@ import (
 	"math/bits"
 
 	"github.com/pion/opus/internal/rangecoding"
+	"github.com/pion/opus/internal/slicetools"
 )
 
 const (
@@ -28,6 +29,10 @@ type bandDecodeState struct {
 	seed         uint32
 	pulseScratch []int
 	tmpScratch   []float32
+	normScratch  []float32
+	lowScratch   []float32
+	maskScratch  []byte
+	cwrsRows     map[cwrsRowKey][]uint32
 }
 
 // quantAllBands drives RFC 6716 Section 4.3.4 shape decoding across the coded
@@ -44,10 +49,10 @@ func quantAllBands(info *frameSideInfo, x []float32, y []float32, totalBits int,
 	}
 	scale := 1 << info.lm
 	frameBins := scale * int(bandEdges[maxBands])
-	norm := make([]float32, channelCount*frameBins)
+	norm := slicetools.ResizeZero(&state.normScratch, channelCount*frameBins)
 	norm2 := norm[frameBins:]
-	lowbandScratch := make([]float32, scale*int(bandEdges[maxBands]-bandEdges[maxBands-1]))
-	collapseMasks := make([]byte, channelCount*maxBands)
+	lowbandScratch := slicetools.Resize(&state.lowScratch, scale*int(bandEdges[maxBands]-bandEdges[maxBands-1]))
+	collapseMasks := slicetools.ResizeZero(&state.maskScratch, channelCount*maxBands)
 
 	lowbandOffset := 0
 	updateLowband := true
@@ -714,7 +719,7 @@ func haar1(x []float32, n0 int, stride int) {
 }
 
 func deinterleaveHadamard(x []float32, n0 int, stride int, hadamard bool, state *bandDecodeState) {
-	tmp := state.floatScratch(n0 * stride)
+	tmp := slicetools.Resize(&state.tmpScratch, n0*stride)
 	if hadamard {
 		ordery := orderyTable[stride-2:]
 		for i := range stride {
@@ -733,7 +738,7 @@ func deinterleaveHadamard(x []float32, n0 int, stride int, hadamard bool, state 
 }
 
 func interleaveHadamard(x []float32, n0 int, stride int, hadamard bool, state *bandDecodeState) {
-	tmp := state.floatScratch(n0 * stride)
+	tmp := slicetools.Resize(&state.tmpScratch, n0*stride)
 	if hadamard {
 		ordery := orderyTable[stride-2:]
 		for i := range stride {
@@ -749,25 +754,6 @@ func interleaveHadamard(x []float32, n0 int, stride int, hadamard bool, state *b
 		}
 	}
 	copy(x, tmp)
-}
-
-func (s *bandDecodeState) intScratch(n int) []int {
-	if cap(s.pulseScratch) < n {
-		s.pulseScratch = make([]int, n)
-	}
-	s.pulseScratch = s.pulseScratch[:n]
-	clear(s.pulseScratch)
-
-	return s.pulseScratch
-}
-
-func (s *bandDecodeState) floatScratch(n int) []float32 {
-	if cap(s.tmpScratch) < n {
-		s.tmpScratch = make([]float32, n)
-	}
-	s.tmpScratch = s.tmpScratch[:n]
-
-	return s.tmpScratch
 }
 
 func bitInterleave(fill uint) uint {

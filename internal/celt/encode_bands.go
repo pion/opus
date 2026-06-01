@@ -8,6 +8,7 @@ import (
 	"math"
 
 	"github.com/pion/opus/internal/rangecoding"
+	"github.com/pion/opus/internal/slicetools"
 )
 
 type bandEncodeState struct {
@@ -17,12 +18,7 @@ type bandEncodeState struct {
 }
 
 func (s *bandEncodeState) floatScratch(n int) []float32 {
-	if cap(s.tmpScratch) < n {
-		s.tmpScratch = make([]float32, n)
-	}
-	s.tmpScratch = s.tmpScratch[:n]
-
-	return s.tmpScratch
+	return slicetools.Resize(&s.tmpScratch, n)
 }
 
 func normaliseBandsForEncoding(

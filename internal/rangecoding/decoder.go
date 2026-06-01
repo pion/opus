@@ -287,6 +287,18 @@ func (r *Decoder) getBit() uint32 {
 }
 
 func (r *Decoder) getBits(n int) uint32 {
+	if n > 0 && n <= 8 && r.bitsRead+uint(n) <= uint(len(r.data))*8 {
+		byteIndex := r.bitsRead / 8
+		offset := r.bitsRead % 8
+		combined := uint32(r.data[byteIndex]) << 8
+		if byteIndex+1 < uint(len(r.data)) {
+			combined |= uint32(r.data[byteIndex+1])
+		}
+		r.bitsRead += uint(n)
+
+		return combined >> (16 - offset - uint(n)) & ((1 << n) - 1)
+	}
+
 	bits := uint32(0)
 
 	for i := range n {
