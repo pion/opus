@@ -22,7 +22,7 @@ func TestCWRSRows(t *testing.T) {
 
 func TestCWRSDecode(t *testing.T) {
 	y := []int{99, 99, 99}
-	decodePulses(y, len(y), 0, nil)
+	decodePulses(y, len(y), 0, nil, nil)
 	assert.Equal(t, []int{0, 0, 0}, y)
 
 	row := cwrsUrow(3, 2)
@@ -30,8 +30,68 @@ func TestCWRSDecode(t *testing.T) {
 	assert.Equal(t, []int{2, 0, 0}, y)
 
 	decoder := rangeDecoderWithCDFSymbol(0, cwrsUrow(3, 2)[2]+cwrsUrow(3, 2)[3])
-	decodePulses(y, len(y), 2, &decoder)
+	decodePulses(y, len(y), 2, &decoder, nil)
 	assert.Equal(t, []int{2, 0, 0}, y)
+}
+
+func TestCWRSDirectDecodeMatchesGeneric(t *testing.T) {
+	for n := 2; n <= 4; n++ {
+		for k := 1; k <= 4; k++ {
+			row := cwrsUrow(n, k)
+			total := row[k] + row[k+1]
+			for index := range total {
+				expected := make([]int, n)
+				cwrsDecode(expected, n, k, index, append([]uint32(nil), row...))
+
+				decoder := rangeDecoderWithCDFSymbol(index, total)
+				got := make([]int, n)
+				decodePulses(got, n, k, &decoder, nil)
+				assert.Equalf(t, expected, got, "n=%d k=%d index=%d", n, k, index)
+			}
+		}
+	}
+}
+
+func TestCWRSTailDecodeMatchesGeneric(t *testing.T) {
+	for n := 5; n <= 10; n++ {
+		for k := 1; k <= 4; k++ {
+			row := cwrsUrow(n, k)
+			total := row[k] + row[k+1]
+			for index := range total {
+				expected := make([]int, n)
+				cwrsDecodeGenericForTest(expected, n, k, index, append([]uint32(nil), row...))
+
+				got := make([]int, n)
+				cwrsDecode(got, n, k, index, append([]uint32(nil), row...))
+				assert.Equalf(t, expected, got, "n=%d k=%d index=%d", n, k, index)
+			}
+		}
+	}
+}
+
+func cwrsDecodeGenericForTest(vector []int, dimension, pulseCount int, index uint32, row []uint32) {
+	for vectorIndex := range dimension {
+		p := row[pulseCount+1]
+		negative := index >= p
+		if negative {
+			index -= p
+		}
+
+		value := pulseCount
+		p = row[pulseCount]
+		for p > index {
+			pulseCount--
+			p = row[pulseCount]
+		}
+		index -= p
+		value -= pulseCount
+		if negative {
+			vector[vectorIndex] = -value
+		} else {
+			vector[vectorIndex] = value
+		}
+		cwrsPreviousRow(row, pulseCount+2, 0)
+	}
 }
 
 func TestCWRSEncodeZeroPulses(t *testing.T) {

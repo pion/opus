@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	"github.com/pion/opus/internal/rangecoding"
+	"github.com/pion/opus/internal/slicetools"
 )
 
 // Decoder maintains the state needed to decode a stream
@@ -140,7 +141,7 @@ func (d *Decoder) decodeHeaderBitsInto(
 	if dst == nil {
 		voiceActivityDetected = make([]bool, frameCount)
 	} else {
-		voiceActivityDetected = resizeZero(dst, frameCount)
+		voiceActivityDetected = slicetools.ResizeZero(dst, frameCount)
 	}
 	for i := range frameCount {
 		voiceActivityDetected[i] = d.rangeDecoder.DecodeSymbolLogP(1) == 1
@@ -148,21 +149,6 @@ func (d *Decoder) decodeHeaderBitsInto(
 	lowBitRateRedundancy = d.rangeDecoder.DecodeSymbolLogP(1) == 1
 
 	return
-}
-
-func resize[T any](buffer *[]T, size int) []T {
-	if cap(*buffer) < size {
-		*buffer = make([]T, size)
-	}
-
-	return (*buffer)[:size]
-}
-
-func resizeZero[T any](buffer *[]T, size int) []T {
-	out := resize(buffer, size)
-	clear(out)
-
-	return out
 }
 
 // decodeLowBitrateRedundancyFlags expands RFC 6716 Section 4.2.4's global
@@ -176,7 +162,7 @@ func (d *Decoder) decodeLowBitrateRedundancyFlagsInto(dst *[]bool, frameCount in
 	if dst == nil {
 		flags = make([]bool, frameCount)
 	} else {
-		flags = resizeZero(dst, frameCount)
+		flags = slicetools.ResizeZero(dst, frameCount)
 	}
 	if !present {
 		return flags
@@ -306,7 +292,7 @@ func (d *Decoder) decodeSubframeQuantizations(
 	isFirstSilkFrameInOpusFrame bool,
 ) (gainQ16 []float32) {
 	var logGain, deltaGainIndex, gainIndex int32
-	gainQ16 = resizeZero(&d.gainQ16, subframeCount)
+	gainQ16 = slicetools.ResizeZero(&d.gainQ16, subframeCount)
 
 	for subframeIndex := range subframeCount {
 		// The subframe gains are either coded independently, or relative to the
@@ -444,7 +430,7 @@ func (d *Decoder) normalizeLineSpectralFrequencyStageTwo(
 		codebook = codebookNormalizedLSFStageTwoIndexNarrowbandOrMediumband
 	}
 
-	I2 := resizeZero(&d.i2, len(codebook[0]))
+	I2 := slicetools.ResizeZero(&d.i2, len(codebook[0]))
 	for i := range I2 {
 		// the decoder reads a symbol using the PDF corresponding
 		// to I1 from either Table 17 or Table 18 and subtracts 4 from the
@@ -489,7 +475,7 @@ func (d *Decoder) normalizeLineSpectralFrequencyStageTwo(
 	}
 
 	// stage-2 residual
-	resQ10 = resizeZero(&d.resQ10, len(I2))
+	resQ10 = slicetools.ResizeZero(&d.resQ10, len(I2))
 
 	// Let d_LPC be the order of the codebook, i.e., 10 for NB and MB, and 16 for WB
 	dLPC = len(I2)
@@ -549,9 +535,9 @@ func (d *Decoder) normalizeLineSpectralFrequencyCoefficients(
 	resQ10 []int16,
 	stageOneIndex uint32,
 ) (nlsfQ15 []int16) {
-	nlsfQ15 = resizeZero(&d.nlsfQ15, dLPC)
-	w2Q18 := resizeZero(&d.w2Q18, dLPC)
-	wQ9 := resizeZero(&d.wQ9, dLPC)
+	nlsfQ15 = slicetools.ResizeZero(&d.nlsfQ15, dLPC)
+	w2Q18 := slicetools.ResizeZero(&d.w2Q18, dLPC)
+	wQ9 := slicetools.ResizeZero(&d.wQ9, dLPC)
 
 	cb1Q8 := codebookNormalizedLSFStageOneNarrowbandOrMediumband
 	if bandwidth == BandwidthWideband {
@@ -788,7 +774,7 @@ func (d *Decoder) normalizeLSFInterpolation(n2Q15 []int16, nanoseconds int) (n1Q
 		return nil, wQ2
 	}
 
-	n1Q15 = resizeZero(&d.n1Q15, len(n2Q15))
+	n1Q15 = slicetools.ResizeZero(&d.n1Q15, len(n2Q15))
 	for k := range n1Q15 {
 		interpolated := int32(wQ2) * (int32(n2Q15[k]) - int32(d.n0Q15[k])) >> 2 //nolint:gosec // G602
 		n1Q15[k] = int16(int32(d.n0Q15[k]) + interpolated)                      //nolint:gosec // G115
@@ -815,7 +801,7 @@ func (d *Decoder) generateAQ12(q15 []int16, bandwidth Bandwidth, aQ12 [][]float3
 }
 
 func (d *Decoder) convertNormalizedLSFsToLPCCoefficients(n1Q15 []int16, bandwidth Bandwidth) (a32Q17 []int32) {
-	cQ17 := resizeZero(&d.cQ17, len(n1Q15))
+	cQ17 := slicetools.ResizeZero(&d.cQ17, len(n1Q15))
 	cosQ12 := q12CosineTableForLSFConverion
 
 	ordering := lsfOrderingForPolynomialEvaluationNarrowbandAndMediumband
@@ -845,8 +831,8 @@ func (d *Decoder) convertNormalizedLSFsToLPCCoefficients(n1Q15 []int16, bandwidt
 			(cosQ12[i+1]-cosQ12[i])*f + 4) >> 3
 	}
 
-	pQ16 := resizeZero(&d.pQ16, (len(n1Q15)/2)+1)
-	qQ16 := resizeZero(&d.qQ16, (len(n1Q15)/2)+1)
+	pQ16 := slicetools.ResizeZero(&d.pQ16, (len(n1Q15)/2)+1)
+	qQ16 := slicetools.ResizeZero(&d.qQ16, (len(n1Q15)/2)+1)
 
 	// Given the list of cosine values compute the coefficients of P and Q,
 	// described here via a simple recurrence.  Let p_Q16[k][j] and q_Q16[k][j]
@@ -914,7 +900,7 @@ func (d *Decoder) convertNormalizedLSFsToLPCCoefficients(n1Q15 []int16, bandwidt
 	//
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.6
 
-	a32Q17 = resizeZero(&d.a32Q17, len(n1Q15))
+	a32Q17 = slicetools.ResizeZero(&d.a32Q17, len(n1Q15))
 	for k := range d2 {
 		a32Q17[k] = -(qQ16[k+1] - qQ16[k]) - (pQ16[k+1] + pQ16[k])
 		a32Q17[dLPC-k-1] = (qQ16[k+1] - qQ16[k]) - (pQ16[k+1] + pQ16[k])
@@ -997,8 +983,8 @@ func (d *Decoder) decodeRatelevel(voiceActivityDetected bool) uint32 {
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8.2
 func (d *Decoder) decodePulseAndLSBCounts(shellblocks int, rateLevel uint32) (pulsecounts []uint8, lsbcounts []uint8) {
-	pulsecounts = resizeZero(&d.pulsecounts, shellblocks)
-	lsbcounts = resizeZero(&d.lsbcounts, shellblocks)
+	pulsecounts = slicetools.ResizeZero(&d.pulsecounts, shellblocks)
+	lsbcounts = slicetools.ResizeZero(&d.lsbcounts, shellblocks)
 	for i := range shellblocks {
 		pulsecounts[i] = uint8(d.rangeDecoder.DecodeSymbolWithICDF(icdfPulseCount[rateLevel])) //nolint:gosec // g115
 
@@ -1043,7 +1029,7 @@ func (d *Decoder) decodePulseAndLSBCounts(shellblocks int, rateLevel uint32) (pu
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8.3
 func (d *Decoder) decodePulseLocation(pulsecounts []uint8) (eRaw []int32) {
-	eRaw = resizeZero(&d.eRaw, len(pulsecounts)*pulsecountLargestPartitionSize)
+	eRaw = slicetools.ResizeZero(&d.eRaw, len(pulsecounts)*pulsecountLargestPartitionSize)
 	for i := range pulsecounts {
 		// This process skips partitions without any pulses, i.e., where
 		// the initial pulse count from Section 4.2.7.8.2 was zero, or where the
@@ -1316,7 +1302,7 @@ func (d *Decoder) decodeExcitation(
 	// and with the corresponding sign decoded in Section 4.2.7.8.5.
 	d.decodeExcitationSign(eRaw, signalType, quantizationOffsetType, pulsecounts)
 
-	eQ23 = resizeZero(&d.eQ23, len(eRaw))
+	eQ23 = slicetools.ResizeZero(&d.eQ23, len(eRaw))
 	for i := range eRaw {
 		// Additionally, let seed be the current pseudorandom seed, which is initialized to the
 		// value decoded from Section 4.2.7.7 for the first sample in the current SILK frame, and
@@ -1471,7 +1457,7 @@ func (d *Decoder) limitLPCFilterPredictionGainInto(a32Q17 []int32, slot int) (aQ
 	//     a32_Q12[n] = (a32_Q17[n] + 16) >> 5
 	//
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.8
-	aQ12Int := resizeZero(&d.aQ12Int[slot], len(a32Q17))
+	aQ12Int := slicetools.ResizeZero(&d.aQ12Int[slot], len(a32Q17))
 	for n := range a32Q17 {
 		aQ12Int[n] = int16((a32Q17[n] + 16) >> 5) //nolint:gosec // G115
 	}
@@ -1493,7 +1479,7 @@ func (d *Decoder) limitLPCFilterPredictionGainInto(a32Q17 []int32, slot int) (aQ
 		}
 	}
 
-	aQ12 = resizeZero(&d.aQ12Coefficients[slot], len(aQ12Int))
+	aQ12 = slicetools.ResizeZero(&d.aQ12Coefficients[slot], len(aQ12Int))
 	for n := range aQ12Int {
 		aQ12[n] = float32(aQ12Int[n])
 	}
@@ -1721,7 +1707,7 @@ func (d *Decoder) decodePitchLags(
 	//
 	//     pitch_lags[k] = clamp(lag_min, lag + lag_cb[contour_index][k],
 	//                           lag_max)
-	pitchLags = resizeZero(&d.pitchLags, subframeCount(nanoseconds))
+	pitchLags = slicetools.ResizeZero(&d.pitchLags, subframeCount(nanoseconds))
 	for i := range pitchLags {
 		pitchLags[i] = int(clamp(
 			int32(lagMin),                          //nolint:gosec
@@ -1784,8 +1770,8 @@ func (d *Decoder) decodeLTPFilterCoefficients(signalType frameSignalType, subfra
 		return bQ7
 	}
 
-	bQ7 = resize(&d.bQ7, subframeCount)
-	bQ7Data := resizeZero(&d.bQ7Data, subframeCount*5)
+	bQ7 = slicetools.Resize(&d.bQ7, subframeCount)
+	bQ7Data := slicetools.ResizeZero(&d.bQ7Data, subframeCount*5)
 	for i := range bQ7 {
 		start := i * 5
 		bQ7[i] = bQ7Data[start : start+5]
@@ -2138,7 +2124,7 @@ func (d *Decoder) silkFrameReconstruction(
 
 	// let lpc[i] be the result of LPC synthesis from the last d_LPC samples of the
 	//  previous subframe or zeros in the first subframe for this channel
-	lpc := resizeZero(&d.lpc, n*subframeCount)
+	lpc := slicetools.ResizeZero(&d.lpc, n*subframeCount)
 
 	// For unvoiced frames (see Section 4.2.7.3), the LPC residual for i
 	// such that j <= i < (j + n) is simply a normalized copy of the
@@ -2147,8 +2133,8 @@ func (d *Decoder) silkFrameReconstruction(
 	//               e_Q23[i]
 	//     res[i] = ---------
 	//               2.0**23
-	res := resizeZero(&d.res, len(eQ23))
-	resLag := resizeZero(&d.resLag, int(lagMax)+2)
+	res := slicetools.ResizeZero(&d.res, len(eQ23))
+	resLag := slicetools.ResizeZero(&d.resLag, int(lagMax)+2)
 	for i := range res {
 		res[i] = float32(eQ23[i]) / 8388608.0
 	}

@@ -20,6 +20,7 @@ type Decoder struct {
 	rng            uint32
 	lossCount      int
 	scratch        *decoderScratch
+	cwrsRows       map[cwrsRowKey][]uint32
 }
 
 // NewDecoder creates a CELT decoder with the static Opus 48 kHz mode.
@@ -227,6 +228,12 @@ func (d *Decoder) decode(
 	state := bandDecodeState{
 		rangeDecoder: &d.rangeDecoder,
 		seed:         d.rng,
+		pulseScratch: scratch.bandPulses[:],
+		tmpScratch:   scratch.bandTmp[:],
+		normScratch:  scratch.bandNorm[:],
+		lowScratch:   scratch.bandLow[:],
+		maskScratch:  scratch.collapseMasks[:],
+		cwrsRows:     d.cwrsRowCache(),
 	}
 	totalBits := (int(info.totalBits) << bitResolution) - info.antiCollapseRsv
 	collapseMasks := quantAllBands(&info, x, y, totalBits, &state)
@@ -251,6 +258,16 @@ func (d *Decoder) decode(
 	}
 
 	return nil
+}
+
+func (d *Decoder) cwrsRowCache() map[cwrsRowKey][]uint32 {
+	// CWRS rows only depend on static codebook dimensions and pulse counts, so
+	// retaining them across Reset avoids rebuilding the same immutable rows.
+	if d.cwrsRows == nil {
+		d.cwrsRows = make(map[cwrsRowKey][]uint32)
+	}
+
+	return d.cwrsRows
 }
 
 func (d *Decoder) decodeLostFrame(info *frameSideInfo, out []float32) {

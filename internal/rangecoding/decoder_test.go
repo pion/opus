@@ -201,6 +201,36 @@ func TestDecoderInitEmptyInput(t *testing.T) {
 	})
 }
 
+func TestGetBitsCrossesByteBoundary(t *testing.T) {
+	decoder := &Decoder{
+		data:     []byte{0b10101100, 0b01110010},
+		bitsRead: 5,
+	}
+
+	assert.Equal(t, uint32(0b10001110), decoder.getBits(8))
+	assert.Equal(t, uint(13), decoder.bitsRead)
+}
+
+func TestGetBitsMatchesBitByBit(t *testing.T) {
+	data := []byte{0b10101100, 0b01110010, 0b11010001}
+	for offset := range len(data) * 8 {
+		for width := 1; width <= 8 && offset+width <= len(data)*8; width++ {
+			fast := &Decoder{data: data, bitsRead: uint(offset)}
+			bitByBit := &Decoder{data: data, bitsRead: uint(offset)}
+			want := uint32(0)
+			for i := range width {
+				if i != 0 {
+					want <<= 1
+				}
+				want |= bitByBit.getBit()
+			}
+
+			assert.Equalf(t, want, fast.getBits(width), "offset=%d width=%d", offset, width)
+			assert.Equalf(t, bitByBit.bitsRead, fast.bitsRead, "offset=%d width=%d", offset, width)
+		}
+	}
+}
+
 func TestDecodeRawBits(t *testing.T) {
 	t.Run("reads bits from the end of the frame in LSB-first order", func(t *testing.T) {
 		decoder := &Decoder{data: []byte{0xB2}}

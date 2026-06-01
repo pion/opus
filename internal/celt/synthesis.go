@@ -28,10 +28,15 @@ type complex32 struct {
 }
 
 type decoderScratch struct {
-	x          [maxFrameSampleCount]float32
-	y          [maxFrameSampleCount]float32
-	channels   [2]channelScratch
-	postfilter [2][postfilterHistorySampleCount + maxFrameSampleCount]float32
+	x             [maxFrameSampleCount]float32
+	y             [maxFrameSampleCount]float32
+	bandNorm      [2 * maxFrameSampleCount]float32
+	bandLow       [maxFrameSampleCount]float32
+	bandTmp       [maxFrameSampleCount]float32
+	bandPulses    [maxFrameSampleCount]int
+	collapseMasks [2 * maxBands]byte
+	channels      [2]channelScratch
+	postfilter    [2][postfilterHistorySampleCount + maxFrameSampleCount]float32
 }
 
 type channelScratch struct {
@@ -43,12 +48,11 @@ type channelScratch struct {
 }
 
 type mdctScratch struct {
-	preRotated  [maxFrameSampleCount / 2]complex32
-	fftOut      [maxFrameSampleCount / 2]complex32
-	fftWork     [maxFrameSampleCount / 2]complex32
-	postRotated [maxFrameSampleCount]float32
-	deshuffled  [maxFrameSampleCount]float32
-	out         [maxFrameSampleCount + shortBlockSampleCount]float32
+	preRotated [maxFrameSampleCount / 2]complex32
+	fftOut     [maxFrameSampleCount / 2]complex32
+	fftWork    [maxFrameSampleCount / 2]complex32
+	deshuffled [maxFrameSampleCount]float32
+	out        [maxFrameSampleCount + shortBlockSampleCount]float32
 }
 
 type inverseTransformPlan struct {
@@ -133,7 +137,7 @@ func (d *Decoder) log2Amp(info *frameSideInfo) [2][maxBands]float32 {
 	for channel := range info.channelCount {
 		for band := info.startBand; band < info.endBand; band++ {
 			lg := minFloat32(32, d.previousLogE[channel][band]+energyMeans[band])
-			energy[channel][band] = float32(math.Pow(2, float64(lg)))
+			energy[channel][band] = float32(math.Exp2(float64(lg)))
 		}
 	}
 
@@ -191,17 +195,15 @@ func (d *Decoder) denormaliseAndSynthesize(
 // antiCollapse implements RFC 6716 Section 4.3.5 by injecting low-energy
 // noise into transient short blocks that received no PVQ pulses.
 func (d *Decoder) antiCollapse(info *frameSideInfo, x []float32, y []float32, collapseMasks []byte, seed uint32) {
-	channels := [][]float32{x}
-	if info.channelCount == 2 {
-		channels = append(channels, y)
-	}
+	channels := [2][]float32{x, y}
 	for band := info.startBand; band < info.endBand; band++ {
 		n0 := int(bandEdges[band+1] - bandEdges[band])
 		n := n0 << info.lm
 		depth := (1 + info.allocation.pulses[band]) / n
 		threshold := 0.5 * math.Pow(2, -0.125*float64(depth))
 		sqrtInv := 1 / math.Sqrt(float64(n))
-		for channel, spectrum := range channels {
+		for channel := range info.channelCount {
+			spectrum := channels[channel]
 			prev1 := d.previousLogE1[channel][band]
 			prev2 := d.previousLogE2[channel][band]
 			if info.channelCount == 1 {
@@ -361,30 +363,39 @@ func combFilter(buf []float32, start int, period0 int, period1 int, n int, gain0
 	g11 := gain1 * gains[tapset1][1]
 	g12 := gain1 * gains[tapset1][2]
 	overlap := min(shortBlockSampleCount, n)
+	output := buf[start : start+n]
+	previous0 := buf[start-period0 : start-period0+overlap]
+	previous0Minus1 := buf[start-period0-1 : start-period0-1+overlap]
+	previous0Plus1 := buf[start-period0+1 : start-period0+1+overlap]
+	previous0Minus2 := buf[start-period0-2 : start-period0-2+overlap]
+	previous0Plus2 := buf[start-period0+2 : start-period0+2+overlap]
+	previous1 := buf[start-period1 : start-period1+n]
+	previous1Minus1 := buf[start-period1-1 : start-period1-1+n]
+	previous1Plus1 := buf[start-period1+1 : start-period1+1+n]
+	previous1Minus2 := buf[start-period1-2 : start-period1-2+n]
+	previous1Plus2 := buf[start-period1+2 : start-period1+2+n]
 	for i := 0; i < overlap; i++ {
 		window := celtWindow(i)
 		fade := window * window
-		index := start + i
-		buf[index] = buf[index] +
-			(1-fade)*g00*buf[index-period0] +
-			(1-fade)*g01*buf[index-period0-1] +
-			(1-fade)*g01*buf[index-period0+1] +
-			(1-fade)*g02*buf[index-period0-2] +
-			(1-fade)*g02*buf[index-period0+2] +
-			fade*g10*buf[index-period1] +
-			fade*g11*buf[index-period1-1] +
-			fade*g11*buf[index-period1+1] +
-			fade*g12*buf[index-period1-2] +
-			fade*g12*buf[index-period1+2]
+		output[i] = output[i] +
+			(1-fade)*g00*previous0[i] +
+			(1-fade)*g01*previous0Minus1[i] +
+			(1-fade)*g01*previous0Plus1[i] +
+			(1-fade)*g02*previous0Minus2[i] +
+			(1-fade)*g02*previous0Plus2[i] +
+			fade*g10*previous1[i] +
+			fade*g11*previous1Minus1[i] +
+			fade*g11*previous1Plus1[i] +
+			fade*g12*previous1Minus2[i] +
+			fade*g12*previous1Plus2[i]
 	}
 	for i := overlap; i < n; i++ {
-		index := start + i
-		buf[index] = buf[index] +
-			g10*buf[index-period1] +
-			g11*buf[index-period1-1] +
-			g11*buf[index-period1+1] +
-			g12*buf[index-period1-2] +
-			g12*buf[index-period1+2]
+		output[i] = output[i] +
+			g10*previous1[i] +
+			g11*previous1Minus1[i] +
+			g11*previous1Plus1[i] +
+			g12*previous1Minus2[i] +
+			g12*previous1Plus2[i]
 	}
 }
 
@@ -486,9 +497,10 @@ func inverseMDCTWithScratch(freq []float32, scratch *mdctScratch) []float32 {
 
 	fftOut := scratch.fftOut[:n4]
 	inverseComplexDFTInto(preRotated, fftOut, scratch.fftWork[:n4], plan)
-	postRotated := scratch.postRotated[:n2]
+	deshuffled := scratch.deshuffled[:n2]
 	// Rotate back out of the complex domain and restore the packed even/odd
-	// ordering expected by the time-domain mirror step.
+	// ordering expected by the time-domain mirror step. Write directly into
+	// that order to avoid an intermediate buffer and a second pass.
 	for i, value := range fftOut {
 		re := value.r
 		im := value.i
@@ -496,14 +508,8 @@ func inverseMDCTWithScratch(freq []float32, scratch *mdctScratch) []float32 {
 		sineQuarter := plan.rotateSinQuarter[i]
 		yr := re*cosine - im*sineQuarter
 		yi := im*cosine + re*sineQuarter
-		postRotated[2*i] = yr - yi*plan.sine
-		postRotated[2*i+1] = yi + yr*plan.sine
-	}
-
-	deshuffled := scratch.deshuffled[:n2]
-	for i := range n4 {
-		deshuffled[2*i] = -postRotated[2*i]
-		deshuffled[2*i+1] = postRotated[n2-1-2*i]
+		deshuffled[2*i] = -(yr - yi*plan.sine)
+		deshuffled[n2-1-2*i] = yi + yr*plan.sine
 	}
 
 	overlap := shortBlockSampleCount
@@ -558,7 +564,6 @@ func inverseComplexDFTInto(in []complex32, out []complex32, work []complex32, pl
 	for i, value := range in {
 		out[plan.fftBitrev[i]] = value
 	}
-
 	for stage := len(plan.fftFactors) - 1; stage >= 0; stage-- {
 		factor := plan.fftFactors[stage]
 		fstride := plan.n4 / (factor.radix * factor.size)

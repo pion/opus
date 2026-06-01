@@ -8,6 +8,7 @@ import (
 	"math"
 
 	"github.com/pion/opus/internal/rangecoding"
+	"github.com/pion/opus/internal/slicetools"
 )
 
 const (
@@ -30,17 +31,14 @@ func algUnquant(
 	gain float32,
 	state *bandDecodeState,
 ) uint {
-	iy := state.intScratch(n)
-	decodePulses(iy, n, k, rangeDecoder)
+	iy := slicetools.Resize(&state.pulseScratch, n)
+	decodePulses(iy, n, k, rangeDecoder, state.cwrsRows)
 
-	energy := 0
-	for i := range n {
-		energy += iy[i] * iy[i]
-	}
+	energy, collapseMask := pulseEnergyAndCollapseMask(iy, n, blocks)
 	normaliseResidual(iy, x, n, energy, gain)
 	expRotation(x, n, -1, blocks, k, spread)
 
-	return extractCollapseMask(iy, n, blocks)
+	return collapseMask
 }
 
 // normaliseResidual maps integer PVQ pulses back to a floating-point unit
@@ -77,6 +75,29 @@ func extractCollapseMask(iy []int, n int, blocks int) uint {
 	}
 
 	return mask
+}
+
+func pulseEnergyAndCollapseMask(iy []int, n int, blocks int) (energy int, mask uint) {
+	if blocks <= 1 {
+		for i := range n {
+			energy += iy[i] * iy[i]
+		}
+
+		return energy, 1
+	}
+
+	blockSize := n / blocks
+	for block := range blocks {
+		for i := range blockSize {
+			pulse := iy[block*blockSize+i]
+			energy += pulse * pulse
+			if pulse != 0 {
+				mask |= 1 << block
+			}
+		}
+	}
+
+	return energy, mask
 }
 
 // renormaliseVector restores unit energy after lowband folding or noise fill.
@@ -202,16 +223,31 @@ func algQuant(
 }
 
 func expRotation1(x []float32, length int, stride int, c float32, s float32) {
-	for i := 0; i < length-stride; i++ {
-		x1 := x[i]
-		x2 := x[i+stride]
-		x[i+stride] = c*x2 + s*x1
-		x[i] = c*x1 - s*x2
+	if length <= stride {
+		return
 	}
-	for i := length - 2*stride - 1; i >= 0; i-- {
-		x1 := x[i]
-		x2 := x[i+stride]
-		x[i+stride] = c*x2 + s*x1
-		x[i] = c*x1 - s*x2
+
+	lower := x[:length-stride]
+	upper := x[stride:length]
+	for i := range lower {
+		x1 := lower[i]
+		x2 := upper[i]
+		upper[i] = c*x2 + s*x1
+		lower[i] = c*x1 - s*x2
+	}
+
+	backwardLength := len(lower) - stride
+	if backwardLength <= 0 {
+		return
+	}
+	backwardLower := lower[:backwardLength]
+	backwardUpper := upper[:backwardLength]
+	// slices.Backward adds iterator overhead in this hot loop.
+	//nolint:modernize
+	for i := backwardLength - 1; i >= 0; i-- {
+		x1 := backwardLower[i]
+		x2 := backwardUpper[i]
+		backwardUpper[i] = c*x2 + s*x1
+		backwardLower[i] = c*x1 - s*x2
 	}
 }
