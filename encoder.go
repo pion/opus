@@ -98,8 +98,8 @@ func WithComplexity(complexity int) EncoderOption {
 // any of these. The current API surface only supports 48 kHz mono 20 ms
 // CELT-only packets; stereo, transient detection, and SILK encoding will land
 // in follow-up PRs.
-func NewEncoder(opts ...EncoderOption) (Encoder, error) {
-	encoder := Encoder{
+func NewEncoder(opts ...EncoderOption) (*Encoder, error) {
+	encoder := &Encoder{
 		celtEncoder: celt.NewEncoder(),
 		sampleRate:  celtSampleRate,
 		channels:    1,
@@ -108,8 +108,8 @@ func NewEncoder(opts ...EncoderOption) (Encoder, error) {
 	}
 
 	for _, opt := range opts {
-		if err := opt(&encoder); err != nil {
-			return Encoder{}, err
+		if err := opt(encoder); err != nil {
+			return nil, err
 		}
 	}
 
