@@ -52,11 +52,10 @@ func WithSampleRate(rate int) EncoderOption {
 	}
 }
 
-// WithChannels sets the channel count. The current encoder only supports
-// mono (1 channel); stereo is planned in a follow-up PR.
+// WithChannels sets the channel count (1 for mono, 2 for stereo).
 func WithChannels(channels int) EncoderOption {
 	return func(e *Encoder) error {
-		if channels != 1 {
+		if channels < 1 || channels > 2 {
 			return errInvalidChannelCount
 		}
 		e.channels = channels
@@ -95,8 +94,8 @@ func WithComplexity(complexity int) EncoderOption {
 // NewEncoder creates a new Opus encoder with the supplied options.
 //
 // Defaults: 48 kHz, mono, 24 kbit/s, complexity 0. Pass options to override
-// any of these. The current API surface only supports 48 kHz mono 20 ms
-// CELT-only packets; stereo, transient detection, and SILK encoding will land
+// any of these. The current implementation supports 48 kHz, 1 or 2 channels,
+// 20 ms CELT-only packets. Transient detection and SILK encoding will land
 // in follow-up PRs.
 func NewEncoder(opts ...EncoderOption) (*Encoder, error) {
 	encoder := &Encoder{
@@ -151,19 +150,18 @@ func (e *Encoder) Encode(in []byte, out []byte) (int, error) {
 
 // EncodeFloat32 encodes float PCM into a single Opus packet.
 //
-// The input must contain exactly one 20 ms mono 48 kHz frame.
+// The input must contain one 20 ms 48 kHz frame.
 func (e *Encoder) EncodeFloat32(in []float32, out []byte) (int, error) {
 	if e.sampleRate != celtSampleRate {
 		return 0, errInvalidSampleRate
 	}
 
-	if e.channels != 1 {
-		return 0, errInvalidChannelCount
-	}
 	frameSamples := e.frameSampleCount()
 	if len(in) != frameSamples*e.channels {
 		return 0, fmt.Errorf("%w: got %d samples, want %d", errInvalidFrameSize, len(in), frameSamples*e.channels)
 	}
+
+	channels := splitChannels(in, e.channels, frameSamples)
 
 	frameBytes := e.frameBytes()
 	if frameBytes <= 0 || frameBytes > maxOpusFrameSize {
@@ -173,7 +171,7 @@ func (e *Encoder) EncodeFloat32(in []float32, out []byte) (int, error) {
 		return 0, errOutBufferTooSmall
 	}
 
-	payload, err := e.celtEncoder.EncodeFrame(in, frameBytes, 0, e.celtEncoder.Mode().BandCount())
+	payload, err := e.celtEncoder.EncodeFrame(channels, frameBytes, 0, e.celtEncoder.Mode().BandCount())
 	if err != nil {
 		return 0, err
 	}
@@ -193,8 +191,31 @@ func (e *Encoder) EncodeFloat32(in []float32, out []byte) (int, error) {
 func (e *Encoder) tocHeader() tableOfContentsHeader {
 	header := byte(celtOnlyFullband20msConfig << 3)
 	header |= byte(frameCodeOneFrame)
+	if e.channels == 2 {
+		header |= 1 << 2
+	}
 
 	return tableOfContentsHeader(header)
+}
+
+// splitChannels splits interleaved PCM into per-channel slices.
+// For mono, it returns the input directly without allocation.
+func splitChannels(in []float32, numChannels, frameSamples int) [][]float32 {
+	ch := make([][]float32, numChannels)
+	if numChannels == 1 {
+		ch[0] = in
+
+		return ch
+	}
+
+	for c := range numChannels {
+		ch[c] = make([]float32, frameSamples)
+		for i := range frameSamples {
+			ch[c][i] = in[i*numChannels+c]
+		}
+	}
+
+	return ch
 }
 
 func (e *Encoder) frameBytes() int {

@@ -10,68 +10,63 @@ import (
 const preemphasisCoefficient = 0.85000610
 
 type analysisState struct {
-	prevPCM        []float32
-	preemphasisMem float32
+	prevPCM        [2][]float32
+	preemphasisMem [2]float32
 }
 
 type analysisResult struct {
-	info          frameSideInfo
-	preemphasized []float32
-	mdct          []float32
-	logBandAmp    [maxBands]float32
+	info       frameSideInfo
+	mdct       [2][]float32
+	logBandAmp [2][maxBands]float32
 }
 
 func newAnalysisState() analysisState {
 	return analysisState{
-		prevPCM: make([]float32, shortBlockSampleCount),
+		prevPCM: [2][]float32{
+			make([]float32, shortBlockSampleCount),
+			make([]float32, shortBlockSampleCount),
+		},
 	}
 }
 
-// analyzeFrame prepares the mono CELT encoder input: applies pre-emphasis,
-// extends the frame with the previous overlap for the MDCT window, runs the
-// forward MDCT, and returns per-band log amplitude for coarse energy coding.
-func analyzeFrame(
-	mode *Mode,
-	frame []float32,
-	startBand int,
-	endBand int,
-	state *analysisState,
-) (analysisResult, error) {
-	lm, err := mode.LMForFrameSampleCount(len(frame))
+// analyzeFrame applies pre-emphasis, builds the MDCT overlap window, runs the
+// forward MDCT, and returns per-band log amplitude for each input channel.
+func analyzeFrame(mode *Mode, pcm [][]float32, startBand, endBand int, state *analysisState) (analysisResult, error) {
+	lm, err := mode.LMForFrameSampleCount(len(pcm[0]))
 	if err != nil {
 		return analysisResult{}, err
 	}
 
-	result := analysisResult{
+	res := analysisResult{
 		info: frameSideInfo{
-			lm:              lm,
-			startBand:       startBand,
-			endBand:         endBand,
-			channelCount:    1,
-			transient:       false,
-			shortBlockCount: 0,
-			intraEnergy:     false,
-			spread:          defaultSpreadDecision,
-			allocationTrim:  defaultAllocationTrim,
+			lm:             lm,
+			startBand:      startBand,
+			endBand:        endBand,
+			channelCount:   len(pcm),
+			transient:      false,
+			spread:         defaultSpreadDecision,
+			allocationTrim: defaultAllocationTrim,
 		},
-		preemphasized: make([]float32, len(frame)),
 	}
 
-	applyPreemphasis(frame, result.preemphasized, &state.preemphasisMem)
+	for ch := range pcm {
+		pre := make([]float32, len(pcm[ch]))
+		applyPreemphasis(pcm[ch], pre, &state.preemphasisMem[ch])
 
-	mdctInput := make([]float32, shortBlockSampleCount+len(frame))
-	copy(mdctInput, state.prevPCM)
-	copy(mdctInput[shortBlockSampleCount:], result.preemphasized)
+		mdctInput := make([]float32, shortBlockSampleCount+len(pre))
+		copy(mdctInput, state.prevPCM[ch])
+		copy(mdctInput[shortBlockSampleCount:], pre)
 
-	result.mdct = forwardMDCT(mdctInput)
-	if result.mdct == nil {
-		return analysisResult{}, errInvalidFrameSize
+		res.mdct[ch] = forwardMDCT(mdctInput)
+		if res.mdct[ch] == nil {
+			return analysisResult{}, errInvalidFrameSize
+		}
+
+		res.logBandAmp[ch] = computeBandLogAmp(res.mdct[ch], lm, startBand, endBand)
+		copy(state.prevPCM[ch], pre[len(pre)-shortBlockSampleCount:])
 	}
 
-	result.logBandAmp = computeBandLogAmp(result.mdct, lm, startBand, endBand)
-	copy(state.prevPCM, result.preemphasized[len(result.preemphasized)-shortBlockSampleCount:])
-
-	return result, nil
+	return res, nil
 }
 
 func applyPreemphasis(in []float32, out []float32, mem *float32) {

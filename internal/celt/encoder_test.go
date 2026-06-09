@@ -24,7 +24,7 @@ func TestEncodeFrameRoundTripMono20ms(t *testing.T) {
 	}
 
 	for i := range 3 {
-		data, err := encoder.EncodeFrame(pcm, frameBytes, 0, maxBands)
+		data, err := encoder.EncodeFrame([][]float32{pcm}, frameBytes, 0, maxBands)
 		require.NoError(t, err)
 		require.NotEmpty(t, data)
 		assert.LessOrEqual(t, len(data), frameBytes,
@@ -53,7 +53,7 @@ func TestEncodeFrameRoundTripMono20msTightBudget(t *testing.T) {
 		pcm[i] = float32(math.Sin(2 * math.Pi * 440 * float64(i) / sampleRate))
 	}
 
-	data, err := encoder.EncodeFrame(pcm, frameBytes, 0, maxBands)
+	data, err := encoder.EncodeFrame([][]float32{pcm}, frameBytes, 0, maxBands)
 	require.NoError(t, err)
 	require.NotEmpty(t, data)
 	assert.LessOrEqual(t, len(data), frameBytes)
@@ -80,7 +80,7 @@ func TestEncodeFrameMonoPersistence(t *testing.T) {
 		pcm[i] = float32(math.Sin(2 * math.Pi * 440 * float64(i) / sampleRate))
 	}
 
-	data1, err := encoder.EncodeFrame(pcm, frameBytes, 0, maxBands)
+	data1, err := encoder.EncodeFrame([][]float32{pcm}, frameBytes, 0, maxBands)
 	require.NoError(t, err)
 
 	out1 := make([]float32, frameSampleCount)
@@ -91,7 +91,7 @@ func TestEncodeFrameMonoPersistence(t *testing.T) {
 		out1b += float64(out1[i])
 	}
 
-	data2, err := encoder.EncodeFrame(pcm, frameBytes, 0, maxBands)
+	data2, err := encoder.EncodeFrame([][]float32{pcm}, frameBytes, 0, maxBands)
 	require.NoError(t, err)
 
 	out2 := make([]float32, frameSampleCount)
@@ -116,10 +116,35 @@ func TestEncodeFrameMonoRngStability(t *testing.T) {
 	}
 
 	for range 3 {
-		data, err := encoder.EncodeFrame(pcm, frameBytes, 0, maxBands)
+		data, err := encoder.EncodeFrame([][]float32{pcm}, frameBytes, 0, maxBands)
 		require.NoError(t, err)
 
 		require.NotEmpty(t, data)
 		_ = encoder.rangeEncoder.FinalRange()
 	}
+}
+
+func TestEncodeFrameStereoFinalRange(t *testing.T) {
+	encoder := NewEncoder()
+	decoder := NewDecoder()
+
+	frameSampleCount := shortBlockSampleCount << maxLM
+	frameBytes := 60
+
+	L := make([]float32, frameSampleCount)
+	R := make([]float32, frameSampleCount)
+	for i := range frameSampleCount {
+		L[i] = float32(math.Sin(2 * math.Pi * 440 * float64(i) / sampleRate))
+		R[i] = float32(math.Sin(2 * math.Pi * 660 * float64(i) / sampleRate))
+	}
+
+	data, err := encoder.EncodeFrame([][]float32{L, R}, frameBytes, 0, maxBands)
+	require.NoError(t, err)
+	require.NotEmpty(t, data)
+
+	out := make([]float32, frameSampleCount*2)
+	require.NoError(t, decoder.Decode(data, out, true, 2, frameSampleCount, 0, maxBands))
+
+	assert.Equal(t, encoder.FinalRange(), decoder.FinalRange(),
+		"range coder must be in sync after stereo encode/decode")
 }
