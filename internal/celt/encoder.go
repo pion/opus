@@ -62,6 +62,12 @@ func (e *Encoder) Mode() *Mode {
 	return e.mode
 }
 
+// FinalRange returns the range coder state after the last EncodeFrame call.
+// Compare with the decoder's FinalRange to verify encoder/decoder sync (RFC 6716 Section 5.1).
+func (e *Encoder) FinalRange() uint32 {
+	return e.rng
+}
+
 func (e *Encoder) encodeCoarseEnergy(info *frameSideInfo, targetLogE [2][maxBands]float32) {
 	probModel := eProbModel[info.lm][boolIndex(info.intraEnergy)]
 	previousBandPrediction := [2]float32{}
@@ -189,18 +195,20 @@ func (e *Encoder) encodeAllocationTrim(info *frameSideInfo, totalBitsEighth uint
 }
 
 // EncodeFrame encodes one CELT frame from float PCM.
-func (e *Encoder) EncodeFrame(
-	pcm []float32,
-	frameBytes int,
-	startBand int,
-	endBand int,
-) ([]byte, error) {
+//
+//nolint:cyclop // The frame encoder mirrors RFC 6716 flow and is intentionally linear.
+func (e *Encoder) EncodeFrame(pcm [][]float32, frameBytes, startBand, endBand int) ([]byte, error) {
 	if e.Mode() == nil {
 		e.mode = DefaultMode()
 	}
-
-	if len(pcm) != shortBlockSampleCount<<e.mode.MaxLM() {
-		return nil, errInvalidFrameSize
+	if len(pcm) != 1 && len(pcm) != 2 {
+		return nil, errInvalidChannelCount
+	}
+	frameSamples := shortBlockSampleCount << e.mode.MaxLM()
+	for ch := range pcm {
+		if len(pcm[ch]) != frameSamples {
+			return nil, errInvalidFrameSize
+		}
 	}
 	if startBand < 0 || startBand >= e.mode.BandCount() {
 		return nil, errInvalidBand
@@ -229,7 +237,9 @@ func (e *Encoder) EncodeFrame(
 	e.encodeIntraEnergyFlag(&info)
 
 	var targetLogE [2][maxBands]float32
-	targetLogE[0] = analysis.logBandAmp
+	for ch := range info.channelCount {
+		targetLogE[ch] = analysis.logBandAmp[ch]
+	}
 	e.encodeCoarseEnergy(&info, targetLogE)
 
 	e.encodeTimeFrequencyChanges(&info)
@@ -245,12 +255,17 @@ func (e *Encoder) EncodeFrame(
 	e.encodeFineEnergy(&info, info.allocation.fineQuant, targetLogE)
 
 	totalBits := (int(info.totalBits) << bitResolution) - info.antiCollapseRsv
-	shape := normaliseBandsForEncoding(&info, analysis.mdct, analysis.logBandAmp)
 	bandState := bandEncodeState{
 		rangeEncoder: &e.rangeEncoder,
 		seed:         e.rng,
 	}
-	_ = quantAllBandsMono(&info, shape, totalBits, &bandState)
+	shape0 := normaliseBandsForEncoding(&info, analysis.mdct[0], analysis.logBandAmp[0])
+	if info.channelCount == 2 {
+		shape1 := normaliseBandsForEncoding(&info, analysis.mdct[1], analysis.logBandAmp[1])
+		_ = quantAllBandsStereo(&info, shape0, shape1, totalBits, &bandState)
+	} else {
+		_ = quantAllBandsMono(&info, shape0, totalBits, &bandState)
+	}
 
 	bitsLeft := int(info.totalBits) - int(e.rangeEncoder.Tell())
 	e.finalizeFineEnergy(&info, info.allocation.fineQuant, info.allocation.finePriority, targetLogE, bitsLeft)
