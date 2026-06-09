@@ -10,27 +10,13 @@ import (
 // forwardComplexDFT inverts inverseComplexDFT using the standard
 // conjugate-sign change and 1/N scaling factor.
 func forwardComplexDFT(in []complex32) []complex32 {
-	n := len(in)
-	out := make([]complex32, n)
-	if n == 0 {
-		return out
-	}
-
-	scale := float32(1) / float32(n)
-	for k := range n {
-		sumR := float32(0)
-		sumI := float32(0)
-		for m, value := range in {
-			angle := 2 * math.Pi * float64(k*m) / float64(n)
-			cosine := float32(math.Cos(angle))
-			sine := float32(math.Sin(angle))
-			sumR += value.r*cosine + value.i*sine
-			sumI += value.i*cosine - value.r*sine
-		}
-		out[k] = complex32{
-			r: sumR * scale,
-			i: sumI * scale,
-		}
+	out := make([]complex32, len(in))
+	copy(out, in)
+	fft(out)
+	n := float32(len(out))
+	for i := range out {
+		out[i].r /= n
+		out[i].i /= n
 	}
 
 	return out
