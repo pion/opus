@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
-// Package celt implements the MDCT layer of the Opus codec.
 package celt
 
 import "math"

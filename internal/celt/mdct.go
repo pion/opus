@@ -7,8 +7,7 @@ import (
 	"math"
 )
 
-// forwardComplexDFT inverts inverseComplexDFT using the standard
-// conjugate-sign change and 1/N scaling factor.
+// forwardComplexDFT computes the forward complex DFT via fft and 1/N scaling.
 func forwardComplexDFT(in []complex32) []complex32 {
 	out := make([]complex32, len(in))
 	copy(out, in)
@@ -29,8 +28,7 @@ func forwardComplexDFT(in []complex32) []complex32 {
 // This helper expects exactly that time-domain layout and returns the original
 // N MDCT bins.
 //
-// A later optimization can replace the O(N^2) complex DFT with an FFT without
-// changing the surrounding packing/rotation steps.
+// The complex DFT step is handled by forwardComplexDFT, which delegates to fft.
 //
 //nolint:cyclop // Mirrors the RFC 6716 Section 4.3.7 IMDCT structure step-for-step.
 func forwardMDCT(time []float32) []float32 {
