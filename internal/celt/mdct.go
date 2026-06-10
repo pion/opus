@@ -3,10 +3,6 @@
 
 package celt
 
-import (
-	"math"
-)
-
 // forwardComplexDFT computes the forward complex DFT via fft and 1/N scaling.
 func forwardComplexDFT(in []complex32) []complex32 {
 	out := make([]complex32, len(in))
@@ -46,7 +42,9 @@ func forwardMDCT(time []float32) []float32 {
 	n := 2 * n2
 	n4 := n >> 2
 	leftPlain := n4 - overlap/2
-	sine := float32(2 * math.Pi * 0.125 / float64(n))
+	// The pre/post rotation tables are identical for analysis and synthesis,
+	// so the forward MDCT reuses the inverse transform plan.
+	plan := inverseTransformPlanForFrameSampleCount(frameSampleCount)
 
 	deshuffled := make([]float32, n2)
 
@@ -78,9 +76,9 @@ func forwardMDCT(time []float32) []float32 {
 
 	fftOut := make([]complex32, n4)
 	for i := range n4 {
-		yr, yi := undoMDCTShear(postRotated[2*i], postRotated[2*i+1], sine)
-		cosine := float32(math.Cos(2 * math.Pi * float64(i) / float64(n)))
-		sineQuarter := float32(math.Cos(2 * math.Pi * float64(n4-i) / float64(n)))
+		yr, yi := undoMDCTShear(postRotated[2*i], postRotated[2*i+1], plan.sine)
+		cosine := plan.rotateCos[i]
+		sineQuarter := plan.rotateSinQuarter[i]
 
 		fftOut[i] = complex32{
 			r: yr*cosine + yi*sineQuarter,
@@ -92,9 +90,9 @@ func forwardMDCT(time []float32) []float32 {
 	freq := make([]float32, n2)
 
 	for i, value := range preRotated {
-		yr, yi := undoMDCTShear(value.r, value.i, sine)
-		cosine := float32(math.Cos(2 * math.Pi * float64(i) / float64(n)))
-		sineQuarter := float32(math.Cos(2 * math.Pi * float64(n4-i) / float64(n)))
+		yr, yi := undoMDCTShear(value.r, value.i, plan.sine)
+		cosine := plan.rotateCos[i]
+		sineQuarter := plan.rotateSinQuarter[i]
 		xp1 := sineQuarter*yr - cosine*yi
 		xp2 := -cosine*yr - sineQuarter*yi
 		freq[2*i] = xp1
