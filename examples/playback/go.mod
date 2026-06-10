@@ -1,10 +1,10 @@
 module github.com/pion/opus/examples/playback
 
-go 1.21
+go 1.24.0
 
 require (
 	github.com/faiface/beep v1.1.0
-	github.com/pion/opus v0.0.0
+	github.com/pion/opus v0.1.0
 )
 
 require (
