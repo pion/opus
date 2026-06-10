@@ -259,8 +259,9 @@ func TestInverseMDCTAndDeemphasisHelpers(t *testing.T) {
 	assert.NotZero(t, decoder.preemphasisMem[1])
 }
 
-func TestDecodeLostFrameClearsPostfilterHistory(t *testing.T) {
+func TestDecodeLostFrameSynthesizesAndPreservesHistory(t *testing.T) {
 	decoder := NewDecoder()
+	decoder.previousLogE[0][0] = 4
 	decoder.postfilterMem[0][0] = 1
 	decoder.postfilterMem[1][0] = 2
 	out := make([]float32, shortBlockSampleCount)
@@ -268,6 +269,7 @@ func TestDecodeLostFrameClearsPostfilterHistory(t *testing.T) {
 	err := decoder.Decode(nil, out, false, 1, shortBlockSampleCount, 0, maxBands)
 
 	require.NoError(t, err)
-	assert.Zero(t, vectorEnergy(decoder.postfilterMem[0]))
-	assert.Zero(t, vectorEnergy(decoder.postfilterMem[1]))
+	assert.NotZero(t, vectorEnergy(out))
+	assert.NotZero(t, vectorEnergy(decoder.postfilterMem[0]))
+	assert.NotZero(t, vectorEnergy(decoder.postfilterMem[1]))
 }

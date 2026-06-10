@@ -47,8 +47,12 @@ type Decoder struct {
 	silkRedundancyFades    []silkRedundancyFade
 	silkCeltAdditions      []silkCeltAddition
 	floatBuffer            []float32
+	plcBuffer              []float32
+	plcOutputBuffer        []float32
 	sampleRate             int
 	channels               int
+	lastPacketBandwidth    Bandwidth
+	lastPacketIsStereo     bool
 }
 
 type silkRedundancyFade struct {
@@ -114,6 +118,8 @@ func (d *Decoder) Init(sampleRate, channels int) error {
 	d.rangeFinal = 0
 	d.previousMode = 0
 	d.previousRedundancy = false
+	d.lastPacketBandwidth = 0
+	d.lastPacketIsStereo = false
 
 	return nil
 }
@@ -1183,8 +1189,153 @@ func (d *Decoder) decodeToFloat32(
 	if err != nil {
 		return 0, 0, false, err
 	}
+	d.lastPacketBandwidth = bandwidth
+	d.lastPacketIsStereo = isStereo
 
 	return samplesPerChannel, bandwidth, isStereo, nil
+}
+
+func (d *Decoder) decodePLCToFloat32(out []float32) error {
+	if err := d.validatePLCOutput(len(out)); err != nil {
+		return err
+	}
+
+	if d.previousMode == 0 {
+		clear(out)
+
+		return nil
+	}
+
+	mode := d.previousMode
+	if d.previousRedundancy {
+		mode = configurationModeCELTOnly
+	}
+	samplesPerChannel := d.sampleRate / 50
+	var err error
+	switch mode {
+	case configurationModeSilkOnly:
+		err = d.decodeSilkPLCFrame(out, samplesPerChannel, d.lastPacketBandwidth, false)
+	case configurationModeCELTOnly:
+		err = d.decodeCeltPLCFrame(out, samplesPerChannel, false)
+	case configurationModeHybrid:
+		err = d.decodeHybridPLCFrame(out, samplesPerChannel)
+	default:
+		err = fmt.Errorf("%w: %d", errUnsupportedConfigurationMode, mode)
+	}
+	if err != nil {
+		return err
+	}
+	d.rangeFinal = 0
+
+	return nil
+}
+
+func (d *Decoder) validatePLCOutput(sampleCount int) error {
+	switch {
+	case d.sampleRate == 0:
+		return errInvalidSampleRate
+	case d.channels == 0:
+		return errInvalidChannelCount
+	case sampleCount != d.sampleRate/50*d.channels:
+		return errInvalidPLCFrameSize
+	default:
+		return nil
+	}
+}
+
+func (d *Decoder) decodeCeltPLCFrame(out []float32, samplesPerChannel int, hybrid bool) error {
+	frameSampleCount := samplesPerChannel * celtSampleRate / d.sampleRate
+	var (
+		startBand int
+		endBand   int
+		err       error
+	)
+	if hybrid {
+		startBand, endBand, err = d.celtDecoder.Mode().HybridBandRange(d.lastPacketBandwidth.SampleRate())
+	} else {
+		startBand, endBand, err = d.celtDecoder.Mode().BandRangeForSampleRate(d.lastPacketBandwidth.SampleRate())
+	}
+	if err != nil {
+		return err
+	}
+
+	return d.celtDecoder.DecodeToSampleRate(
+		nil,
+		out,
+		d.lastPacketIsStereo,
+		d.channels,
+		frameSampleCount,
+		startBand,
+		endBand,
+		d.sampleRate,
+	)
+}
+
+func (d *Decoder) decodeSilkPLCFrame(
+	out []float32,
+	samplesPerChannel int,
+	bandwidth Bandwidth,
+	hybrid bool,
+) error {
+	durationNanoseconds := samplesPerChannel * 1000000000 / d.sampleRate
+	internalChannelCount := silkOutputChannelCount(d.lastPacketIsStereo, d.channels)
+	internalSamplesPerChannel := bandwidth.SampleRate() * durationNanoseconds / 1000000000
+	internal := resizeFloat32Buffer(&d.plcBuffer, internalSamplesPerChannel*internalChannelCount)
+	if err := d.silkDecoder.DecodePLC(
+		internal,
+		d.lastPacketIsStereo,
+		internalChannelCount,
+		durationNanoseconds,
+		silk.Bandwidth(bandwidth),
+	); err != nil {
+		return err
+	}
+
+	resampled := resizeFloat32Buffer(
+		&d.plcOutputBuffer,
+		samplesPerChannel*internalChannelCount,
+	)
+	var err error
+	if hybrid {
+		err = d.resampleHybridSilk(internal, resampled, internalChannelCount)
+	} else {
+		err = d.resampleSilk(internal, resampled, internalChannelCount, bandwidth)
+	}
+	if err != nil {
+		return err
+	}
+
+	if hybrid {
+		d.addHybridSilk(out, resampled, internalChannelCount, d.channels, samplesPerChannel)
+	} else {
+		copyChannels(out, resampled, internalChannelCount, d.channels, samplesPerChannel)
+	}
+
+	return nil
+}
+
+func (d *Decoder) decodeHybridPLCFrame(out []float32, samplesPerChannel int) error {
+	if err := d.decodeCeltPLCFrame(out, samplesPerChannel, true); err != nil {
+		return err
+	}
+
+	return d.decodeSilkPLCFrame(out, samplesPerChannel, BandwidthWideband, true)
+}
+
+func copyChannels(out, in []float32, inputChannels, outputChannels, samplesPerChannel int) {
+	for sample := range samplesPerChannel {
+		inIndex := sample * inputChannels
+		outIndex := sample * outputChannels
+		switch {
+		case inputChannels == outputChannels:
+			copy(out[outIndex:outIndex+outputChannels], in[inIndex:inIndex+inputChannels])
+		case inputChannels == 1 && outputChannels == 2:
+			out[outIndex] = in[inIndex]
+			out[outIndex+1] = in[inIndex]
+		case inputChannels == 2 && outputChannels == 1:
+			out[outIndex] = 0.5 * (in[inIndex] + in[inIndex+1])
+		}
+	}
 }
 
 func (d *Decoder) finishDecodeToFloat32(
@@ -1418,6 +1569,17 @@ func (d *Decoder) DecodeToInt16(in []byte, out []int16) (int, error) {
 	float32ToInt16(d.floatBuffer, out, sampleCount*d.channels)
 
 	return sampleCount, nil
+}
+
+// DecodePLC recovers one missing 20 ms packet into signed 16-bit PCM.
+func (d *Decoder) DecodePLC(out []int16) error {
+	d.floatBuffer = resizeFloat32Buffer(&d.floatBuffer, len(out))
+	if err := d.decodePLCToFloat32(d.floatBuffer); err != nil {
+		return err
+	}
+	float32ToInt16(d.floatBuffer, out, len(out))
+
+	return nil
 }
 
 // DecodeToFloat32 decodes Opus data into float32 PCM and returns the sample count per channel.

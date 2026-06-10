@@ -8,6 +8,7 @@ import (
 	_ "embed"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"os"
 	"sync"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/pion/opus/pkg/oggreader"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // nolint: gochecknoglobals
@@ -85,6 +87,25 @@ func benchmarkData(b *testing.B, data []byte) {
 
 //go:embed testdata/tiny.ogg
 var tinyogg []byte // nolint: gochecknoglobals
+
+func firstTinyOggPacket(t *testing.T) []byte {
+	t.Helper()
+
+	ogg, _, err := oggreader.NewWith(bytes.NewReader(tinyogg))
+	require.NoError(t, err)
+	for {
+		segments, _, err := ogg.ParseNextPage()
+		if errors.Is(err, io.EOF) {
+			require.FailNow(t, "no Opus audio packet found")
+		}
+		require.NoError(t, err)
+		if len(segments) == 0 || bytes.HasPrefix(segments[0], []byte("OpusTags")) {
+			continue
+		}
+
+		return segments[0]
+	}
+}
 
 func TestTinyOgg(t *testing.T) {
 	var out [1920]byte
@@ -203,6 +224,65 @@ func TestDecodeToInt16(t *testing.T) {
 	sampleCount, err := decoder.DecodeToInt16([]byte{byte(0<<3) | byte(frameCodeOneFrame)}, out)
 	assert.NoError(t, err)
 	assert.Equal(t, 80, sampleCount)
+}
+
+func TestDecodePLC(t *testing.T) {
+	packet := firstTinyOggPacket(t)
+
+	for _, channels := range []int{1, 2} {
+		t.Run(fmt.Sprintf("%d_channel", channels), func(t *testing.T) {
+			decoder, err := NewDecoderWithOutput(24000, channels)
+			require.NoError(t, err)
+
+			decoded := make([]int16, 5760*channels)
+			_, err = decoder.DecodeToInt16(packet, decoded)
+			require.NoError(t, err)
+
+			plc := make([]int16, 480*channels)
+			require.NoError(t, decoder.DecodePLC(plc))
+			assert.NotEqual(t, make([]int16, len(plc)), plc)
+
+			require.NoError(t, decoder.DecodePLC(plc))
+		})
+	}
+}
+
+func TestDecodePLCFrameSizeValidation(t *testing.T) {
+	decoder, err := NewDecoderWithOutput(24000, 1)
+	require.NoError(t, err)
+
+	err = decoder.DecodePLC(nil)
+	assert.ErrorIs(t, err, errInvalidPLCFrameSize)
+
+	err = decoder.DecodePLC(make([]int16, 479))
+	assert.ErrorIs(t, err, errInvalidPLCFrameSize)
+
+	err = decoder.DecodePLC(make([]int16, 481))
+	assert.ErrorIs(t, err, errInvalidPLCFrameSize)
+
+	err = decoder.DecodePLC(make([]int16, 960))
+	assert.ErrorIs(t, err, errInvalidPLCFrameSize)
+}
+
+func TestDecodePLCModes(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		configuration Configuration
+		frameSamples  int
+	}{
+		{name: "SILK", configuration: 8, frameSamples: 480},
+		{name: "Hybrid", configuration: 12, frameSamples: 480},
+		{name: "CELT", configuration: 16, frameSamples: 120},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			decoder := NewDecoder()
+			packet := []byte{byte(test.configuration << 3)}
+			_, err := decoder.DecodeToFloat32(packet, make([]float32, test.frameSamples))
+			require.NoError(t, err)
+
+			require.NoError(t, decoder.DecodePLC(make([]int16, 960)))
+		})
+	}
 }
 
 func TestDecodeSilkFrameDurations(t *testing.T) {
