@@ -77,6 +77,21 @@ func TestForwardMDCTInvalidInput(t *testing.T) {
 	assert.Nil(t, forwardMDCT(make([]float32, shortBlockSampleCount+1)))
 }
 
+func BenchmarkForwardMDCT(b *testing.B) {
+	for _, frameSampleCount := range []int{shortBlockSampleCount << 2, shortBlockSampleCount << 3} {
+		time := make([]float32, frameSampleCount+shortBlockSampleCount)
+		for i := range time {
+			time[i] = float32(math.Sin(2*math.Pi*7*float64(i)/float64(frameSampleCount)) +
+				0.25*math.Cos(2*math.Pi*23*float64(i)/float64(frameSampleCount)))
+		}
+		b.Run(frameSampleCountName(frameSampleCount), func(b *testing.B) {
+			for range b.N {
+				_ = forwardMDCT(time)
+			}
+		})
+	}
+}
+
 func assertFloat32SliceClose(t *testing.T, expected, actual []float32, tolerance float64) {
 	t.Helper()
 	require.Len(t, actual, len(expected))
