@@ -51,7 +51,7 @@ func TestRFC6716Conformance(t *testing.T) {
 
 	refDir, vectorRoot := conformanceDataPaths(t)
 
-	opusCompare := buildRFC6716ReferenceTools(t, refDir)
+	_, opusCompare := buildRFC6716ReferenceTools(t, refDir)
 	results := make(map[conformanceKey]conformanceResult)
 	var resultsMu sync.Mutex
 
@@ -174,7 +174,7 @@ func conformanceReferencePCMs(vectorRoot, vector string) []string {
 	}
 }
 
-func buildRFC6716ReferenceTools(t *testing.T, refDir string) (opusCompare string) {
+func buildRFC6716ReferenceTools(t *testing.T, refDir string) (opusDemo, opusCompare string) {
 	t.Helper()
 
 	if _, err := os.Stat(filepath.Join(refDir, "Makefile")); err != nil {
@@ -202,7 +202,7 @@ func buildRFC6716ReferenceTools(t *testing.T, refDir string) (opusCompare string
 		t.Fatalf("build RFC 6716 reference tools: %v\n%s", err, out)
 	}
 
-	opusDemo := filepath.Join(buildDir, "opus_demo")
+	opusDemo = filepath.Join(buildDir, "opus_demo")
 	opusCompare = filepath.Join(buildDir, "opus_compare")
 	for _, path := range []string{opusDemo, opusCompare} {
 		if info, err := os.Stat(path); err != nil {
@@ -212,7 +212,7 @@ func buildRFC6716ReferenceTools(t *testing.T, refDir string) (opusCompare string
 		}
 	}
 
-	return opusCompare
+	return opusDemo, opusCompare
 }
 
 func decodeRFC6716Vector(t *testing.T, rate, channels int, bitstream, outPath string) {
