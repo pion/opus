@@ -6,12 +6,12 @@ package celt
 import (
 	"math"
 	"math/bits"
-	"sync"
 )
 
 // fftPlan caches the twiddle factors for one FFT length so the trigonometry
 // is computed once per size instead of inside the per-frame butterfly loops.
 type fftPlan struct {
+	n              int
 	pow2           int
 	odd            int
 	outerTwiddles  []complex32
@@ -19,23 +19,24 @@ type fftPlan struct {
 	directTwiddles []complex32
 }
 
-var fftPlans sync.Map //nolint:gochecknoglobals // Immutable plan cache keyed by FFT length.
+// fftPlans holds the plans for every FFT length the encoder uses in
+// production: the forward MDCT transforms n4 = frameSampleCount/2 bins per
+// CELT frame size. Mirrors inverseTransformPlans on the decoder side.
+var fftPlans = [maxLM + 1]*fftPlan{ //nolint:gochecknoglobals
+	newFFTPlan(shortBlockSampleCount >> 1),
+	newFFTPlan(shortBlockSampleCount),
+	newFFTPlan(shortBlockSampleCount << 1),
+	newFFTPlan(shortBlockSampleCount << 2),
+}
 
 func fftPlanForLength(n int) *fftPlan {
-	if cached, ok := fftPlans.Load(n); ok {
-		if plan, ok := cached.(*fftPlan); ok {
+	for _, plan := range fftPlans {
+		if plan.n == n {
 			return plan
 		}
 	}
 
-	plan := newFFTPlan(n)
-	cached, _ := fftPlans.LoadOrStore(n, plan)
-
-	if cachedPlan, ok := cached.(*fftPlan); ok {
-		return cachedPlan
-	}
-
-	return plan
+	return newFFTPlan(n)
 }
 
 func newFFTPlan(n int) *fftPlan {
@@ -46,6 +47,7 @@ func newFFTPlan(n int) *fftPlan {
 	odd := n / pow2
 
 	plan := &fftPlan{
+		n:             n,
 		pow2:          pow2,
 		odd:           odd,
 		outerTwiddles: make([]complex32, n),
