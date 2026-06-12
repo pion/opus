@@ -264,6 +264,60 @@ func TestDecodePLCFrameSizeValidation(t *testing.T) {
 	assert.ErrorIs(t, err, errInvalidPLCFrameSize)
 }
 
+func TestDecodePLCStateValidation(t *testing.T) {
+	var uninitialized Decoder
+	assert.ErrorIs(t, uninitialized.DecodePLC(nil), errInvalidSampleRate)
+
+	decoder := NewDecoder()
+	decoder.channels = 0
+	assert.ErrorIs(t, decoder.DecodePLC(nil), errInvalidChannelCount)
+}
+
+func TestDecodePLCWithoutPreviousPacket(t *testing.T) {
+	decoder := NewDecoder()
+	out := make([]int16, decoder.sampleRate/50*decoder.channels)
+
+	require.NoError(t, decoder.DecodePLC(out))
+	assert.Equal(t, make([]int16, len(out)), out)
+}
+
+func TestDecodePLCUnsupportedMode(t *testing.T) {
+	decoder := NewDecoder()
+	decoder.previousMode = configurationMode(255)
+
+	err := decoder.DecodePLC(make([]int16, decoder.sampleRate/50*decoder.channels))
+	assert.ErrorIs(t, err, errUnsupportedConfigurationMode)
+}
+
+func TestDecodePLCUsesCELTForRedundancy(t *testing.T) {
+	decoder := NewDecoder()
+	decoder.previousMode = configurationModeSilkOnly
+	decoder.previousRedundancy = true
+	decoder.lastPacketBandwidth = BandwidthWideband
+
+	require.NoError(t, decoder.DecodePLC(make([]int16, decoder.sampleRate/50*decoder.channels)))
+}
+
+func TestCopyChannels(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		in             []float32
+		inputChannels  int
+		outputChannels int
+		expected       []float32
+	}{
+		{name: "same", in: []float32{0.25, 0.5}, inputChannels: 2, outputChannels: 2, expected: []float32{0.25, 0.5}},
+		{name: "mono to stereo", in: []float32{0.25}, inputChannels: 1, outputChannels: 2, expected: []float32{0.25, 0.25}},
+		{name: "stereo to mono", in: []float32{0.25, 0.75}, inputChannels: 2, outputChannels: 1, expected: []float32{0.5}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			out := make([]float32, len(test.expected))
+			copyChannels(out, test.in, test.inputChannels, test.outputChannels, 1)
+			assert.Equal(t, test.expected, out)
+		})
+	}
+}
+
 func TestDecodePLCModes(t *testing.T) {
 	for _, test := range []struct {
 		name          string

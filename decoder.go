@@ -1277,9 +1277,9 @@ func (d *Decoder) decodeSilkPLCFrame(
 	bandwidth Bandwidth,
 	hybrid bool,
 ) error {
-	durationNanoseconds := samplesPerChannel * 1000000000 / d.sampleRate
+	durationNanoseconds := int(int64(samplesPerChannel) * 1000000000 / int64(d.sampleRate))
 	internalChannelCount := silkOutputChannelCount(d.lastPacketIsStereo, d.channels)
-	internalSamplesPerChannel := bandwidth.SampleRate() * durationNanoseconds / 1000000000
+	internalSamplesPerChannel := int(int64(bandwidth.SampleRate()) * int64(durationNanoseconds) / 1000000000)
 	internal := resizeFloat32Buffer(&d.plcBuffer, internalSamplesPerChannel*internalChannelCount)
 	if err := d.silkDecoder.DecodePLC(
 		internal,
