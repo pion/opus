@@ -271,7 +271,6 @@ func (d *Decoder) cwrsRowCache() map[cwrsRowKey][]uint32 {
 }
 
 func (d *Decoder) decodeLostFrame(info *frameSideInfo, out []float32) {
-	clear(out)
 	decay := float32(1.5)
 	if d.lossCount > 0 {
 		decay = 0.5
@@ -284,14 +283,46 @@ func (d *Decoder) decodeLostFrame(info *frameSideInfo, out []float32) {
 	if info.channelCount == 1 {
 		copy(d.previousLogE[1][:], d.previousLogE[0][:])
 	}
-	d.resetInactiveBandState(info)
-	for channel := range d.overlap {
-		clear(d.overlap[channel])
-		clear(d.postfilterMem[channel])
+
+	info.postFilter = postFilter{
+		enabled: d.postfilter.gain != 0,
+		period:  d.postfilter.period,
+		gain:    d.postfilter.gain,
+		tapset:  d.postfilter.tapset,
 	}
-	clear(d.preemphasisMem[:])
+	scratch := d.scratchBuffer()
+	x := scratch.x[:infoFrameSampleCount(info)]
+	clear(x)
+	var y []float32
+	if info.channelCount == 2 {
+		y = scratch.y[:len(x)]
+		clear(y)
+	}
+	seed := d.rng
+	if seed == 0 {
+		seed = 0x4A3B2C1D
+	}
+	channels := [2][]float32{x, y}
+	for channel := range info.channelCount {
+		for band := info.startBand; band < info.endBand; band++ {
+			start := int(bandEdges[band]) << info.lm
+			end := int(bandEdges[band+1]) << info.lm
+			for i := start; i < end; i++ {
+				seed = lcgRand(seed)
+				channels[channel][i] = float32(int32(seed) >> 20) //nolint:gosec // Matches the CELT PLC noise source.
+			}
+			renormaliseVector(channels[channel][start:end], end-start, normScaling)
+		}
+	}
+	d.rng = seed
+	d.denormaliseAndSynthesize(info, x, y, d.log2Amp(info), out)
+	d.resetInactiveBandState(info)
 	d.rangeDecoder = rangecoding.Decoder{}
 	d.lossCount++
+}
+
+func infoFrameSampleCount(info *frameSideInfo) int {
+	return shortBlockSampleCount << info.lm
 }
 
 // Mode returns the static CELT mode used by this decoder.

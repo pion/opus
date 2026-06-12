@@ -83,6 +83,7 @@ func TestDecodeLostFrameBypassesSilenceSideInfo(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, float32(2.5), decoder.previousLogE[0][0])
 	assert.Equal(t, float32(2.5), decoder.previousLogE[1][0])
+	assert.NotZero(t, vectorEnergy(out))
 	assert.Zero(t, decoder.FinalRange())
 	assert.Equal(t, 1, decoder.lossCount)
 }
