@@ -176,8 +176,13 @@ func TestDecodeToFloat32(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 160, sampleCount)
 
-	_, err = decoder.DecodeToFloat32([]byte{byte(8<<3) | byte(frameCodeOneFrame)}, out[:319])
+	_, err = decoder.DecodeToFloat32(
+		[]byte{byte(12<<3) | 0b00000100 | byte(frameCodeOneFrame)},
+		out[:319],
+	)
 	assert.ErrorIs(t, err, errOutBufferTooSmall)
+	assert.Equal(t, BandwidthSuperwideband, decoder.lastPacketBandwidth)
+	assert.True(t, decoder.lastPacketIsStereo)
 }
 
 func TestFinishDecodeToFloat32ClearsSilkRedundancyOnError(t *testing.T) {

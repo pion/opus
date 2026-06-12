@@ -1178,6 +1178,8 @@ func (d *Decoder) decodeToFloat32(
 	if err != nil {
 		return 0, 0, false, err
 	}
+	d.lastPacketBandwidth = bandwidth
+	d.lastPacketIsStereo = isStereo
 
 	samplesPerChannel, err = d.finishDecodeToFloat32(
 		out,
@@ -1189,8 +1191,6 @@ func (d *Decoder) decodeToFloat32(
 	if err != nil {
 		return 0, 0, false, err
 	}
-	d.lastPacketBandwidth = bandwidth
-	d.lastPacketIsStereo = isStereo
 
 	return samplesPerChannel, bandwidth, isStereo, nil
 }
