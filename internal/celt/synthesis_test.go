@@ -273,3 +273,24 @@ func TestDecodeLostFrameSynthesizesAndPreservesHistory(t *testing.T) {
 	assert.NotZero(t, vectorEnergy(decoder.postfilterMem[0]))
 	assert.NotZero(t, vectorEnergy(decoder.postfilterMem[1]))
 }
+
+func TestDecodeConsecutiveLostFrameUsesFallbackSeed(t *testing.T) {
+	decoder := NewDecoder()
+	decoder.lossCount = 1
+	decoder.rng = 0
+	decoder.previousLogE[0][0] = 4
+	decoder.previousLogE[1][0] = 2
+	out := make([]float32, 2*shortBlockSampleCount)
+
+	decoder.decodeLostFrame(&frameSideInfo{
+		startBand:          0,
+		endBand:            maxBands,
+		channelCount:       2,
+		outputChannelCount: 2,
+		outputSampleRate:   sampleRate,
+	}, out)
+	assert.Equal(t, float32(3.5), decoder.previousLogE[0][0])
+	assert.Equal(t, float32(1.5), decoder.previousLogE[1][0])
+	assert.NotZero(t, decoder.rng)
+	assert.Equal(t, 2, decoder.lossCount)
+}

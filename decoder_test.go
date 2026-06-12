@@ -298,6 +298,17 @@ func TestDecodePLCUsesCELTForRedundancy(t *testing.T) {
 	require.NoError(t, decoder.DecodePLC(make([]int16, decoder.sampleRate/50*decoder.channels)))
 }
 
+func TestDecodePLCFrameErrors(t *testing.T) {
+	decoder := NewDecoder()
+	out := make([]float32, decoder.sampleRate/50*decoder.channels)
+	decoder.lastPacketBandwidth = Bandwidth(255)
+
+	assert.Error(t, decoder.decodeCeltPLCFrame(out, decoder.sampleRate/50, false))
+	assert.Error(t, decoder.decodeHybridPLCFrame(out, decoder.sampleRate/50))
+	assert.Error(t, decoder.decodeSilkPLCFrame(out, 0, BandwidthWideband, false))
+	assert.Error(t, decoder.decodeSilkPLCFrame(out, decoder.sampleRate/50, Bandwidth(255), false))
+}
+
 func TestCopyChannels(t *testing.T) {
 	for _, test := range []struct {
 		name           string

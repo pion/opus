@@ -88,6 +88,7 @@ func TestDecodePLCValidation(t *testing.T) {
 	decoder := NewDecoder()
 	out := make([]float32, 320)
 
+	assert.Zero(t, signalEnergy(nil))
 	assert.ErrorIs(t, decoder.DecodePLC(out, false, 0, nanoseconds20Ms, BandwidthWideband), errOutBufferTooSmall)
 	assert.ErrorIs(t, decoder.DecodePLC(out, false, 1, 0, BandwidthWideband), errUnsupportedSilkFrameDuration)
 	assert.ErrorIs(t, decoder.DecodePLC(out[:319], false, 1, nanoseconds20Ms, BandwidthWideband), errOutBufferTooSmall)
