@@ -8,6 +8,7 @@ import (
 	_ "embed"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"os"
 	"sync"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/pion/opus/pkg/oggreader"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // nolint: gochecknoglobals
@@ -86,6 +88,25 @@ func benchmarkData(b *testing.B, data []byte) {
 //go:embed testdata/tiny.ogg
 var tinyogg []byte // nolint: gochecknoglobals
 
+func firstTinyOggPacket(t *testing.T) []byte {
+	t.Helper()
+
+	ogg, _, err := oggreader.NewWith(bytes.NewReader(tinyogg))
+	require.NoError(t, err)
+	for {
+		segments, _, err := ogg.ParseNextPage()
+		if errors.Is(err, io.EOF) {
+			require.FailNow(t, "no Opus audio packet found")
+		}
+		require.NoError(t, err)
+		if len(segments) == 0 || bytes.HasPrefix(segments[0], []byte("OpusTags")) {
+			continue
+		}
+
+		return segments[0]
+	}
+}
+
 func TestTinyOgg(t *testing.T) {
 	var out [1920]byte
 
@@ -155,8 +176,13 @@ func TestDecodeToFloat32(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 160, sampleCount)
 
-	_, err = decoder.DecodeToFloat32([]byte{byte(8<<3) | byte(frameCodeOneFrame)}, out[:319])
+	_, err = decoder.DecodeToFloat32(
+		[]byte{byte(12<<3) | 0b00000100 | byte(frameCodeOneFrame)},
+		out[:319],
+	)
 	assert.ErrorIs(t, err, errOutBufferTooSmall)
+	assert.Equal(t, BandwidthSuperwideband, decoder.lastPacketBandwidth)
+	assert.True(t, decoder.lastPacketIsStereo)
 }
 
 func TestFinishDecodeToFloat32ClearsSilkRedundancyOnError(t *testing.T) {
@@ -203,6 +229,130 @@ func TestDecodeToInt16(t *testing.T) {
 	sampleCount, err := decoder.DecodeToInt16([]byte{byte(0<<3) | byte(frameCodeOneFrame)}, out)
 	assert.NoError(t, err)
 	assert.Equal(t, 80, sampleCount)
+}
+
+func TestDecodePLC(t *testing.T) {
+	packet := firstTinyOggPacket(t)
+
+	for _, channels := range []int{1, 2} {
+		t.Run(fmt.Sprintf("%d_channel", channels), func(t *testing.T) {
+			decoder, err := NewDecoderWithOutput(24000, channels)
+			require.NoError(t, err)
+
+			decoded := make([]int16, 5760*channels)
+			_, err = decoder.DecodeToInt16(packet, decoded)
+			require.NoError(t, err)
+
+			plc := make([]int16, 480*channels)
+			require.NoError(t, decoder.DecodePLC(plc))
+			assert.NotEqual(t, make([]int16, len(plc)), plc)
+
+			require.NoError(t, decoder.DecodePLC(plc))
+		})
+	}
+}
+
+func TestDecodePLCFrameSizeValidation(t *testing.T) {
+	decoder, err := NewDecoderWithOutput(24000, 1)
+	require.NoError(t, err)
+
+	err = decoder.DecodePLC(nil)
+	assert.ErrorIs(t, err, errInvalidPLCFrameSize)
+
+	err = decoder.DecodePLC(make([]int16, 479))
+	assert.ErrorIs(t, err, errInvalidPLCFrameSize)
+
+	err = decoder.DecodePLC(make([]int16, 481))
+	assert.ErrorIs(t, err, errInvalidPLCFrameSize)
+
+	err = decoder.DecodePLC(make([]int16, 960))
+	assert.ErrorIs(t, err, errInvalidPLCFrameSize)
+}
+
+func TestDecodePLCStateValidation(t *testing.T) {
+	var uninitialized Decoder
+	assert.ErrorIs(t, uninitialized.DecodePLC(nil), errInvalidSampleRate)
+
+	decoder := NewDecoder()
+	decoder.channels = 0
+	assert.ErrorIs(t, decoder.DecodePLC(nil), errInvalidChannelCount)
+}
+
+func TestDecodePLCWithoutPreviousPacket(t *testing.T) {
+	decoder := NewDecoder()
+	out := make([]int16, decoder.sampleRate/50*decoder.channels)
+
+	require.NoError(t, decoder.DecodePLC(out))
+	assert.Equal(t, make([]int16, len(out)), out)
+}
+
+func TestDecodePLCUnsupportedMode(t *testing.T) {
+	decoder := NewDecoder()
+	decoder.previousMode = configurationMode(255)
+
+	err := decoder.DecodePLC(make([]int16, decoder.sampleRate/50*decoder.channels))
+	assert.ErrorIs(t, err, errUnsupportedConfigurationMode)
+}
+
+func TestDecodePLCUsesCELTForRedundancy(t *testing.T) {
+	decoder := NewDecoder()
+	decoder.previousMode = configurationModeSilkOnly
+	decoder.previousRedundancy = true
+	decoder.lastPacketBandwidth = BandwidthWideband
+
+	require.NoError(t, decoder.DecodePLC(make([]int16, decoder.sampleRate/50*decoder.channels)))
+}
+
+func TestDecodePLCFrameErrors(t *testing.T) {
+	decoder := NewDecoder()
+	out := make([]float32, decoder.sampleRate/50*decoder.channels)
+	decoder.lastPacketBandwidth = Bandwidth(255)
+
+	assert.Error(t, decoder.decodeCeltPLCFrame(out, decoder.sampleRate/50, false))
+	assert.Error(t, decoder.decodeHybridPLCFrame(out, decoder.sampleRate/50))
+	assert.Error(t, decoder.decodeSilkPLCFrame(out, 0, BandwidthWideband, false))
+	assert.Error(t, decoder.decodeSilkPLCFrame(out, decoder.sampleRate/50, Bandwidth(255), false))
+}
+
+func TestCopyChannels(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		in             []float32
+		inputChannels  int
+		outputChannels int
+		expected       []float32
+	}{
+		{name: "same", in: []float32{0.25, 0.5}, inputChannels: 2, outputChannels: 2, expected: []float32{0.25, 0.5}},
+		{name: "mono to stereo", in: []float32{0.25}, inputChannels: 1, outputChannels: 2, expected: []float32{0.25, 0.25}},
+		{name: "stereo to mono", in: []float32{0.25, 0.75}, inputChannels: 2, outputChannels: 1, expected: []float32{0.5}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			out := make([]float32, len(test.expected))
+			copyChannels(out, test.in, test.inputChannels, test.outputChannels, 1)
+			assert.Equal(t, test.expected, out)
+		})
+	}
+}
+
+func TestDecodePLCModes(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		configuration Configuration
+		frameSamples  int
+	}{
+		{name: "SILK", configuration: 8, frameSamples: 480},
+		{name: "Hybrid", configuration: 12, frameSamples: 480},
+		{name: "CELT", configuration: 16, frameSamples: 120},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			decoder := NewDecoder()
+			packet := []byte{byte(test.configuration << 3)}
+			_, err := decoder.DecodeToFloat32(packet, make([]float32, test.frameSamples))
+			require.NoError(t, err)
+
+			require.NoError(t, decoder.DecodePLC(make([]int16, 960)))
+		})
+	}
 }
 
 func TestDecodeSilkFrameDurations(t *testing.T) {

@@ -80,6 +80,9 @@ type Decoder struct {
 	pitchLags             []int
 	bQ7                   [][]int8
 	bQ7Data               []int8
+	plcLossCount          int
+	plcRandSeed           uint32
+	plcConcealedEnergy    float64
 }
 
 // NewDecoder creates a new Silk Decoder.
@@ -106,6 +109,9 @@ func (d *Decoder) resetPredictionState() {
 	d.previousFrameLPCValues = nil
 	clear(d.finalOutValues)
 	d.n0Q15 = nil
+	d.plcLossCount = 0
+	d.plcRandSeed = 0
+	d.plcConcealedEnergy = 0
 }
 
 // RFC 6716 Sections 4.2.7.4, 4.2.7.5.5, and 4.2.7.6.1 require the side
@@ -2261,8 +2267,10 @@ func (d *Decoder) decodeFrame(
 		aQ12,
 		gainQ16, out,
 	)
+	d.gluePLCFrame(out)
 
 	d.isPreviousFrameVoiced = signalType == frameSignalTypeVoiced
+	d.plcRandSeed = lcgSeed
 
 	// n0Q15 is the LSF coefficients decoded for the prior frame
 	// see normalizeLSFInterpolation.

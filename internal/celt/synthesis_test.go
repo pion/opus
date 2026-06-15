@@ -259,8 +259,9 @@ func TestInverseMDCTAndDeemphasisHelpers(t *testing.T) {
 	assert.NotZero(t, decoder.preemphasisMem[1])
 }
 
-func TestDecodeLostFrameClearsPostfilterHistory(t *testing.T) {
+func TestDecodeLostFrameSynthesizesAndPreservesHistory(t *testing.T) {
 	decoder := NewDecoder()
+	decoder.previousLogE[0][0] = 4
 	decoder.postfilterMem[0][0] = 1
 	decoder.postfilterMem[1][0] = 2
 	out := make([]float32, shortBlockSampleCount)
@@ -268,6 +269,28 @@ func TestDecodeLostFrameClearsPostfilterHistory(t *testing.T) {
 	err := decoder.Decode(nil, out, false, 1, shortBlockSampleCount, 0, maxBands)
 
 	require.NoError(t, err)
-	assert.Zero(t, vectorEnergy(decoder.postfilterMem[0]))
-	assert.Zero(t, vectorEnergy(decoder.postfilterMem[1]))
+	assert.NotZero(t, vectorEnergy(out))
+	assert.NotZero(t, vectorEnergy(decoder.postfilterMem[0]))
+	assert.NotZero(t, vectorEnergy(decoder.postfilterMem[1]))
+}
+
+func TestDecodeConsecutiveLostFrameUsesFallbackSeed(t *testing.T) {
+	decoder := NewDecoder()
+	decoder.lossCount = 1
+	decoder.rng = 0
+	decoder.previousLogE[0][0] = 4
+	decoder.previousLogE[1][0] = 2
+	out := make([]float32, 2*shortBlockSampleCount)
+
+	decoder.decodeLostFrame(&frameSideInfo{
+		startBand:          0,
+		endBand:            maxBands,
+		channelCount:       2,
+		outputChannelCount: 2,
+		outputSampleRate:   sampleRate,
+	}, out)
+	assert.Equal(t, float32(3.5), decoder.previousLogE[0][0])
+	assert.Equal(t, float32(1.5), decoder.previousLogE[1][0])
+	assert.NotZero(t, decoder.rng)
+	assert.Equal(t, 2, decoder.lossCount)
 }
