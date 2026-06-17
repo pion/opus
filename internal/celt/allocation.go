@@ -49,6 +49,7 @@ func (d *Decoder) computeAllocation(info *frameSideInfo, bits int) allocationSta
 		info.lm,
 		&d.rangeDecoder,
 		nil,
+		0,
 	)
 	state.balance = balance
 
@@ -71,6 +72,7 @@ func computeAllocation(
 	lm int,
 	rangeDecoder *rangecoding.Decoder,
 	rangeEncoder *rangecoding.Encoder,
+	targetIntensity int,
 ) int {
 	if total < 0 {
 		total = 0
@@ -197,6 +199,7 @@ func computeAllocation(
 		lm,
 		rangeDecoder,
 		rangeEncoder,
+		targetIntensity,
 	)
 }
 
@@ -224,6 +227,7 @@ func interpolateBitsToPulses(
 	lm int,
 	rangeDecoder *rangecoding.Decoder,
 	rangeEncoder *rangecoding.Encoder,
+	targetIntensity int,
 ) int {
 	allocationFloor := channelCount << bitResolution
 	stereo := boolIndex(channelCount > 1)
@@ -329,7 +333,8 @@ func interpolateBitsToPulses(
 		if rangeDecoder != nil {
 			value, _ = rangeDecoder.DecodeUniform(uint32(codedBands + 1 - start))
 		} else {
-			value = uint32(codedBands)
+			// targetIntensity is an absolute band index; value is relative to start.
+			value = uint32(min(targetIntensity-start, codedBands))
 			rangeEncoder.EncodeUniform(uint32(codedBands+1-start), value)
 		}
 		*intensity = start + int(value)
@@ -479,6 +484,28 @@ func pulsesToBits(band, lm, pulses int) int {
 	cacheStart := int(pulseCacheIndex[lm*maxBands+band])
 
 	return int(pulseCacheBits[cacheStart+pulses]) + 1
+}
+
+func intensityStartBand(bitrateBps, frameMs int) int {
+	framesPerSec := 1000 / frameMs
+	effectiveKbps := (bitrateBps - 80*framesPerSec) / 1000
+
+	switch {
+	case effectiveKbps < 35:
+		return 8
+	case effectiveKbps < 50:
+		return 12
+	case effectiveKbps < 68:
+		return 16
+	case effectiveKbps < 84:
+		return 17
+	case effectiveKbps < 102:
+		return 19
+	case effectiveKbps < 130:
+		return 20
+	default:
+		return maxBands
+	}
 }
 
 // decodeFineEnergy applies the first RFC 6716 Section 4.3.2.2 fine-energy

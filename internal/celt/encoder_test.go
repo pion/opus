@@ -213,3 +213,45 @@ func TestEncodeBandThetaAllCases(t *testing.T) {
 	encodeBandTheta(2, 4, 2, true, 1, &enc.rangeEncoder)
 	encodeBandTheta(2, 4, 4, false, 1, &enc.rangeEncoder)
 }
+
+func TestEncodeFrameStereoIntensityLowBitrate(t *testing.T) {
+	assertStereoFinalRangeMatch(t, 20)
+}
+
+func TestEncodeFrameStereoIntensityHighBitrate(t *testing.T) {
+	assertStereoFinalRangeMatch(t, 120)
+}
+
+func TestEncodeFrameStereoIntensityBitrateSweep(t *testing.T) {
+	for _, frameBytes := range []int{10, 20, 30, 60, 90, 120} {
+		t.Run("", func(t *testing.T) {
+			assertStereoFinalRangeMatch(t, frameBytes)
+		})
+	}
+}
+
+func assertStereoFinalRangeMatch(t *testing.T, frameBytes int) {
+	t.Helper()
+
+	encoder := NewEncoder()
+	decoder := NewDecoder()
+
+	frameSampleCount := shortBlockSampleCount << maxLM
+
+	L := make([]float32, frameSampleCount)
+	R := make([]float32, frameSampleCount)
+	for i := range frameSampleCount {
+		L[i] = float32(math.Sin(2 * math.Pi * 440 * float64(i) / sampleRate))
+		R[i] = float32(math.Sin(2 * math.Pi * 660 * float64(i) / sampleRate))
+	}
+
+	data, err := encoder.EncodeFrame([][]float32{L, R}, frameBytes, 0, maxBands)
+	require.NoError(t, err)
+	require.NotEmpty(t, data)
+
+	out := make([]float32, frameSampleCount*2)
+	require.NoError(t, decoder.Decode(data, out, true, 2, frameSampleCount, 0, maxBands))
+
+	assert.Equal(t, encoder.FinalRange(), decoder.FinalRange(),
+		"range coder must be in sync at frameBytes=%d", frameBytes)
+}

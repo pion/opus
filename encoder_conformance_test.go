@@ -83,6 +83,15 @@ func TestRFC6716ConformanceEncoder(t *testing.T) {
 				return encoderConformanceTone(i, 440, 17)
 			},
 		},
+		{
+			name:     "stereo_broadband_low_bitrate",
+			channels: 2,
+			bitrate:  48000,
+			sample: func(i, channel int) float64 {
+				seed := uint64(i*2+channel)*6364136223846793005 + 1442695040888963407
+				return (float64(int64(seed>>33)) / float64(1<<30)) * 0.25
+			},
+		},
 	}
 
 	for _, testCase := range cases {
