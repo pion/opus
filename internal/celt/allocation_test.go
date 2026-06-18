@@ -80,3 +80,37 @@ func rangeDecoderWithRawBits(bits byte) rangecoding.Decoder {
 
 	return decoder
 }
+
+func TestIntensityStartBand(t *testing.T) {
+	// RFC 6716 Table 66 thresholds for 20ms frames (frameMs=20, framesPerSec=50).
+	// effectiveKbps = (bitrateBps - 80*50) / 1000.
+	cases := []struct {
+		bitrateBps int
+		startBand  int
+	}{
+		{32000, 8},
+		{45000, 12},
+		{64000, 16},
+		{96000, 19},
+		{128000, 20},
+		{160000, maxBands},
+	}
+
+	for _, tc := range cases {
+		t.Run("", func(t *testing.T) {
+			got := intensityStartBand(tc.bitrateBps, 20)
+			assert.Equal(t, tc.startBand, got,
+				"bitrateBps=%d", tc.bitrateBps)
+		})
+	}
+}
+
+func TestIntensityStartBandMonotonic(t *testing.T) {
+	prev := 0
+	for bitrate := range 200000 {
+		got := intensityStartBand(bitrate, 20)
+		assert.GreaterOrEqual(t, got, prev,
+			"intensity must be monotonically non-decreasing: bitrate=%d got=%d prev=%d", bitrate, got, prev)
+		prev = got
+	}
+}
