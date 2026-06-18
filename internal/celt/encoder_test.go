@@ -206,6 +206,32 @@ func TestEncodeFrameStereoSeparatedBands(t *testing.T) {
 	assert.Greater(t, vectorEnergy(out), 1e-6)
 }
 
+func TestEncodeFrameStereoDualStereoRoundTrip(t *testing.T) {
+	encoder := NewEncoder()
+	decoder := NewDecoder()
+
+	frameSampleCount := shortBlockSampleCount << maxLM
+	frameBytes := 120
+
+	L := make([]float32, frameSampleCount)
+	R := make([]float32, frameSampleCount)
+	for i := range frameSampleCount {
+		L[i] = float32(math.Sin(2 * math.Pi * 440 * float64(i) / sampleRate))
+		R[i] = float32(math.Cos(2 * math.Pi * 1200 * float64(i) / sampleRate))
+	}
+
+	data, err := encoder.EncodeFrame([][]float32{L, R}, frameBytes, 0, maxBands)
+	require.NoError(t, err)
+	require.NotEmpty(t, data)
+
+	out := make([]float32, frameSampleCount*2)
+	require.NoError(t, decoder.Decode(data, out, true, 2, frameSampleCount, 0, maxBands))
+
+	assert.Equal(t, encoder.FinalRange(), decoder.FinalRange(),
+		"range coder must be in sync at frameBytes=%d", frameBytes)
+	assert.Greater(t, vectorEnergy(out), 1e-6)
+}
+
 func TestEncodeBandThetaAllCases(t *testing.T) {
 	enc := NewEncoder()
 	enc.rangeEncoder.Init()

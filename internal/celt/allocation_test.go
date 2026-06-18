@@ -114,3 +114,51 @@ func TestIntensityStartBandMonotonic(t *testing.T) {
 		prev = got
 	}
 }
+
+func TestChooseDualStereo(t *testing.T) {
+	n := int(bandEdges[13]) * 4 // lm=2 → scale=4, enough for 13 bands
+	t.Run("MonoSignal", func(t *testing.T) {
+		mdctL := make([]float32, n)
+		mdctR := make([]float32, n)
+		for i := range n {
+			v := float32(i) * 0.01
+			mdctL[i] = v
+			mdctR[i] = v
+		}
+		assert.False(t, chooseDualStereo(mdctL, mdctR, 2),
+			"identical L/R (mono) should always prefer mid/side")
+	})
+
+	t.Run("UncorrelatedSignal", func(t *testing.T) {
+		mdctL := make([]float32, n)
+		mdctR := make([]float32, n)
+		for i := range n {
+			mdctL[i] = float32(i) * 0.1
+			mdctR[i] = float32(n-i) * 0.1
+		}
+		assert.True(t, chooseDualStereo(mdctL, mdctR, 2),
+			"uncorrelated L/R should prefer dual stereo")
+	})
+
+	t.Run("AntiCorrelatedSignal", func(t *testing.T) {
+		mdctL := make([]float32, n)
+		mdctR := make([]float32, n)
+		for i := range n {
+			mdctL[i] = float32(i) * 0.1
+			mdctR[i] = -float32(i) * 0.1
+		}
+		assert.False(t, chooseDualStereo(mdctL, mdctR, 2),
+			"fully anti-correlated stereo should prefer mid/side")
+	})
+
+	t.Run("Lm0ReturnsFalse", func(t *testing.T) {
+		mdctL := make([]float32, n)
+		mdctR := make([]float32, n)
+		for i := range n {
+			mdctL[i] = float32(i) * 0.1
+			mdctR[i] = -float32(i) * 0.1
+		}
+		assert.False(t, chooseDualStereo(mdctL, mdctR, 0),
+			"LM=0 must always return false per RFC §5.3.5")
+	})
+}

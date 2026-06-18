@@ -252,13 +252,17 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, frameBytes, startBand, endBand in
 	info.antiCollapseRsv = 0
 	bits -= info.antiCollapseRsv
 	targetIntensity := 0
+	targetDualStereo := 0
 	if info.channelCount == 2 {
 		frameSampleCount := shortBlockSampleCount << info.lm
 		bitrateBps := int(info.totalBits) * sampleRate / frameSampleCount
 		frameMs := max(1, frameSampleCount*1000/sampleRate)
 		targetIntensity = intensityStartBand(bitrateBps, frameMs)
+		if chooseDualStereo(analysis.mdct[0], analysis.mdct[1], info.lm) {
+			targetDualStereo = 1
+		}
 	}
-	info.allocation = e.computeAllocationMono(&info, bits, targetIntensity)
+	info.allocation = e.computeAllocationMono(&info, bits, targetIntensity, targetDualStereo)
 	e.encodeFineEnergy(&info, info.allocation.fineQuant, targetLogE)
 
 	totalBits := (int(info.totalBits) << bitResolution) - info.antiCollapseRsv
@@ -378,7 +382,9 @@ func (e *Encoder) encodeFineEnergy(info *frameSideInfo, fineQuant [maxBands]int,
 	}
 }
 
-func (e *Encoder) computeAllocationMono(info *frameSideInfo, bits int, targetIntensity int) allocationState {
+func (e *Encoder) computeAllocationMono(
+	info *frameSideInfo, bits, targetIntensity, targetDualStereo int,
+) allocationState {
 	state := allocationState{bits: bits}
 	caps := allocationCaps(info.lm, info.channelCount)
 	balance := 0
@@ -400,6 +406,7 @@ func (e *Encoder) computeAllocationMono(info *frameSideInfo, bits int, targetInt
 		nil,
 		&e.rangeEncoder,
 		targetIntensity,
+		targetDualStereo,
 	)
 	state.balance = balance
 
