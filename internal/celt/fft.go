@@ -83,7 +83,7 @@ func newFFTPlan(n int) *fftPlan {
 }
 
 //nolint:cyclop // Cooley-Tukey mixed-radix FFT: three passes + un-permute.
-func fft(in []complex32) {
+func fftWithScratch(in []complex32, scratch *[]complex32) {
 	n := len(in)
 	if n <= 1 {
 		return
@@ -97,16 +97,19 @@ func fft(in []complex32) {
 		return
 	}
 
-	scratch := make([]complex32, n+plan.odd)
+	if cap(*scratch) < n+plan.odd {
+		*scratch = make([]complex32, n+plan.odd)
+	}
+	scratchBuf := (*scratch)[:n+plan.odd]
 
 	for col := range plan.pow2 {
-		colBuf := scratch[col*plan.odd : (col+1)*plan.odd]
+		colBuf := scratchBuf[col*plan.odd : (col+1)*plan.odd]
 		for row := range plan.odd {
 			colBuf[row] = in[row*plan.pow2+col]
 		}
-		directDFT(colBuf, scratch[n:], plan.directTwiddles, plan.odd)
+		directDFT(colBuf, scratchBuf[n:], plan.directTwiddles, plan.odd)
 		for row := range plan.odd {
-			in[row*plan.pow2+col] = scratch[n+row]
+			in[row*plan.pow2+col] = scratchBuf[n+row]
 		}
 	}
 
@@ -129,10 +132,16 @@ func fft(in []complex32) {
 		for k2 := range plan.pow2 {
 			p := k1*plan.pow2 + k2
 			q := k1 + k2*plan.odd
-			scratch[q] = in[p]
+			scratchBuf[q] = in[p]
 		}
 	}
-	copy(in, scratch[:n])
+	copy(in, scratchBuf[:n])
+}
+
+//nolint:cyclop // Cooley-Tukey mixed-radix FFT: three passes + un-permute.
+func fft(in []complex32) {
+	var scratch []complex32
+	fftWithScratch(in, &scratch)
 }
 
 func fftRadix2(in []complex32, plan *fftPlan) {

@@ -27,7 +27,9 @@ type Encoder struct {
 	previousLogE1 [2][maxBands]float32
 	previousLogE2 [2][maxBands]float32
 
-	analysis analysisState
+	analysis    analysisState
+	mdctScratch forwardMDCTScratch
+	fftScratch  []complex32
 }
 
 func NewEncoder() Encoder {
@@ -219,7 +221,9 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, frameBytes, startBand, endBand in
 
 	e.rangeEncoder.Init()
 
-	analysis, err := analyzeFrame(e.mode, pcm, startBand, endBand, &e.analysis)
+	analysis, err := analyzeFrame(
+		e.mode, pcm, startBand, endBand, &e.analysis, &e.mdctScratch, &e.fftScratch,
+	)
 	if err != nil {
 		return nil, err
 	}
