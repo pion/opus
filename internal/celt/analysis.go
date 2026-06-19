@@ -12,6 +12,8 @@ const preemphasisCoefficient = 0.85000610
 type analysisState struct {
 	prevPCM        [2][]float32
 	preemphasisMem [2]float32
+	preScratch     [2][]float32
+	mdctInput      [2][]float32
 }
 
 type analysisResult struct {
@@ -21,17 +23,31 @@ type analysisResult struct {
 }
 
 func newAnalysisState() analysisState {
-	return analysisState{
+	maxFrame := shortBlockSampleCount << maxLM
+	state := analysisState{
 		prevPCM: [2][]float32{
 			make([]float32, shortBlockSampleCount),
 			make([]float32, shortBlockSampleCount),
 		},
+		preScratch: [2][]float32{
+			make([]float32, maxFrame),
+			make([]float32, maxFrame),
+		},
+		mdctInput: [2][]float32{
+			make([]float32, shortBlockSampleCount+maxFrame),
+			make([]float32, shortBlockSampleCount+maxFrame),
+		},
 	}
+
+	return state
 }
 
 // analyzeFrame applies pre-emphasis, builds the MDCT overlap window, runs the
 // forward MDCT, and returns per-band log amplitude for each input channel.
-func analyzeFrame(mode *Mode, pcm [][]float32, startBand, endBand int, state *analysisState) (analysisResult, error) {
+func analyzeFrame(
+	mode *Mode, pcm [][]float32, startBand, endBand int,
+	state *analysisState, mdctScratch *forwardMDCTScratch, fftScratch *[]complex32,
+) (analysisResult, error) {
 	lm, err := mode.LMForFrameSampleCount(len(pcm[0]))
 	if err != nil {
 		return analysisResult{}, err
@@ -50,14 +66,14 @@ func analyzeFrame(mode *Mode, pcm [][]float32, startBand, endBand int, state *an
 	}
 
 	for ch := range pcm {
-		pre := make([]float32, len(pcm[ch]))
+		pre := state.preScratch[ch][:len(pcm[ch])]
 		applyPreemphasis(pcm[ch], pre, &state.preemphasisMem[ch])
 
-		mdctInput := make([]float32, shortBlockSampleCount+len(pre))
+		mdctInput := state.mdctInput[ch][:shortBlockSampleCount+len(pre)]
 		copy(mdctInput, state.prevPCM[ch])
 		copy(mdctInput[shortBlockSampleCount:], pre)
 
-		res.mdct[ch] = forwardMDCT(mdctInput)
+		res.mdct[ch] = forwardMDCTWithScratch(mdctInput, ch, mdctScratch, fftScratch)
 		if res.mdct[ch] == nil {
 			return analysisResult{}, errInvalidFrameSize
 		}

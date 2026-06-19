@@ -11,6 +11,54 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func BenchmarkEncodeFrameMono(b *testing.B) {
+	b.ReportAllocs()
+
+	frameSampleCount := shortBlockSampleCount << maxLM
+	frameBytes := 60
+
+	pcm := make([]float32, frameSampleCount)
+	for i := range pcm {
+		pcm[i] = float32(math.Sin(2 * math.Pi * 440 * float64(i) / sampleRate))
+	}
+
+	encoder := NewEncoder()
+	input := [][]float32{pcm}
+
+	b.ResetTimer()
+	for range b.N {
+		_, err := encoder.EncodeFrame(input, frameBytes, 0, maxBands)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkEncodeFrameStereo(b *testing.B) {
+	b.ReportAllocs()
+
+	frameSampleCount := shortBlockSampleCount << maxLM
+	frameBytes := 120
+
+	L := make([]float32, frameSampleCount)
+	R := make([]float32, frameSampleCount)
+	for i := range frameSampleCount {
+		L[i] = float32(math.Sin(2 * math.Pi * 440 * float64(i) / sampleRate))
+		R[i] = float32(math.Sin(2 * math.Pi * 660 * float64(i) / sampleRate))
+	}
+
+	encoder := NewEncoder()
+	input := [][]float32{L, R}
+
+	b.ResetTimer()
+	for range b.N {
+		_, err := encoder.EncodeFrame(input, frameBytes, 0, maxBands)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func TestEncodeFrameRoundTripMono20ms(t *testing.T) {
 	encoder := NewEncoder()
 	decoder := NewDecoder()
