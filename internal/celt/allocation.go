@@ -4,7 +4,9 @@
 //nolint:cyclop,gocognit,gocyclo,gosec,lll,maintidx,nestif,nlreturn,wastedassign // Mirrors RFC 6716 allocation flow and bounded entropy-code arithmetic.
 package celt
 
-import "github.com/pion/opus/internal/rangecoding"
+import (
+	"github.com/pion/opus/internal/rangecoding"
+)
 
 const (
 	allocationSteps = 6
@@ -50,6 +52,7 @@ func (d *Decoder) computeAllocation(info *frameSideInfo, bits int) allocationSta
 		&d.rangeDecoder,
 		nil,
 		0,
+		0,
 	)
 	state.balance = balance
 
@@ -73,6 +76,7 @@ func computeAllocation(
 	rangeDecoder *rangecoding.Decoder,
 	rangeEncoder *rangecoding.Encoder,
 	targetIntensity int,
+	targetDualStereo int,
 ) int {
 	if total < 0 {
 		total = 0
@@ -200,6 +204,7 @@ func computeAllocation(
 		rangeDecoder,
 		rangeEncoder,
 		targetIntensity,
+		targetDualStereo,
 	)
 }
 
@@ -228,6 +233,7 @@ func interpolateBitsToPulses(
 	rangeDecoder *rangecoding.Decoder,
 	rangeEncoder *rangecoding.Encoder,
 	targetIntensity int,
+	targetDualStereo int,
 ) int {
 	allocationFloor := channelCount << bitResolution
 	stereo := boolIndex(channelCount > 1)
@@ -333,8 +339,11 @@ func interpolateBitsToPulses(
 		if rangeDecoder != nil {
 			value, _ = rangeDecoder.DecodeUniform(uint32(codedBands + 1 - start))
 		} else {
-			// targetIntensity is an absolute band index; value is relative to start.
-			value = uint32(min(targetIntensity-start, codedBands))
+			relTarget := codedBands - start
+			if targetIntensity > 0 {
+				relTarget = min(targetIntensity-start, codedBands-start)
+			}
+			value = uint32(max(relTarget, 0))
 			rangeEncoder.EncodeUniform(uint32(codedBands+1-start), value)
 		}
 		*intensity = start + int(value)
@@ -349,8 +358,12 @@ func interpolateBitsToPulses(
 		if rangeDecoder != nil {
 			*dualStereo = int(rangeDecoder.DecodeSymbolLogP(1))
 		} else {
-			rangeEncoder.EncodeSymbolLogP(1, 0)
-			*dualStereo = 0
+			dualStereoValue := uint32(0)
+			if targetDualStereo > 0 && *intensity > start {
+				dualStereoValue = 1
+			}
+			rangeEncoder.EncodeSymbolLogP(1, dualStereoValue)
+			*dualStereo = int(dualStereoValue)
 		}
 	} else {
 		*dualStereo = 0
@@ -546,4 +559,60 @@ func (d *Decoder) finalizeFineEnergy(
 			}
 		}
 	}
+}
+
+// chooseDualStereo implements the L1-norm stereo decision from libopus
+// (celt_encoder.c:stereo_analysis). It returns true when dual stereo
+// (independent L/R) is preferred over mid/side coupling.
+//
+// The criterion compares the L1 norm of the mid/side spectrum (scaled by
+// 1/sqrt(2)) against the L1 norm of the L/R spectrum. Dual stereo wins
+// when the M/S representation is relatively expensive — i.e. when the
+// channels are uncorrelated.
+//
+// Mirrors libopus with QCONST16(0.707107f,15) = 23170 for the Q15 scale.
+func chooseDualStereo(mdctL, mdctR []float32, lm int) bool {
+	if lm == 0 {
+		return false
+	}
+
+	scale := 1 << lm
+	var sumLR int64
+	var sumMS int64
+
+	mdctLen := min(len(mdctL), len(mdctR))
+	for band := 0; band < 13 && band+1 < len(bandEdges); band++ {
+		bandStart := scale * int(bandEdges[band])
+		bandEnd := min(scale*int(bandEdges[band+1]), mdctLen)
+		if bandStart >= mdctLen {
+			break
+		}
+
+		for i := bandStart; i < bandEnd; i++ {
+			l := int64(mdctL[i] * (1 << 14))
+			r := int64(mdctR[i] * (1 << 14))
+			m := l + r
+			s := l - r
+			sumLR += abs64(l) + abs64(r)
+			sumMS += abs64(m) + abs64(s)
+		}
+	}
+
+	sumMS = (sumMS * 23170) >> 15
+
+	thetas := 13
+	if lm <= 1 {
+		thetas = 5
+	}
+
+	bins := int64(scale * int(bandEdges[13]))
+
+	return (bins+int64(thetas))*sumMS > bins*sumLR
+}
+
+func abs64(x int64) int64 {
+	if x < 0 {
+		return -x
+	}
+	return x
 }
