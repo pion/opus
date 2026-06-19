@@ -112,10 +112,10 @@ func (e *Encoder) encodePostFilter(info *frameSideInfo) {
 	}
 }
 
-// encodeTransientFlag writes the RFC 6716 Section 4.3.1 transient flag (no transient).
+// encodeTransientFlag writes the RFC 6716 Section 4.3.1 transient flag.
 func (e *Encoder) encodeTransientFlag(info *frameSideInfo) {
 	if info.lm > 0 && e.rangeEncoder.Tell()+3 <= info.totalBits {
-		e.rangeEncoder.EncodeSymbolLogP(3, 0)
+		e.rangeEncoder.EncodeSymbolLogP(3, uint32(boolIndex(info.transient)))
 	}
 }
 
@@ -158,6 +158,13 @@ func (e *Encoder) encodeTimeFrequencyChanges(info *frameSideInfo) {
 		table[4*boolIndex(info.transient)] !=
 			table[4*boolIndex(info.transient)+2] {
 		e.rangeEncoder.EncodeSymbolLogP(1, 0)
+	}
+	// decodeTimeFrequencyChanges remaps the raw tf_change bits through Tables
+	// 60-63 (RFC 6716 §4.3.1) before handing info to quantAllBands. I have to
+	// do the same here; without it the encoder passes tfChange=0 while the
+	// decoder sees tfChange=3 on transient frames, desynchronising the range coder.
+	for band := info.startBand; band < info.endBand; band++ {
+		info.tfChange[band] = int(table[4*boolIndex(info.transient)+info.tfChange[band]])
 	}
 }
 
@@ -221,8 +228,10 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, frameBytes, startBand, endBand in
 
 	e.rangeEncoder.Init()
 
+	transient := detectTransient(pcm, &e.analysis)
 	analysis, err := analyzeFrame(
 		e.mode, pcm, startBand, endBand, &e.analysis, &e.mdctScratch, &e.fftScratch,
+		transient,
 	)
 	if err != nil {
 		return nil, err
@@ -254,6 +263,9 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, frameBytes, startBand, endBand in
 	tellFrac := int(e.rangeEncoder.TellFrac())
 	bits := (int(info.totalBits) << bitResolution) - tellFrac - 1
 	info.antiCollapseRsv = 0
+	if info.transient && info.lm >= 2 && bits >= (info.lm+2)<<bitResolution {
+		info.antiCollapseRsv = 1 << bitResolution
+	}
 	bits -= info.antiCollapseRsv
 	targetIntensity := 0
 	targetDualStereo := 0
@@ -280,6 +292,13 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, frameBytes, startBand, endBand in
 		_ = quantAllBandsStereo(&info, shape0, shape1, totalBits, &bandState)
 	} else {
 		_ = quantAllBandsMono(&info, shape0, totalBits, &bandState)
+	}
+
+	if info.antiCollapseRsv > 0 {
+		// RFC 6716 §4.3.5 puts one raw tail bit here right after the band
+		// residuals; the decoder reads it before finalizeFineEnergy. I always
+		// write 0 — the noise injection it controls is left for a later pass.
+		e.rangeEncoder.EncodeRawBits(1, 0)
 	}
 
 	bitsLeft := int(info.totalBits) - int(e.rangeEncoder.Tell())

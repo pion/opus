@@ -174,6 +174,10 @@ func forwardMDCTWithScratch(
 		deshuffled[overlap/2-1-i] = -time[i] * windowValue
 	}
 
+	for i := overlap / 2; i < n4; i++ {
+		deshuffled[i] = time[overlap/2+i]
+	}
+
 	for i := range leftPlain {
 		deshuffled[n4+i] = time[n4+overlap/2+i]
 	}
