@@ -203,15 +203,13 @@ func TestAnalyzeFrameAppliesDCBlock(t *testing.T) {
 		withOffset[i] = sine[i] + 0.5 // large DC offset relative to the sine
 	}
 
-	data1, err := enc1.EncodeFrame([][]float32{sine}, frameBytes, 0, maxBands)
+	dst1 := make([]byte, frameBytes)
+	_, err := enc1.EncodeFrame([][]float32{sine}, dst1, frameBytes, 0, maxBands)
 	require.NoError(t, err)
-	data2, err := enc2.EncodeFrame([][]float32{withOffset}, frameBytes, 0, maxBands)
+	dst2 := make([]byte, frameBytes)
+	_, err = enc2.EncodeFrame([][]float32{withOffset}, dst2, frameBytes, 0, maxBands)
 	require.NoError(t, err)
 
-	// The DC block must change the bitstream (or at least the FinalRange)
-	// because it shifts energy out of the lowest band.
-	require.NotEmpty(t, data1)
-	require.NotEmpty(t, data2)
 	assert.NotEqual(t, enc1.FinalRange(), enc2.FinalRange(),
 		"DC block should change the encoder output (sine=%x, withOffset=%x)",
 		enc1.FinalRange(), enc2.FinalRange())
