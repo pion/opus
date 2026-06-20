@@ -229,27 +229,31 @@ func (e *Encoder) encodeAllocationTrim(info *frameSideInfo, totalBitsEighth uint
 	}
 }
 
-// EncodeFrame encodes one CELT frame from float PCM.
+// EncodeFrame encodes one CELT frame from float PCM into dst.
+// It returns the number of bytes written. dst must be at least frameBytes long.
 //
 //nolint:cyclop // The frame encoder mirrors RFC 6716 flow and is intentionally linear.
-func (e *Encoder) EncodeFrame(pcm [][]float32, frameBytes, startBand, endBand int) ([]byte, error) {
+func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand, endBand int) (int, error) {
 	if e.Mode() == nil {
 		e.mode = DefaultMode()
 	}
 	if len(pcm) != 1 && len(pcm) != 2 {
-		return nil, errInvalidChannelCount
+		return 0, errInvalidChannelCount
 	}
 	frameSamples := shortBlockSampleCount << e.mode.MaxLM()
 	for ch := range pcm {
 		if len(pcm[ch]) != frameSamples {
-			return nil, errInvalidFrameSize
+			return 0, errInvalidFrameSize
 		}
 	}
 	if startBand < 0 || startBand >= e.mode.BandCount() {
-		return nil, errInvalidBand
+		return 0, errInvalidBand
 	}
 	if endBand <= startBand || endBand > e.mode.BandCount() {
-		return nil, errInvalidBand
+		return 0, errInvalidBand
+	}
+	if len(dst) < frameBytes {
+		return 0, errDstTooSmall
 	}
 
 	e.rangeEncoder.Init()
@@ -260,14 +264,14 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, frameBytes, startBand, endBand in
 		transient,
 	)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
 
 	info := analysis.info
 	info.totalBits = uint(frameBytes) * 8
 
 	if e.rangeEncoder.Tell() > info.totalBits {
-		return e.rangeEncoder.Done(), nil
+		return e.rangeEncoder.FlushInto(dst), nil
 	}
 
 	e.encodeSilenceFlag()
@@ -337,7 +341,7 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, frameBytes, startBand, endBand in
 
 	e.rng = e.rangeEncoder.FinalRange()
 
-	return e.rangeEncoder.Done(), nil
+	return e.rangeEncoder.FlushInto(dst), nil
 }
 
 func smallEnergySymbol(delta int) uint32 {

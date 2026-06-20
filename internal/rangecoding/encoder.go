@@ -378,35 +378,66 @@ func (e *Encoder) FinalRange() uint32 {
 //     Any space between the range coder data and the raw bits is zero-padded.
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-5.1.5
+// Done finalizes the frame and returns the encoded bytes as a new slice.
+// Use FlushInto when the caller can provide the destination buffer to avoid
+// the allocation.
 func (e *Encoder) Done() []byte {
-	remainingBits := e.flushRangeCoder()
+	remainingBits := e.flush()
+	n := e.outputSize(remainingBits)
+	out := make([]byte, n)
+	e.writeOutput(out, n, remainingBits)
 
+	return out
+}
+
+// FlushInto finalizes the frame and writes the encoded bytes into dst without
+// allocating. dst must have length >= frameBytes. Returns the number of bytes
+// written.
+func (e *Encoder) FlushInto(dst []byte) int {
+	remainingBits := e.flush()
+	n := e.outputSize(remainingBits)
+	e.writeOutput(dst, n, remainingBits)
+
+	return n
+}
+
+func (e *Encoder) flush() int {
+	remainingBits := e.flushRangeCoder()
 	if e.rem >= 0 || e.extBytes > 0 {
 		e.carryOut(0)
 	}
 
-	freeBitsInLastRangeByte := uint(0)
+	return remainingBits
+}
+
+func (e *Encoder) outputSize(remainingBits int) int {
+	freeBits := uint(0)
 	if remainingBits < 0 {
-		freeBitsInLastRangeByte = uint(-remainingBits) //nolint:gosec // G115
+		freeBits = uint(-remainingBits) //nolint:gosec // G115
 	}
 
-	out := make([]byte, len(e.buf)+len(e.tail)+boolToInt(e.shouldWritePartialToNewByte(freeBitsInLastRangeByte)))
-	copy(out, e.buf)
+	return len(e.buf) + len(e.tail) + boolToInt(e.shouldWritePartialToNewByte(freeBits))
+}
 
+func (e *Encoder) writeOutput(dst []byte, n, remainingBits int) {
+	freeBits := uint(0)
+	if remainingBits < 0 {
+		freeBits = uint(-remainingBits) //nolint:gosec // G115
+	}
+
+	copy(dst, e.buf)
 	for index, value := range e.tail {
-		out[len(out)-1-index] = value
+		dst[n-1-index] = value
 	}
 
 	if e.nendBits > 0 {
 		partial := byte(e.endWindow & uint64(bitMask(e.nendBits))) //nolint:gosec // G115: masked to at most 8 bits.
-		if e.shouldWritePartialToNewByte(freeBitsInLastRangeByte) {
-			out[len(e.buf)] = partial
+		if e.shouldWritePartialToNewByte(freeBits) {
+			dst[len(e.buf)] = partial
 		} else {
-			out[len(e.buf)-1] |= partial
+			dst[len(e.buf)-1] |= partial
 		}
 	}
-
-	return out
 }
 
 // flushRangeCoder finalizes the range-coded portion of the frame by finding

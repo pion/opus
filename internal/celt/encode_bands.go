@@ -102,7 +102,13 @@ func quantAllBandsMono(
 		effectiveLowband := -1
 		fill := uint(0)
 		if lowbandOffset != 0 && (info.spread != spreadAggressive || blocks > 1 || info.tfChange[band] < 0) {
-			effectiveLowband = max(scale*int(bandEdges[info.startBand]), scale*int(bandEdges[lowbandOffset])-bandWidth)
+			startEdge := scale * int(bandEdges[info.startBand])
+			lowbandEdge := scale*int(bandEdges[lowbandOffset]) - bandWidth
+			if lowbandEdge > startEdge { //nolint:modernize // GoLand cannot infer T for max() on these int expressions.
+				effectiveLowband = lowbandEdge
+			} else {
+				effectiveLowband = startEdge
+			}
 			foldStart := lowbandOffset
 			for {
 				foldStart--

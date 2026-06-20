@@ -134,3 +134,18 @@ func TestCWRSEncodeDecodeRoundTrip(t *testing.T) {
 		assert.Equal(t, expected, got)
 	}
 }
+
+func TestCWRSRowFromScratchSmallK(t *testing.T) {
+	scratch := make([]uint32, cwrsMaxPulseCount+2)
+	row := cwrsRowFromScratch(scratch, 3)
+	// Small k: must return a slice backed by scratch, not a new allocation.
+	assert.Len(t, row, 5)
+	assert.Equal(t, &scratch[0], &row[0])
+}
+
+func TestCWRSRowFromScratchLargeK(t *testing.T) {
+	scratch := make([]uint32, cwrsMaxPulseCount+2)
+	// k > cwrsMaxPulseCount must allocate a new slice to avoid a bounds panic.
+	row := cwrsRowFromScratch(scratch, cwrsMaxPulseCount+1)
+	assert.Len(t, row, cwrsMaxPulseCount+3)
+}
