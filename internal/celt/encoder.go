@@ -65,19 +65,20 @@ func (e *Encoder) Reset() {
 	}
 
 	// Pre-allocate every buffer that quantAllBands* and algQuant touch so
-	// EncodeFrame stays at one alloc per frame (the output []byte from Done).
+	// EncodeFrame stays at zero allocs per frame.
+	// normalisedBands/bandNorm need maxFrameSampleCount per channel — the full
+	// MDCT spectrum (960 bins), not just the coded band range (800 bins).
 	// pvq buffers are sized for the widest band at lm=3: maxBandSize*8 bins.
 	// cwrsScratch needs k+2 slots; cwrsMaxPulseCount+2 covers all normal cases.
-	maxBins := maxFrameSampleCount << 3
 	maxBandSize := bandEdges[maxBands] - bandEdges[maxBands-1]
-	e.bandNorm = make([]float32, 0, 2*maxBins)
-	e.bandLowScratch = make([]float32, 0, maxBandSize<<3)
+	e.bandNorm = make([]float32, 0, 2*maxFrameSampleCount)
+	e.bandLowScratch = make([]float32, 0, maxBandSize<<maxLM)
 	e.bandCollapseMasks = make([]byte, 0, 2*maxBands)
 	for ch := range 2 {
-		e.pvqY[ch] = make([]int, 0, maxBandSize<<3)
-		e.pvqAbsX[ch] = make([]float32, 0, maxBandSize<<3)
-		e.pvqSign[ch] = make([]float32, 0, maxBandSize<<3)
-		e.normalisedBands[ch] = make([]float32, 0, maxBins)
+		e.pvqY[ch] = make([]int, 0, maxBandSize<<maxLM)
+		e.pvqAbsX[ch] = make([]float32, 0, maxBandSize<<maxLM)
+		e.pvqSign[ch] = make([]float32, 0, maxBandSize<<maxLM)
+		e.normalisedBands[ch] = make([]float32, 0, maxFrameSampleCount)
 	}
 	e.cwrsScratch = make([]uint32, 0, cwrsMaxPulseCount+2)
 }
