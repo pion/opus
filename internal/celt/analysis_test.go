@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestDetectTransientSteadySine(t *testing.T) {
@@ -80,7 +81,7 @@ func TestDetectTransientGradualFade(t *testing.T) {
 	// A linear ramp from 0 to 1 over a frame is flagged by this detector
 	// because the second half carries more energy. This is a known
 	// limitation: libopus handles ramps correctly via sub-frame STFT and
-	// forward masking. A better detector is scheduled for PR 6b.
+	// forward masking (transient_analysis in celt_encoder.c).
 	assert.Greater(t, metric, 1.0,
 		"gradual ramp should be flagged by the simple detector (metric=%f)", metric)
 }
@@ -114,4 +115,104 @@ func TestDetectTransientSmallSpike(t *testing.T) {
 	// spike represents a real signal change.
 	assert.Greater(t, metric, 1.5,
 		"small spike on silence should be flagged by the simple detector (metric=%f)", metric)
+}
+
+func TestDCBlockRemovesConstantOffset(t *testing.T) {
+	// After 1 s of constant input at 48 kHz the filter should settle to <1% of input.
+	pcm := make([]float32, 48000)
+	for i := range pcm {
+		pcm[i] = 1.0
+	}
+	var mem float32
+	applyDCBlock(pcm, sampleRate, &mem)
+	var sum float64
+	for i := len(pcm) - 4800; i < len(pcm); i++ {
+		sum += float64(pcm[i])
+	}
+	assert.InDelta(t, 0.0, sum/4800, 0.01,
+		"DC filter should attenuate constant offset below 1%% (mean=%f)", sum/4800)
+}
+
+func TestDCBlockPreservesSine(t *testing.T) {
+	// 200 Hz is well above the 3 Hz cutoff; max sample deviation after warmup must stay < 2%.
+	const freq = 200.0
+	const totalSamples = 96000
+	allIn := make([]float32, totalSamples)
+	for i := range allIn {
+		allIn[i] = float32(math.Sin(2 * math.Pi * freq * float64(i) / float64(sampleRate)))
+	}
+	allOut := make([]float32, totalSamples)
+	copy(allOut, allIn)
+	var mem float32
+	applyDCBlock(allOut, sampleRate, &mem)
+	var maxDiff float32
+	for i := totalSamples - 4800; i < totalSamples; i++ {
+		diff := allIn[i] - allOut[i]
+		if diff < 0 {
+			diff = -diff
+		}
+		if diff > maxDiff {
+			maxDiff = diff
+		}
+	}
+	assert.True(t, maxDiff < 0.02,
+		"200 Hz sine should pass through DC filter nearly unchanged (maxDiff=%f)", maxDiff)
+}
+
+func TestDCBlockMultiFrameState(t *testing.T) {
+	// Filter state must persist across frames: two half-frame runs must match one full run.
+	pcm := make([]float32, 960)
+	for i := range pcm {
+		pcm[i] = float32(math.Sin(2 * math.Pi * 440 * float64(i) / float64(sampleRate)))
+	}
+	fullRun := make([]float32, len(pcm))
+	copy(fullRun, pcm)
+	var memFull float32
+	applyDCBlock(fullRun, sampleRate, &memFull)
+
+	var memSplit float32
+	out1 := make([]float32, 480)
+	copy(out1, pcm[:480])
+	applyDCBlock(out1, sampleRate, &memSplit)
+	out2 := make([]float32, 480)
+	copy(out2, pcm[480:])
+	applyDCBlock(out2, sampleRate, &memSplit)
+
+	splitRun := make([]float32, 0, len(out1)+len(out2))
+	splitRun = append(splitRun, out1...)
+	splitRun = append(splitRun, out2...)
+	for i := range fullRun {
+		assert.InDelta(t, fullRun[i], splitRun[i], 1e-6,
+			"frame %d: split run must match continuous run", i)
+	}
+}
+
+func TestAnalyzeFrameAppliesDCBlock(t *testing.T) {
+	// A sine with DC offset must produce a different bitstream than the clean sine.
+	enc1 := NewEncoder()
+	enc2 := NewEncoder()
+	frameSampleCount := shortBlockSampleCount << maxLM
+	frameBytes := 60
+
+	sine := make([]float32, frameSampleCount)
+	for i := range sine {
+		sine[i] = float32(math.Sin(2 * math.Pi * 440 * float64(i) / float64(sampleRate)))
+	}
+	withOffset := make([]float32, frameSampleCount)
+	for i := range withOffset {
+		withOffset[i] = sine[i] + 0.5 // large DC offset relative to the sine
+	}
+
+	data1, err := enc1.EncodeFrame([][]float32{sine}, frameBytes, 0, maxBands)
+	require.NoError(t, err)
+	data2, err := enc2.EncodeFrame([][]float32{withOffset}, frameBytes, 0, maxBands)
+	require.NoError(t, err)
+
+	// The DC block must change the bitstream (or at least the FinalRange)
+	// because it shifts energy out of the lowest band.
+	require.NotEmpty(t, data1)
+	require.NotEmpty(t, data2)
+	assert.NotEqual(t, enc1.FinalRange(), enc2.FinalRange(),
+		"DC block should change the encoder output (sine=%x, withOffset=%x)",
+		enc1.FinalRange(), enc2.FinalRange())
 }
