@@ -95,7 +95,8 @@ func cwrsDecodeGenericForTest(vector []int, dimension, pulseCount int, index uin
 }
 
 func TestCWRSEncodeZeroPulses(t *testing.T) {
-	assert.Equal(t, uint32(0), cwrsEncode([]int{0, 0, 0}, 3, 0))
+	scratch := make([]uint32, 2)
+	assert.Equal(t, uint32(0), cwrsEncode([]int{0, 0, 0}, 3, 0, scratch))
 }
 
 func TestCWRSEncodeRoundTrip(t *testing.T) {
@@ -108,7 +109,7 @@ func TestCWRSEncodeRoundTrip(t *testing.T) {
 		vector := make([]int, n)
 		cwrsDecode(vector, n, k, index, append([]uint32(nil), row...))
 
-		encoded := cwrsEncode(vector, n, k)
+		encoded := cwrsEncode(vector, n, k, append([]uint32(nil), row...))
 		assert.Equal(t, index, encoded)
 	}
 }
@@ -124,7 +125,7 @@ func TestCWRSEncodeDecodeRoundTrip(t *testing.T) {
 	}
 
 	for _, expected := range vectors {
-		index := cwrsEncode(expected, len(expected), 2)
+		index := cwrsEncode(expected, len(expected), 2, make([]uint32, 4))
 
 		got := make([]int, len(expected))
 		row := cwrsUrow(3, 2)

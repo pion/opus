@@ -12,9 +12,12 @@ import (
 )
 
 type bandEncodeState struct {
-	rangeEncoder *rangecoding.Encoder
-	seed         uint32
-	tmpScratch   []float32
+	rangeEncoder   *rangecoding.Encoder
+	seed           uint32
+	tmpScratch     []float32
+	norm           []float32
+	lowbandScratch []float32
+	collapseMasks  []byte
 }
 
 func (s *bandEncodeState) floatScratch(n int) []float32 {
@@ -25,8 +28,9 @@ func normaliseBandsForEncoding(
 	info *frameSideInfo,
 	mdct []float32,
 	logBandAmp [maxBands]float32,
+	out []float32,
 ) []float32 {
-	out := make([]float32, len(mdct))
+	out = out[:len(mdct)]
 	scale := 1 << info.lm
 
 	for band := info.startBand; band < info.endBand; band++ {
@@ -52,6 +56,9 @@ func quantAllBandsMono(
 	x []float32,
 	totalBits int,
 	state *bandEncodeState,
+	yScratch []int,
+	absXScratch, signScratch []float32,
+	cwrsScratch []uint32,
 ) []byte {
 	blocks := 1
 	if info.transient {
@@ -59,9 +66,9 @@ func quantAllBandsMono(
 	}
 	scale := 1 << info.lm
 	frameBins := scale * int(bandEdges[maxBands])
-	norm := make([]float32, frameBins)
-	lowbandScratch := make([]float32, scale*int(bandEdges[maxBands]-bandEdges[maxBands-1]))
-	collapseMasks := make([]byte, maxBands)
+	norm := slicetools.Resize(&state.norm, frameBins)
+	lowbandScratch := slicetools.Resize(&state.lowbandScratch, scale*int(bandEdges[maxBands]-bandEdges[maxBands-1]))
+	collapseMasks := slicetools.Resize(&state.collapseMasks, maxBands)
 	lowbandOffset := 0
 	updateLowband := true
 	balance := info.allocation.balance
@@ -137,6 +144,7 @@ func quantAllBandsMono(
 			lowbandScratch,
 			fill,
 			state,
+			yScratch, absXScratch, signScratch, cwrsScratch,
 		)
 		collapseMasks[band] = byte(mask)
 		balance += info.allocation.pulses[band] + tell
@@ -163,6 +171,9 @@ func quantBandMono(
 	lowbandScratch []float32,
 	fill uint,
 	state *bandEncodeState,
+	yScratch []int,
+	absXScratch, signScratch []float32,
+	cwrsScratch []uint32,
 ) uint {
 	fullBand := x
 	originalN := n
@@ -305,6 +316,7 @@ func quantBandMono(
 				lowbandScratch,
 				fill,
 				state,
+				yScratch, absXScratch, signScratch, cwrsScratch,
 			)
 			rebalance = midBits - (rebalance - *remainingBits)
 			if rebalance > 3<<bitResolution && itheta != 0 {
@@ -327,6 +339,7 @@ func quantBandMono(
 				lowbandScratch,
 				originalFill>>blocks,
 				state,
+				yScratch, absXScratch, signScratch, cwrsScratch,
 			) << collapseShift
 		} else {
 			collapseMask = quantBandMono(
@@ -346,6 +359,7 @@ func quantBandMono(
 				lowbandScratch,
 				originalFill>>blocks,
 				state,
+				yScratch, absXScratch, signScratch, cwrsScratch,
 			) << collapseShift
 			rebalance = sideBits - (rebalance - *remainingBits)
 			if rebalance > 3<<bitResolution && itheta != 16384 {
@@ -368,6 +382,7 @@ func quantBandMono(
 				lowbandScratch,
 				fill,
 				state,
+				yScratch, absXScratch, signScratch, cwrsScratch,
 			)
 		}
 	} else {
@@ -381,7 +396,7 @@ func quantBandMono(
 			*remainingBits -= currentBits
 		}
 		if q != 0 {
-			collapseMask = algQuant(x, n, getPulses(q), spread, blocks, state.rangeEncoder, gain)
+			collapseMask = algQuant(x, n, getPulses(q), spread, blocks, state.rangeEncoder, gain, yScratch, absXScratch, signScratch, cwrsScratch)
 		} else {
 			mask := uint(1<<blocks) - 1
 			fill &= mask
@@ -501,6 +516,9 @@ func quantBandStereo(
 	lowbandScratch []float32,
 	fill uint,
 	state *bandEncodeState,
+	yScratch [2][]int,
+	absXScratch, signScratch [2][]float32,
+	cwrsScratch []uint32,
 ) uint {
 	if n == 1 {
 		xSign := uint32(0)
@@ -587,6 +605,7 @@ func quantBandStereo(
 		collapseMask := quantBandMono(
 			band, x, n, midBits, spread, blocks, tfChange,
 			lowband, remainingBits, lm, nil, 0, 1, lowbandScratch, fill, state,
+			yScratch[0], absXScratch[0], signScratch[0], cwrsScratch,
 		)
 		rebalance = midBits - (rebalance - *remainingBits)
 		if rebalance > 3<<bitResolution && itheta != 0 {
@@ -595,6 +614,7 @@ func quantBandStereo(
 		collapseMask |= quantBandMono(
 			band, y, n, sideBits, spread, blocks, tfChange,
 			nil, remainingBits, lm, nil, 0, gain*side, nil, originalFill>>blocks, state,
+			yScratch[1], absXScratch[1], signScratch[1], cwrsScratch,
 		)
 		if n != 2 {
 			stereoMerge(x, y, mid, n)
@@ -611,6 +631,7 @@ func quantBandStereo(
 	collapseMask := quantBandMono(
 		band, y, n, sideBits, spread, blocks, tfChange,
 		nil, remainingBits, lm, nil, 0, gain*side, nil, originalFill>>blocks, state,
+		yScratch[1], absXScratch[1], signScratch[1], cwrsScratch,
 	)
 	rebalance = sideBits - (rebalance - *remainingBits)
 	if rebalance > 3<<bitResolution && itheta != 16384 {
@@ -619,6 +640,7 @@ func quantBandStereo(
 	collapseMask |= quantBandMono(
 		band, x, n, midBits, spread, blocks, tfChange,
 		lowband, remainingBits, lm, nil, 0, 1, lowbandScratch, fill, state,
+		yScratch[0], absXScratch[0], signScratch[0], cwrsScratch,
 	)
 	if n != 2 {
 		stereoMerge(x, y, mid, n)
@@ -684,6 +706,9 @@ func quantAllBandsStereo(
 	y []float32,
 	totalBits int,
 	state *bandEncodeState,
+	yScratch [2][]int,
+	absXScratch, signScratch [2][]float32,
+	cwrsScratch []uint32,
 ) []byte {
 	channelCount := 2
 	blocks := 1
@@ -692,15 +717,15 @@ func quantAllBandsStereo(
 	}
 	scale := 1 << info.lm
 	frameBins := scale * int(bandEdges[maxBands])
-	norm := make([]float32, channelCount*frameBins)
+	norm := slicetools.Resize(&state.norm, channelCount*frameBins)
 	norm2 := norm[frameBins:]
-	lowbandScratch := make([]float32, scale*int(bandEdges[maxBands]-bandEdges[maxBands-1]))
-	collapseMasks := make([]byte, channelCount*maxBands)
+	lowbandScratch := slicetools.Resize(&state.lowbandScratch, scale*int(bandEdges[maxBands]-bandEdges[maxBands-1]))
+	collapseMasks := slicetools.Resize(&state.collapseMasks, channelCount*maxBands)
 
 	lowbandOffset := 0
 	updateLowband := true
 	balance := info.allocation.balance
-	dualStereo := channelCount == 2 && info.allocation.dualStereo != 0
+	dualStereo := info.allocation.dualStereo != 0
 	for band := info.startBand; band < info.endBand; band++ {
 		tell := int(state.rangeEncoder.TellFrac())
 		if band != info.startBand {
@@ -788,6 +813,7 @@ func quantAllBandsStereo(
 				lowbandScratch,
 				xMask,
 				state,
+				yScratch[0], absXScratch[0], signScratch[0], cwrsScratch,
 			)
 			var lowbandY []float32
 			if effectiveLowband >= 0 {
@@ -810,6 +836,7 @@ func quantAllBandsStereo(
 				lowbandScratch,
 				yMask,
 				state,
+				yScratch[1], absXScratch[1], signScratch[1], cwrsScratch,
 			)
 		} else {
 			xMask = quantBandStereo(
@@ -829,6 +856,7 @@ func quantAllBandsStereo(
 				lowbandScratch,
 				xMask|yMask,
 				state,
+				yScratch, absXScratch, signScratch, cwrsScratch,
 			)
 			yMask = xMask
 		}

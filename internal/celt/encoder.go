@@ -30,6 +30,15 @@ type Encoder struct {
 	analysis    analysisState
 	mdctScratch forwardMDCTScratch
 	fftScratch  []complex32
+
+	bandNorm          []float32
+	bandLowScratch    []float32
+	bandCollapseMasks []byte
+	pvqY              [2][]int
+	pvqAbsX           [2][]float32
+	pvqSign           [2][]float32
+	cwrsScratch       []uint32
+	normalisedBands   [2][]float32
 }
 
 func NewEncoder() Encoder {
@@ -54,6 +63,23 @@ func (e *Encoder) Reset() {
 			e.previousLogE2[channel][band] = -28
 		}
 	}
+
+	// Pre-allocate every buffer that quantAllBands* and algQuant touch so
+	// EncodeFrame stays at one alloc per frame (the output []byte from Done).
+	// pvq buffers are sized for the widest band at lm=3: maxBandSize*8 bins.
+	// cwrsScratch needs k+2 slots; cwrsMaxPulseCount+2 covers all normal cases.
+	maxBins := maxFrameSampleCount << 3
+	maxBandSize := bandEdges[maxBands] - bandEdges[maxBands-1]
+	e.bandNorm = make([]float32, 0, 2*maxBins)
+	e.bandLowScratch = make([]float32, 0, maxBandSize<<3)
+	e.bandCollapseMasks = make([]byte, 0, 2*maxBands)
+	for ch := range 2 {
+		e.pvqY[ch] = make([]int, 0, maxBandSize<<3)
+		e.pvqAbsX[ch] = make([]float32, 0, maxBandSize<<3)
+		e.pvqSign[ch] = make([]float32, 0, maxBandSize<<3)
+		e.normalisedBands[ch] = make([]float32, 0, maxBins)
+	}
+	e.cwrsScratch = make([]uint32, 0, cwrsMaxPulseCount+2)
 }
 
 func (e *Encoder) Mode() *Mode {
@@ -283,15 +309,20 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, frameBytes, startBand, endBand in
 
 	totalBits := (int(info.totalBits) << bitResolution) - info.antiCollapseRsv
 	bandState := bandEncodeState{
-		rangeEncoder: &e.rangeEncoder,
-		seed:         e.rng,
+		rangeEncoder:   &e.rangeEncoder,
+		seed:           e.rng,
+		norm:           e.bandNorm[:0],
+		lowbandScratch: e.bandLowScratch[:0],
+		collapseMasks:  e.bandCollapseMasks[:0],
 	}
-	shape0 := normaliseBandsForEncoding(&info, analysis.mdct[0], analysis.logBandAmp[0])
+	shape0 := normaliseBandsForEncoding(&info, analysis.mdct[0], analysis.logBandAmp[0], e.normalisedBands[0][:0])
 	if info.channelCount == 2 {
-		shape1 := normaliseBandsForEncoding(&info, analysis.mdct[1], analysis.logBandAmp[1])
-		_ = quantAllBandsStereo(&info, shape0, shape1, totalBits, &bandState)
+		shape1 := normaliseBandsForEncoding(&info, analysis.mdct[1], analysis.logBandAmp[1], e.normalisedBands[1][:0])
+		_ = quantAllBandsStereo(&info, shape0, shape1, totalBits, &bandState,
+			e.pvqY, e.pvqAbsX, e.pvqSign, e.cwrsScratch)
 	} else {
-		_ = quantAllBandsMono(&info, shape0, totalBits, &bandState)
+		_ = quantAllBandsMono(&info, shape0, totalBits, &bandState,
+			e.pvqY[0], e.pvqAbsX[0], e.pvqSign[0], e.cwrsScratch)
 	}
 
 	if info.antiCollapseRsv > 0 {

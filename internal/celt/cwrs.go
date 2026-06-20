@@ -286,26 +286,41 @@ func cwrsPreviousRow(u []uint32, n int, value0 uint32) {
 	u[len(u)-1] = value
 }
 
-// encodePulses writes a CWRS index for the PVQ pulse vector y to the range
-// encoder. It is the inverse of decodePulses.
-func encodePulses(y []int, n, k int, rangeEncoder *rangecoding.Encoder) {
+// cwrsRowFromScratch returns a k+2 slice backed by scratch when k fits within
+// cwrsMaxPulseCount. For larger k it allocates a new slice, matching the same
+// guard that decodePulses uses so both paths handle extreme pulse counts safely.
+func cwrsRowFromScratch(scratch []uint32, k int) []uint32 {
+	if k > cwrsMaxPulseCount {
+		return make([]uint32, k+2)
+	}
+
+	return scratch[:k+2]
+}
+
+// encodePulses writes the CWRS index for PVQ vector y to the range encoder.
+// It is the inverse of decodePulses.
+func encodePulses(y []int, n, k int, rangeEncoder *rangecoding.Encoder, scratch []uint32) {
 	if k <= 0 {
 		return
 	}
-	index := cwrsEncode(y, n, k)
-	u := cwrsUrow(n, k)
+	index := cwrsEncode(y, n, k, scratch)
+	// cwrsEncode walks scratch backward via cwrsPreviousRow, so I have to
+	// reinitialise it before reading u[k]+u[k+1] for the uniform-coder total.
+	u := cwrsRowFromScratch(scratch, k)
+	cwrsUrowInto(u, n)
 	total := u[k] + u[k+1]
 	rangeEncoder.EncodeUniform(total, index)
 }
 
 // cwrsEncode maps a PVQ pulse vector to its unique CWRS codeword index.
 // It is the exact inverse of cwrsDecode for a fixed (n, k) codebook.
-func cwrsEncode(y []int, n, k int) uint32 {
+func cwrsEncode(y []int, n, k int, scratch []uint32) uint32 {
 	if n <= 0 || k <= 0 {
 		return 0
 	}
 
-	u := cwrsUrow(n, k)
+	u := cwrsRowFromScratch(scratch, k)
+	cwrsUrowInto(u, n)
 	var index uint32
 
 	for j := range n {
