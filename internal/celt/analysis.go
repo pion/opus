@@ -20,6 +20,7 @@ type analysisState struct {
 	preemphasisMem [2]float32
 	preScratch     [2][]float32
 	mdctInput      [2][]float32
+	transientMDCT  [2][]float32
 }
 
 type analysisResult struct {
@@ -43,6 +44,10 @@ func newAnalysisState() analysisState {
 			make([]float32, shortBlockSampleCount+maxFrame),
 			make([]float32, shortBlockSampleCount+maxFrame),
 		},
+		transientMDCT: [2][]float32{
+			make([]float32, maxFrame),
+			make([]float32, maxFrame),
+		},
 	}
 
 	return state
@@ -50,38 +55,56 @@ func newAnalysisState() analysisState {
 
 // analyzeFrame applies pre-emphasis, builds the MDCT overlap window, runs the
 // forward MDCT, and returns per-band log amplitude for each input channel.
+//
+// When transient is true and lm > 0, I run (1<<lm) short MDCTs of 2.5 ms each
+// and interleave their spectra so inverseTransformChannel can split them back —
+// RFC 6716 §4.3.7 defines the interleaved layout for transient frames.
 func analyzeFrame(
 	mode *Mode, pcm [][]float32, startBand, endBand int,
 	state *analysisState, mdctScratch *forwardMDCTScratch, fftScratch *[]complex32,
+	transient bool,
 ) (analysisResult, error) {
 	lm, err := mode.LMForFrameSampleCount(len(pcm[0]))
 	if err != nil {
 		return analysisResult{}, err
 	}
 
+	useShortBlocks := transient && lm > 0
 	res := analysisResult{
 		info: frameSideInfo{
 			lm:             lm,
 			startBand:      startBand,
 			endBand:        endBand,
 			channelCount:   len(pcm),
-			transient:      false,
+			transient:      useShortBlocks,
 			spread:         defaultSpreadDecision,
 			allocationTrim: defaultAllocationTrim,
 		},
+	}
+	if useShortBlocks {
+		res.info.shortBlockCount = 1 << lm
 	}
 
 	for ch := range pcm {
 		pre := state.preScratch[ch][:len(pcm[ch])]
 		applyPreemphasis(pcm[ch], pre, &state.preemphasisMem[ch])
 
-		mdctInput := state.mdctInput[ch][:shortBlockSampleCount+len(pre)]
-		copy(mdctInput, state.prevPCM[ch])
-		copy(mdctInput[shortBlockSampleCount:], pre)
+		if useShortBlocks {
+			analyzeTransientChannel(
+				pre, state.prevPCM[ch], ch,
+				state.transientMDCT[ch], state.mdctInput[ch],
+				mdctScratch, fftScratch, lm,
+			)
+			res.mdct[ch] = state.transientMDCT[ch][:len(pre)]
+		} else {
+			mdctInput := state.mdctInput[ch][:shortBlockSampleCount+len(pre)]
+			copy(mdctInput, state.prevPCM[ch])
+			copy(mdctInput[shortBlockSampleCount:], pre)
 
-		res.mdct[ch] = forwardMDCTWithScratch(mdctInput, ch, mdctScratch, fftScratch)
-		if res.mdct[ch] == nil {
-			return analysisResult{}, errInvalidFrameSize
+			res.mdct[ch] = forwardMDCTWithScratch(mdctInput, ch, mdctScratch, fftScratch)
+			if res.mdct[ch] == nil {
+				return analysisResult{}, errInvalidFrameSize
+			}
 		}
 
 		res.logBandAmp[ch] = computeBandLogAmp(res.mdct[ch], lm, startBand, endBand)
@@ -91,9 +114,38 @@ func analyzeFrame(
 	return res, nil
 }
 
+// analyzeTransientChannel runs (1<<lm) short MDCTs over successive 2.5 ms
+// sub-frames and writes the interleaved result into out. I use the same layout
+// as inverseTransformChannel (RFC 6716 §4.3.7): bin i of sub-frame b lands at
+// out[b + i*(1<<lm)].
+func analyzeTransientChannel(
+	pre []float32,
+	prevOverlap []float32,
+	ch int,
+	out []float32,
+	mdctInputScratch []float32,
+	scratch *forwardMDCTScratch,
+	fftScratch *[]complex32,
+	lm int,
+) {
+	numBlocks := 1 << lm
+	shortInput := mdctInputScratch[:2*shortBlockSampleCount]
+	for block := range numBlocks {
+		if block == 0 {
+			copy(shortInput[:shortBlockSampleCount], prevOverlap)
+		} else {
+			copy(shortInput[:shortBlockSampleCount], pre[(block-1)*shortBlockSampleCount:block*shortBlockSampleCount])
+		}
+		copy(shortInput[shortBlockSampleCount:], pre[block*shortBlockSampleCount:(block+1)*shortBlockSampleCount])
+		bins := forwardMDCTWithScratch(shortInput, ch, scratch, fftScratch)
+		for i := range shortBlockSampleCount {
+			out[block+i*numBlocks] = bins[i]
+		}
+	}
+}
+
 // detectTransient reports whether any channel of the input PCM contains a
-// transient using a half-frame energy ratio. The bitstream still hardcodes
-// transient=false in 6a; PR 6b connects this and adds the short-block path.
+// transient using a half-frame energy ratio.
 //
 // A mid-frame impulse concentrates energy in the second half of the frame;
 // a steady sine distributes it roughly evenly. A channel is transient when
