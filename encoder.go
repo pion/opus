@@ -170,22 +170,13 @@ func (e *Encoder) EncodeFloat32(in []float32, out []byte) (int, error) {
 	if len(out) < frameBytes+1 {
 		return 0, errOutBufferTooSmall
 	}
-
-	payload, err := e.celtEncoder.EncodeFrame(channels, frameBytes, 0, e.celtEncoder.Mode().BandCount())
+	out[0] = byte(e.tocHeader())
+	n, err := e.celtEncoder.EncodeFrame(channels, out[1:frameBytes+1], frameBytes, 0, e.celtEncoder.Mode().BandCount())
 	if err != nil {
 		return 0, err
 	}
-	if len(payload) > maxOpusFrameSize {
-		return 0, fmt.Errorf("%w: frame size %d exceeds %d", errMalformedPacket, len(payload), maxOpusFrameSize)
-	}
-	if len(out) < len(payload)+1 {
-		return 0, errOutBufferTooSmall
-	}
 
-	out[0] = byte(e.tocHeader())
-	copy(out[1:], payload)
-
-	return 1 + len(payload), nil
+	return 1 + n, nil
 }
 
 func (e *Encoder) tocHeader() tableOfContentsHeader {

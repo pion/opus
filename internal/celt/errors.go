@@ -12,4 +12,5 @@ var (
 	errInvalidSampleRate   = errors.New("invalid CELT sample rate")
 	errInvalidChannelCount = errors.New("invalid CELT channel count")
 	errRangeCoderSymbol    = errors.New("invalid CELT range coder symbol")
+	errDstTooSmall         = errors.New("dst buffer too small for frame")
 )

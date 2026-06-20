@@ -55,7 +55,10 @@ func TestAlgUnquant(t *testing.T) {
 func TestPVQSearchBasic(t *testing.T) {
 	// Target with energy in first few dimensions
 	x := []float32{3, 2, 1, 0}
-	iy := pvqSearch(x, len(x), 3)
+	yScratch := make([]int, len(x))
+	absX := make([]float32, len(x))
+	sign := make([]float32, len(x))
+	iy := pvqSearch(x, len(x), 3, yScratch, absX, sign)
 
 	pulses := 0
 	for _, v := range iy {
@@ -74,7 +77,10 @@ func TestPVQSearchBasic(t *testing.T) {
 
 func TestPVQSearchZeroPulses(t *testing.T) {
 	x := []float32{1, 2, 3}
-	iy := pvqSearch(x, len(x), 0)
+	yScratch := make([]int, len(x))
+	absX := make([]float32, len(x))
+	sign := make([]float32, len(x))
+	iy := pvqSearch(x, len(x), 0, yScratch, absX, sign)
 	for _, v := range iy {
 		assert.Equal(t, 0, v)
 	}
@@ -94,7 +100,11 @@ func TestAlgQuantRoundTrip(t *testing.T) {
 	enc.Init()
 	xEnc := make([]float32, n)
 	copy(xEnc, original)
-	mask := algQuant(xEnc, n, pulseCount, spread, 1, &enc, gain)
+	yScratch := make([]int, n)
+	absX := make([]float32, n)
+	sign := make([]float32, n)
+	cwrsScratch := make([]uint32, cwrsMaxPulseCount+2)
+	mask := algQuant(xEnc, n, pulseCount, spread, 1, &enc, gain, yScratch, absX, sign, cwrsScratch)
 	assert.NotZero(t, mask)
 
 	bits := enc.Done()

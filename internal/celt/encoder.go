@@ -30,6 +30,15 @@ type Encoder struct {
 	analysis    analysisState
 	mdctScratch forwardMDCTScratch
 	fftScratch  []complex32
+
+	bandNorm          []float32
+	bandLowScratch    []float32
+	bandCollapseMasks []byte
+	pvqY              [2][]int
+	pvqAbsX           [2][]float32
+	pvqSign           [2][]float32
+	cwrsScratch       []uint32
+	normalisedBands   [2][]float32
 }
 
 func NewEncoder() Encoder {
@@ -54,6 +63,24 @@ func (e *Encoder) Reset() {
 			e.previousLogE2[channel][band] = -28
 		}
 	}
+
+	// Pre-allocate every buffer that quantAllBands* and algQuant touch so
+	// EncodeFrame stays at zero allocs per frame.
+	// normalisedBands/bandNorm need maxFrameSampleCount per channel — the full
+	// MDCT spectrum (960 bins), not just the coded band range (800 bins).
+	// pvq buffers are sized for the widest band at lm=3: maxBandSize*8 bins.
+	// cwrsScratch needs k+2 slots; cwrsMaxPulseCount+2 covers all normal cases.
+	maxBandSize := bandEdges[maxBands] - bandEdges[maxBands-1]
+	e.bandNorm = make([]float32, 0, 2*maxFrameSampleCount)
+	e.bandLowScratch = make([]float32, 0, maxBandSize<<maxLM)
+	e.bandCollapseMasks = make([]byte, 0, 2*maxBands)
+	for ch := range 2 {
+		e.pvqY[ch] = make([]int, 0, maxBandSize<<maxLM)
+		e.pvqAbsX[ch] = make([]float32, 0, maxBandSize<<maxLM)
+		e.pvqSign[ch] = make([]float32, 0, maxBandSize<<maxLM)
+		e.normalisedBands[ch] = make([]float32, 0, maxFrameSampleCount)
+	}
+	e.cwrsScratch = make([]uint32, 0, cwrsMaxPulseCount+2)
 }
 
 func (e *Encoder) Mode() *Mode {
@@ -203,27 +230,31 @@ func (e *Encoder) encodeAllocationTrim(info *frameSideInfo, totalBitsEighth uint
 	}
 }
 
-// EncodeFrame encodes one CELT frame from float PCM.
+// EncodeFrame encodes one CELT frame from float PCM into dst.
+// It returns the number of bytes written. dst must be at least frameBytes long.
 //
 //nolint:cyclop // The frame encoder mirrors RFC 6716 flow and is intentionally linear.
-func (e *Encoder) EncodeFrame(pcm [][]float32, frameBytes, startBand, endBand int) ([]byte, error) {
+func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand, endBand int) (int, error) {
 	if e.Mode() == nil {
 		e.mode = DefaultMode()
 	}
 	if len(pcm) != 1 && len(pcm) != 2 {
-		return nil, errInvalidChannelCount
+		return 0, errInvalidChannelCount
 	}
 	frameSamples := shortBlockSampleCount << e.mode.MaxLM()
 	for ch := range pcm {
 		if len(pcm[ch]) != frameSamples {
-			return nil, errInvalidFrameSize
+			return 0, errInvalidFrameSize
 		}
 	}
 	if startBand < 0 || startBand >= e.mode.BandCount() {
-		return nil, errInvalidBand
+		return 0, errInvalidBand
 	}
 	if endBand <= startBand || endBand > e.mode.BandCount() {
-		return nil, errInvalidBand
+		return 0, errInvalidBand
+	}
+	if len(dst) < frameBytes {
+		return 0, errDstTooSmall
 	}
 
 	e.rangeEncoder.Init()
@@ -234,14 +265,14 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, frameBytes, startBand, endBand in
 		transient,
 	)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
 
 	info := analysis.info
 	info.totalBits = uint(frameBytes) * 8
 
 	if e.rangeEncoder.Tell() > info.totalBits {
-		return e.rangeEncoder.Done(), nil
+		return e.rangeEncoder.FlushInto(dst), nil
 	}
 
 	e.encodeSilenceFlag()
@@ -283,15 +314,20 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, frameBytes, startBand, endBand in
 
 	totalBits := (int(info.totalBits) << bitResolution) - info.antiCollapseRsv
 	bandState := bandEncodeState{
-		rangeEncoder: &e.rangeEncoder,
-		seed:         e.rng,
+		rangeEncoder:   &e.rangeEncoder,
+		seed:           e.rng,
+		norm:           e.bandNorm[:0],
+		lowbandScratch: e.bandLowScratch[:0],
+		collapseMasks:  e.bandCollapseMasks[:0],
 	}
-	shape0 := normaliseBandsForEncoding(&info, analysis.mdct[0], analysis.logBandAmp[0])
+	shape0 := normaliseBandsForEncoding(&info, analysis.mdct[0], analysis.logBandAmp[0], e.normalisedBands[0][:0])
 	if info.channelCount == 2 {
-		shape1 := normaliseBandsForEncoding(&info, analysis.mdct[1], analysis.logBandAmp[1])
-		_ = quantAllBandsStereo(&info, shape0, shape1, totalBits, &bandState)
+		shape1 := normaliseBandsForEncoding(&info, analysis.mdct[1], analysis.logBandAmp[1], e.normalisedBands[1][:0])
+		_ = quantAllBandsStereo(&info, shape0, shape1, totalBits, &bandState,
+			e.pvqY, e.pvqAbsX, e.pvqSign, e.cwrsScratch)
 	} else {
-		_ = quantAllBandsMono(&info, shape0, totalBits, &bandState)
+		_ = quantAllBandsMono(&info, shape0, totalBits, &bandState,
+			e.pvqY[0], e.pvqAbsX[0], e.pvqSign[0], e.cwrsScratch)
 	}
 
 	if info.antiCollapseRsv > 0 {
@@ -306,7 +342,7 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, frameBytes, startBand, endBand in
 
 	e.rng = e.rangeEncoder.FinalRange()
 
-	return e.rangeEncoder.Done(), nil
+	return e.rangeEncoder.FlushInto(dst), nil
 }
 
 func smallEnergySymbol(delta int) uint32 {

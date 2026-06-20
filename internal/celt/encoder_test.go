@@ -11,6 +11,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// encodeFrame wraps EncodeFrame allocating dst internally so test call
+// sites stay readable after the signature change to dst []byte.
+func encodeFrame(tb testing.TB, enc *Encoder, pcm [][]float32, frameBytes int) []byte {
+	tb.Helper()
+	dst := make([]byte, frameBytes)
+	n, err := enc.EncodeFrame(pcm, dst, frameBytes, 0, maxBands)
+	require.NoError(tb, err)
+
+	return dst[:n]
+}
+
 func BenchmarkEncodeFrameMono(b *testing.B) {
 	b.ReportAllocs()
 
@@ -24,10 +35,11 @@ func BenchmarkEncodeFrameMono(b *testing.B) {
 
 	encoder := NewEncoder()
 	input := [][]float32{pcm}
+	dst := make([]byte, frameBytes)
 
 	b.ResetTimer()
 	for range b.N {
-		_, err := encoder.EncodeFrame(input, frameBytes, 0, maxBands)
+		_, err := encoder.EncodeFrame(input, dst, frameBytes, 0, maxBands)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -49,10 +61,11 @@ func BenchmarkEncodeFrameStereo(b *testing.B) {
 
 	encoder := NewEncoder()
 	input := [][]float32{L, R}
+	dst := make([]byte, frameBytes)
 
 	b.ResetTimer()
 	for range b.N {
-		_, err := encoder.EncodeFrame(input, frameBytes, 0, maxBands)
+		_, err := encoder.EncodeFrame(input, dst, frameBytes, 0, maxBands)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -72,14 +85,13 @@ func TestEncodeFrameRoundTripMono20ms(t *testing.T) {
 	}
 
 	for i := range 3 {
-		data, err := encoder.EncodeFrame([][]float32{pcm}, frameBytes, 0, maxBands)
-		require.NoError(t, err)
+		data := encodeFrame(t, &encoder, [][]float32{pcm}, frameBytes)
 		require.NotEmpty(t, data)
 		assert.LessOrEqual(t, len(data), frameBytes,
 			"encoded frame should not exceed byte budget")
 
 		out := make([]float32, frameSampleCount)
-		err = decoder.Decode(data, out, false, 1, frameSampleCount, 0, maxBands)
+		err := decoder.Decode(data, out, false, 1, frameSampleCount, 0, maxBands)
 		require.NoError(t, err)
 
 		energy := float32(vectorEnergy(out))
@@ -101,13 +113,12 @@ func TestEncodeFrameRoundTripMono20msTightBudget(t *testing.T) {
 		pcm[i] = float32(math.Sin(2 * math.Pi * 440 * float64(i) / sampleRate))
 	}
 
-	data, err := encoder.EncodeFrame([][]float32{pcm}, frameBytes, 0, maxBands)
-	require.NoError(t, err)
+	data := encodeFrame(t, &encoder, [][]float32{pcm}, frameBytes)
 	require.NotEmpty(t, data)
 	assert.LessOrEqual(t, len(data), frameBytes)
 
 	out := make([]float32, frameSampleCount)
-	err = decoder.Decode(data, out, false, 1, frameSampleCount, 0, maxBands)
+	err := decoder.Decode(data, out, false, 1, frameSampleCount, 0, maxBands)
 	require.NoError(t, err)
 
 	energy := float32(vectorEnergy(out))
@@ -128,8 +139,7 @@ func TestEncodeFrameMonoPersistence(t *testing.T) {
 		pcm[i] = float32(math.Sin(2 * math.Pi * 440 * float64(i) / sampleRate))
 	}
 
-	data1, err := encoder.EncodeFrame([][]float32{pcm}, frameBytes, 0, maxBands)
-	require.NoError(t, err)
+	data1 := encodeFrame(t, &encoder, [][]float32{pcm}, frameBytes)
 
 	out1 := make([]float32, frameSampleCount)
 	require.NoError(t, decoder.Decode(data1, out1, false, 1, frameSampleCount, 0, maxBands))
@@ -139,8 +149,7 @@ func TestEncodeFrameMonoPersistence(t *testing.T) {
 		out1b += float64(out1[i])
 	}
 
-	data2, err := encoder.EncodeFrame([][]float32{pcm}, frameBytes, 0, maxBands)
-	require.NoError(t, err)
+	data2 := encodeFrame(t, &encoder, [][]float32{pcm}, frameBytes)
 
 	out2 := make([]float32, frameSampleCount)
 	require.NoError(t, decoder.Decode(data2, out2, false, 1, frameSampleCount, 0, maxBands))
@@ -164,9 +173,7 @@ func TestEncodeFrameMonoRngStability(t *testing.T) {
 	}
 
 	for range 3 {
-		data, err := encoder.EncodeFrame([][]float32{pcm}, frameBytes, 0, maxBands)
-		require.NoError(t, err)
-
+		data := encodeFrame(t, &encoder, [][]float32{pcm}, frameBytes)
 		require.NotEmpty(t, data)
 		_ = encoder.rangeEncoder.FinalRange()
 	}
@@ -186,8 +193,7 @@ func TestEncodeFrameStereoFinalRange(t *testing.T) {
 		R[i] = float32(math.Sin(2 * math.Pi * 660 * float64(i) / sampleRate))
 	}
 
-	data, err := encoder.EncodeFrame([][]float32{L, R}, frameBytes, 0, maxBands)
-	require.NoError(t, err)
+	data := encodeFrame(t, &encoder, [][]float32{L, R}, frameBytes)
 	require.NotEmpty(t, data)
 
 	out := make([]float32, frameSampleCount*2)
@@ -210,6 +216,10 @@ func TestQuantBandStereoN1(t *testing.T) {
 		0, x, y, 1, 10<<bitResolution,
 		spreadNormal, 1, maxBands, 0, nil,
 		&remaining, 3, 1.0, make([]float32, 2), 1, &state,
+		[2][]int{make([]int, 1), make([]int, 1)},
+		[2][]float32{make([]float32, 1), make([]float32, 1)},
+		[2][]float32{make([]float32, 1), make([]float32, 1)},
+		make([]uint32, cwrsMaxPulseCount+2),
 	)
 	assert.Equal(t, uint(1), mask)
 }
@@ -227,6 +237,10 @@ func TestQuantBandStereoN2(t *testing.T) {
 		0, x, y, 2, 30<<bitResolution,
 		spreadNormal, 1, maxBands, 0, nil,
 		&remaining, 3, 1.0, make([]float32, 4), 1, &state,
+		[2][]int{make([]int, 2), make([]int, 2)},
+		[2][]float32{make([]float32, 2), make([]float32, 2)},
+		[2][]float32{make([]float32, 2), make([]float32, 2)},
+		make([]uint32, cwrsMaxPulseCount+2),
 	)
 	assert.Greater(t, enc.rangeEncoder.FinalRange(), uint32(0))
 }
@@ -245,8 +259,7 @@ func TestEncodeFrameStereoSeparatedBands(t *testing.T) {
 		R[i] = float32(math.Sin(2 * math.Pi * 3000 * float64(i) / sampleRate))
 	}
 
-	data, err := encoder.EncodeFrame([][]float32{L, R}, frameBytes, 0, maxBands)
-	require.NoError(t, err)
+	data := encodeFrame(t, &encoder, [][]float32{L, R}, frameBytes)
 	require.NotEmpty(t, data)
 
 	out := make([]float32, frameSampleCount*2)
@@ -268,8 +281,7 @@ func TestEncodeFrameStereoDualStereoRoundTrip(t *testing.T) {
 		R[i] = float32(math.Cos(2 * math.Pi * 1200 * float64(i) / sampleRate))
 	}
 
-	data, err := encoder.EncodeFrame([][]float32{L, R}, frameBytes, 0, maxBands)
-	require.NoError(t, err)
+	data := encodeFrame(t, &encoder, [][]float32{L, R}, frameBytes)
 	require.NotEmpty(t, data)
 
 	out := make([]float32, frameSampleCount*2)
@@ -314,8 +326,7 @@ func TestTransientFlagWiring(t *testing.T) {
 		pcm := make([]float32, frameSampleCount)
 		pcm[frameSampleCount/2] = 1.0
 
-		data, err := encoder.EncodeFrame([][]float32{pcm}, 60, 0, maxBands)
-		require.NoError(t, err)
+		data := encodeFrame(t, &encoder, [][]float32{pcm}, 60)
 		require.NotEmpty(t, data)
 
 		out := make([]float32, frameSampleCount)
@@ -334,8 +345,7 @@ func TestTransientFlagWiring(t *testing.T) {
 			pcm[i] = float32(math.Sin(2 * math.Pi * 440 * float64(i) / sampleRate))
 		}
 
-		data, err := encoder.EncodeFrame([][]float32{pcm}, 60, 0, maxBands)
-		require.NoError(t, err)
+		data := encodeFrame(t, &encoder, [][]float32{pcm}, 60)
 		require.NotEmpty(t, data)
 
 		out := make([]float32, frameSampleCount)
@@ -355,8 +365,7 @@ func TestEncodeFrameTransientFinalRangeMono(t *testing.T) {
 	pcm := make([]float32, frameSampleCount)
 	pcm[frameSampleCount/2] = 1.0
 
-	data, err := encoder.EncodeFrame([][]float32{pcm}, frameBytes, 0, maxBands)
-	require.NoError(t, err)
+	data := encodeFrame(t, &encoder, [][]float32{pcm}, frameBytes)
 	require.NotEmpty(t, data)
 	assert.LessOrEqual(t, len(data), frameBytes)
 
@@ -379,8 +388,7 @@ func TestEncodeFrameTransientFinalRangeStereo(t *testing.T) {
 	left[frameSampleCount/2] = 1.0
 	right[frameSampleCount/2] = 0.8
 
-	data, err := encoder.EncodeFrame([][]float32{left, right}, frameBytes, 0, maxBands)
-	require.NoError(t, err)
+	data := encodeFrame(t, &encoder, [][]float32{left, right}, frameBytes)
 	require.NotEmpty(t, data)
 
 	out := make([]float32, frameSampleCount*2)
@@ -408,8 +416,7 @@ func TestEncodeFrameTransientMultiFrameMono(t *testing.T) {
 	impulse[frameSampleCount/2] = 1.0
 
 	for frame, pcm := range [][]float32{steady, impulse, steady} {
-		data, err := encoder.EncodeFrame([][]float32{pcm}, frameBytes, 0, maxBands)
-		require.NoError(t, err, "frame %d", frame)
+		data := encodeFrame(t, &encoder, [][]float32{pcm}, frameBytes)
 		require.NotEmpty(t, data, "frame %d", frame)
 
 		out := make([]float32, frameSampleCount)
@@ -435,18 +442,15 @@ func TestEncodeFrameTransientNoRegressionNonTransient(t *testing.T) {
 	}
 
 	encoder1 := NewEncoder()
-	data1, err := encoder1.EncodeFrame([][]float32{sine}, frameBytes, 0, maxBands)
-	require.NoError(t, err)
+	data1 := encodeFrame(t, &encoder1, [][]float32{sine}, frameBytes)
 
 	encoder2 := NewEncoder()
 	// Warm up encoder2 with an impulse first, then encode the same sine.
 	impulse := make([]float32, frameSampleCount)
 	impulse[frameSampleCount/2] = 1.0
-	_, err = encoder2.EncodeFrame([][]float32{impulse}, frameBytes, 0, maxBands)
-	require.NoError(t, err)
+	_ = encodeFrame(t, &encoder2, [][]float32{impulse}, frameBytes)
 
-	data2, err := encoder2.EncodeFrame([][]float32{sine}, frameBytes, 0, maxBands)
-	require.NoError(t, err)
+	data2 := encodeFrame(t, &encoder2, [][]float32{sine}, frameBytes)
 
 	// The second sine frame differs from the first because encoder2 has
 	// pre-emphasis state from the impulse frame, so we only check that it
@@ -474,8 +478,7 @@ func assertStereoFinalRangeMatch(t *testing.T, frameBytes int) {
 		R[i] = float32(math.Sin(2 * math.Pi * 660 * float64(i) / sampleRate))
 	}
 
-	data, err := encoder.EncodeFrame([][]float32{L, R}, frameBytes, 0, maxBands)
-	require.NoError(t, err)
+	data := encodeFrame(t, &encoder, [][]float32{L, R}, frameBytes)
 	require.NotEmpty(t, data)
 
 	out := make([]float32, frameSampleCount*2)
