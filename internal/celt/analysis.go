@@ -9,6 +9,10 @@ import (
 
 const preemphasisCoefficient = 0.85000610
 
+// dcBlockCutoffHz is the 3 Hz high-pass cutoff for the DC-removal filter,
+// matching libopus dc_reject (src/opus_encoder.c:479-507).
+const dcBlockCutoffHz = 3.0
+
 // transientRatioThreshold is the minimum ratio between the energy of the
 // second half of the frame and the first half that the detector reports as
 // a transient. It was calibrated empirically against the synthetic fixtures
@@ -18,6 +22,7 @@ const transientRatioThreshold = 1.5
 type analysisState struct {
 	prevPCM        [2][]float32
 	preemphasisMem [2]float32
+	dcBlockMem     [2]float32
 	preScratch     [2][]float32
 	mdctInput      [2][]float32
 	transientMDCT  [2][]float32
@@ -86,8 +91,11 @@ func analyzeFrame(
 	}
 
 	for ch := range pcm {
+		// Work on a scratch copy so the caller's PCM is never modified.
 		pre := state.preScratch[ch][:len(pcm[ch])]
-		applyPreemphasis(pcm[ch], pre, &state.preemphasisMem[ch])
+		copy(pre, pcm[ch])
+		applyDCBlock(pre, mode.SampleRate(), &state.dcBlockMem[ch])
+		applyPreemphasis(pre, pre, &state.preemphasisMem[ch])
 
 		if useShortBlocks {
 			analyzeTransientChannel(
@@ -235,4 +243,17 @@ func computeBandLogAmp(freq []float32, lm int, startBand int, endBand int) [maxB
 	}
 
 	return logAmp
+}
+
+// applyDCBlock applies a first-order IIR high-pass at dcBlockCutoffHz to
+// remove DC bias. mem must persist across frames. Not normative — encoder-only
+// pre-processing (libopus dc_reject, src/opus_encoder.c:479-507).
+func applyDCBlock(pcm []float32, sampleRate int, mem *float32) {
+	coef := 6.3 * dcBlockCutoffHz / float32(sampleRate)
+	coef2 := float32(1) - coef
+	for i := range pcm {
+		x := pcm[i]
+		pcm[i] = x - *mem
+		*mem = coef*x + coef2**mem
+	}
 }
