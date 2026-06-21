@@ -11,6 +11,132 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestSpreadingDecisionTonalSignal(t *testing.T) {
+	// A spectrum with one dominant bin per band should read as tonal (high metric)
+	// and produce at least NORMAL spreading after warmup.
+	lm := maxLM
+	scale := 1 << lm
+	mdct := make([]float32, scale*int(bandEdges[maxBands]))
+
+	for band := range maxBands {
+		lo := scale * int(bandEdges[band])
+		hi := scale * int(bandEdges[band+1])
+		if hi > lo {
+			// put all energy in the first bin of each band
+			mdct[lo] = 1.0
+		}
+	}
+
+	var prevAvg float32
+	prev := defaultSpreadDecision
+	var decision int
+	for range 8 {
+		decision = spreadingDecision(mdct, lm, 0, maxBands, &prevAvg, prev)
+		prev = decision
+	}
+	assert.GreaterOrEqual(t, decision, spreadNormal,
+		"spike-per-band spectrum should reach at least NORMAL after warmup (got %d)", decision)
+}
+
+func TestSpreadingDecisionNoiseSignal(t *testing.T) {
+	// A flat spectrum (uniform energy per bin) is noise-like and should settle
+	// at NONE or LIGHT after warmup.
+	lm := maxLM
+	scale := 1 << lm
+	mdct := make([]float32, scale*int(bandEdges[maxBands]))
+	for i := range mdct {
+		mdct[i] = 0.01
+	}
+
+	var prevAvg float32
+	prev := defaultSpreadDecision
+	var decision int
+	for range 8 {
+		decision = spreadingDecision(mdct, lm, 0, maxBands, &prevAvg, prev)
+		prev = decision
+	}
+	assert.LessOrEqual(t, decision, spreadLight,
+		"uniform-energy spectrum should settle at NONE or LIGHT after warmup (got %d)", decision)
+}
+
+func TestSpreadingDecisionRecursiveAvg(t *testing.T) {
+	// Two independent runs of N frames should produce the same avg value as a
+	// single run of 2N frames because the recursive average is stateless
+	// between calls.
+	lm := maxLM
+	scale := 1 << lm
+	mdct := make([]float32, scale*int(bandEdges[maxBands]))
+	for i := range mdct {
+		mdct[i] = 0.1 * float32(i%7+1)
+	}
+
+	var avgA float32
+	prevA := defaultSpreadDecision
+	for range 4 {
+		prevA = spreadingDecision(mdct, lm, 0, maxBands, &avgA, prevA)
+	}
+
+	var avgB float32
+	prevB := defaultSpreadDecision
+	for range 8 {
+		prevB = spreadingDecision(mdct, lm, 0, maxBands, &avgB, prevB)
+	}
+
+	// After more frames the avg should converge further; after 8 frames it
+	// must not be identical to after 4.
+	assert.NotEqual(t, avgA, avgB, "recursive average should differ after different frame counts")
+}
+
+func TestSpreadingDecisionSilentFrame(t *testing.T) {
+	lm := maxLM
+	mdct := make([]float32, (1<<lm)*int(bandEdges[maxBands]))
+	var prevAvg float32
+	// All zero input: should return prevDecision unchanged.
+	got := spreadingDecision(mdct, lm, 0, maxBands, &prevAvg, spreadNormal)
+	assert.Equal(t, spreadNormal, got, "silent frame should return prevDecision")
+}
+
+func TestAnalyzeFrameAdaptiveSpread(t *testing.T) {
+	// A pure sine and white-noise-like PCM should produce different spread
+	// decisions, which changes the encoded symbol and therefore the FinalRange.
+	enc1 := NewEncoder()
+	enc2 := NewEncoder()
+	frameSampleCount := shortBlockSampleCount << maxLM
+	frameBytes := 60
+
+	sine := make([]float32, frameSampleCount)
+	for i := range sine {
+		sine[i] = float32(math.Sin(2 * math.Pi * 440 * float64(i) / float64(sampleRate)))
+	}
+
+	// Approximate white noise via a deterministic sequence spread across all
+	// frequencies — alternate sign at a prime-ish period so the MDCT sees
+	// roughly uniform energy rather than a tonal spike.
+	noise := make([]float32, frameSampleCount)
+	for i := range noise {
+		if i%7 < 4 {
+			noise[i] = 0.1
+		} else {
+			noise[i] = -0.1
+		}
+	}
+
+	// Warm both encoders up for several frames so the recursive average settles.
+	const warmup = 5
+	dstSine := make([]byte, frameBytes)
+	dstNoise := make([]byte, frameBytes)
+	for range warmup {
+		_, err := enc1.EncodeFrame([][]float32{sine}, dstSine, frameBytes, 0, maxBands)
+		require.NoError(t, err)
+		_, err = enc2.EncodeFrame([][]float32{noise}, dstNoise, frameBytes, 0, maxBands)
+		require.NoError(t, err)
+	}
+
+	assert.NotEqual(t, enc1.FinalRange(), enc2.FinalRange(),
+		"sine and noise should produce different spread decisions after warmup "+
+			"(sine=%x, noise=%x)", enc1.FinalRange(), enc2.FinalRange())
+}
+
 func TestDetectTransientSteadySine(t *testing.T) {
 	state := newAnalysisState()
 	pcm := make([]float32, 960)

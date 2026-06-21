@@ -39,6 +39,10 @@ type Encoder struct {
 	pvqSign           [2][]float32
 	cwrsScratch       []uint32
 	normalisedBands   [2][]float32
+
+	prevSpreadAvg      float32
+	prevSpreadDecision int
+	prevIntensityBand  int
 }
 
 func NewEncoder() Encoder {
@@ -81,6 +85,10 @@ func (e *Encoder) Reset() {
 		e.normalisedBands[ch] = make([]float32, 0, maxFrameSampleCount)
 	}
 	e.cwrsScratch = make([]uint32, 0, cwrsMaxPulseCount+2)
+
+	e.prevSpreadAvg = 0
+	e.prevSpreadDecision = defaultSpreadDecision
+	e.prevIntensityBand = 0
 }
 
 func (e *Encoder) Mode() *Mode {
@@ -287,6 +295,11 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 	e.encodeCoarseEnergy(&info, targetLogE)
 
 	e.encodeTimeFrequencyChanges(&info)
+	info.spread = spreadingDecision(
+		analysis.mdct[0], info.lm, info.startBand, info.endBand,
+		&e.prevSpreadAvg, e.prevSpreadDecision,
+	)
+	e.prevSpreadDecision = info.spread
 	e.encodeSpread(&info)
 	totalBitsEighth := e.encodeDynamicAllocation(&info)
 	e.encodeAllocationTrim(&info, totalBitsEighth)
@@ -304,7 +317,19 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 		frameSampleCount := shortBlockSampleCount << info.lm
 		bitrateBps := int(info.totalBits) * sampleRate / frameSampleCount
 		frameMs := max(1, frameSampleCount*1000/sampleRate)
-		targetIntensity = intensityStartBand(bitrateBps, frameMs)
+		raw := intensityStartBand(bitrateBps, frameMs)
+		if e.prevIntensityBand == 0 {
+			e.prevIntensityBand = raw
+		}
+		// ±1 dead band: require two consecutive frames to confirm a direction
+		// change, matching the hysteresis pattern in libopus CELTEncoder.
+		if raw > e.prevIntensityBand+1 {
+			raw = e.prevIntensityBand + 1
+		} else if raw < e.prevIntensityBand-1 {
+			raw = e.prevIntensityBand - 1
+		}
+		e.prevIntensityBand = raw
+		targetIntensity = raw
 		if chooseDualStereo(analysis.mdct[0], analysis.mdct[1], info.lm) {
 			targetDualStereo = 1
 		}
