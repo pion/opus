@@ -109,9 +109,8 @@ func TestAnalyzeFrameAdaptiveSpread(t *testing.T) {
 		sine[i] = float32(math.Sin(2 * math.Pi * 440 * float64(i) / float64(sampleRate)))
 	}
 
-	// Approximate white noise via a deterministic sequence spread across all
-	// frequencies — alternate sign at a prime-ish period so the MDCT sees
-	// roughly uniform energy rather than a tonal spike.
+	// A square wave at period 7 (~6.8 kHz) has its energy spread across many
+	// harmonics, giving a flatter MDCT spectrum than the 440 Hz sine.
 	noise := make([]float32, frameSampleCount)
 	for i := range noise {
 		if i%7 < 4 {
@@ -339,4 +338,123 @@ func TestAnalyzeFrameAppliesDCBlock(t *testing.T) {
 	assert.NotEqual(t, enc1.FinalRange(), enc2.FinalRange(),
 		"DC block should change the encoder output (sine=%x, withOffset=%x)",
 		enc1.FinalRange(), enc2.FinalRange())
+}
+
+func TestChooseAllocationTrimDefault(t *testing.T) {
+	// Espectro plano a 128kbps → trim cerca de 5 (default).
+	logBandAmp := makeFlatLogBandAmp(0.0) // todas las bandas iguales
+	mdct := makeFlatMDCT(1.0)
+	trim := chooseAllocationTrim(
+		[2][maxBands]float32{logBandAmp, logBandAmp},
+		[2][]float32{mdct, mdct}, 1, maxLM, maxBands, 128*8*50,
+	)
+	assert.InDelta(t, 5, trim, 1, "flat spectrum at 128kbps should stay near default")
+}
+
+func TestChooseAllocationTrimLowBitrate(t *testing.T) {
+	// A 32kbps → base trim=4 (no 5).
+	logBandAmp := makeFlatLogBandAmp(0.0)
+	mdct := makeFlatMDCT(1.0)
+	trim := chooseAllocationTrim(
+		[2][maxBands]float32{logBandAmp, logBandAmp},
+		[2][]float32{mdct, mdct}, 1, maxLM, maxBands, 32*8*50,
+	)
+	assert.LessOrEqual(t, trim, 5, "low bitrate should bias trim downward")
+}
+
+func TestChooseAllocationTrimSpectralTilt(t *testing.T) {
+	// Low-heavy spectrum → diff < 0 → trim -= negative → trim increases
+	// (trim > 5 biases bits toward low bands). High-heavy → opposite.
+	lowHeavy := makeTiltedLogBandAmp(-1.0)  // bandas bajas con más energía
+	highHeavy := makeTiltedLogBandAmp(+1.0) // bandas altas con más energía
+	mdct := makeFlatMDCT(1.0)
+	trimLow := chooseAllocationTrim([2][maxBands]float32{lowHeavy, lowHeavy},
+		[2][]float32{mdct, mdct}, 1, maxLM, maxBands, 128*8*50)
+	trimHigh := chooseAllocationTrim([2][maxBands]float32{highHeavy, highHeavy},
+		[2][]float32{mdct, mdct}, 1, maxLM, maxBands, 128*8*50)
+	assert.Greater(t, trimLow, trimHigh, "low-heavy spectrum should bias trim upward (more bits to lows)")
+}
+
+func TestChooseAllocationTrimStereoCorrelated(t *testing.T) {
+	// L=R (correlated) → trim disminuye.
+	logBandAmp := makeFlatLogBandAmp(0.0)
+	mdct := makeSineMDCT(440) // mismo contenido en ambos canales
+	trimCorr := chooseAllocationTrim([2][maxBands]float32{logBandAmp, logBandAmp},
+		[2][]float32{mdct, mdct}, 2, maxLM, maxBands, 128*8*50)
+
+	// L y R decorrelated → trim sin ajuste stereo.
+	mdctR := makeNoiseMDCT(42)
+	trimDecorr := chooseAllocationTrim([2][maxBands]float32{logBandAmp, logBandAmp},
+		[2][]float32{mdct, mdctR}, 2, maxLM, maxBands, 128*8*50)
+
+	assert.Less(t, trimCorr, trimDecorr, "correlated stereo should have lower trim than decorrelated")
+}
+
+// makeFlatLogBandAmp returns a per-band log amplitude array with every band
+// set to v. Used to feed chooseAllocationTrim a spectrally flat input.
+func makeFlatLogBandAmp(v float32) [maxBands]float32 {
+	var out [maxBands]float32
+	for i := range out {
+		out[i] = v
+	}
+
+	return out
+}
+
+// makeTiltedLogBandAmp returns a per-band log amplitude with a linear tilt
+// across bands. slope > 0 favors high bands, slope < 0 favors lows.
+func makeTiltedLogBandAmp(slope float32) [maxBands]float32 {
+	var out [maxBands]float32
+	for i := range out {
+		out[i] = slope * (float32(i) - float32(maxBands-1)/2.0)
+	}
+
+	return out
+}
+
+// makeFlatMDCT returns an MDCT spectrum of the full frame with every bin set
+// to v. Cosine similarity between two identical flat spectra is 1.0.
+func makeFlatMDCT(v float32) []float32 {
+	mdct := make([]float32, (1<<maxLM)*int(bandEdges[maxBands]))
+	for i := range mdct {
+		mdct[i] = v
+	}
+
+	return mdct
+}
+
+// makeSineMDCT returns an MDCT spectrum with a peak at the band closest to
+// freqHz. Bins outside that band are small but non-zero so the spectrum is
+// not degenerate. Two calls with the same freqHz produce identical spectra,
+// so cosine similarity is 1.0 (perfectly correlated).
+func makeSineMDCT(freqHz float32) []float32 {
+	scale := 1 << maxLM
+	mdct := make([]float32, scale*int(bandEdges[maxBands]))
+	binHz := float32(sampleRate) / float32(2*scale*int(bandEdges[maxBands]))
+	targetBin := max(0, int(freqHz/binHz))
+	if targetBin >= len(mdct) {
+		targetBin = len(mdct) - 1
+	}
+	for i := range mdct {
+		mdct[i] = 0.01
+	}
+	mdct[targetBin] = 1.0
+
+	return mdct
+}
+
+// makeNoiseMDCT returns a deterministic pseudo-random MDCT spectrum seeded by
+// seed. Different seeds produce decorrelated spectra.
+func makeNoiseMDCT(seed uint32) []float32 {
+	scale := 1 << maxLM
+	mdct := make([]float32, scale*int(bandEdges[maxBands]))
+	state := seed
+	for i := range mdct {
+		// Linear congruential generator (same constants as libopus celt_lcg_rand).
+		state = 1664525*state + 1013904223
+		// Map to [-1, 1]. int32 conversion is safe: state is a full-cycle LCG.
+		mdct[i] = float32(int32(state)) / float32(1<<31) //nolint:gosec // G115: intentional bit cast
+	}
+
+	return mdct
 }

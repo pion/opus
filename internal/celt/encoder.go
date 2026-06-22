@@ -302,6 +302,12 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 	e.prevSpreadDecision = info.spread
 	e.encodeSpread(&info)
 	totalBitsEighth := e.encodeDynamicAllocation(&info)
+	info.allocationTrim = chooseAllocationTrim(
+		analysis.logBandAmp,
+		analysis.mdct,
+		info.channelCount, info.lm, info.endBand,
+		info.totalBits,
+	)
 	e.encodeAllocationTrim(&info, totalBitsEighth)
 
 	tellFrac := int(e.rangeEncoder.TellFrac())

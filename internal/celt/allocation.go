@@ -5,6 +5,8 @@
 package celt
 
 import (
+	"math"
+
 	"github.com/pion/opus/internal/rangecoding"
 )
 
@@ -610,9 +612,118 @@ func chooseDualStereo(mdctL, mdctR []float32, lm int) bool {
 	return (bins+int64(thetas))*sumMS > bins*sumLR
 }
 
+// chooseAllocationTrim returns the allocation trim [0,10] based on bitrate,
+// inter-channel correlation, and spectral tilt. Mirrors libopus
+// celt_encoder.c:alloc_trim_analysis. Components that depend on unported
+// modules (surround_trim, tf_estimate, tonality_slope) contribute zero.
+//
+// pion's logBandAmp is 0.5*log2(energy)-energyMeans, while libopus's bandLogE
+// is log2(energy). The 0.5 factor is corrected with *2 in the tilt formula;
+// the energyMeans offset cancels in the weighted difference.
+func chooseAllocationTrim(
+	logBandAmp [2][maxBands]float32,
+	mdct [2][]float32,
+	channelCount, lm, endBand int,
+	totalBits uint,
+) int {
+	frameSampleCount := shortBlockSampleCount << lm
+	equivRate := int(totalBits) * sampleRate / frameSampleCount
+
+	// bitrate base, trim=5 default, 4 at low bitrate, interpolated 64-80kbps.
+	trim := float32(5.0)
+	if equivRate < 64000 {
+		trim = 4.0
+	} else if equivRate < 80000 {
+		frac := float32(equivRate-64000) / 1024
+		trim = 4.0 + float32(1.0/16.0)*frac
+	}
+
+	// --- Stereo correlation: average |cosine similarity| over first 8 bands.
+	// libopus uses inner product of normalised bands; we use cosine similarity
+	// of raw MDCT (scale-invariant, same result). Correlated channels →
+	// logXC < 0 → trim decreases → more bits to lows.
+	if channelCount == 2 {
+		scale := 1 << lm
+		var corrSum float32
+		for band := 0; band < 8 && band < endBand; band++ {
+			start := scale * int(bandEdges[band])
+			end := scale * int(bandEdges[band+1])
+			var dot, l2, r2 float32
+			for i := start; i < end; i++ {
+				dot += mdct[0][i] * mdct[1][i]
+				l2 += mdct[0][i] * mdct[0][i]
+				r2 += mdct[1][i] * mdct[1][i]
+			}
+			if l2 > 1e-30 && r2 > 1e-30 {
+				corrSum += abs32(dot) / sqrtf(l2*r2)
+			}
+		}
+		avgCorr := corrSum / 8.0
+		if avgCorr > 1.0 {
+			avgCorr = 1.0
+		}
+		logXC := float32(math.Log2(1.001 - float64(avgCorr*avgCorr)))
+		trim += max32(-4.0, 0.75*logXC)
+	}
+
+	// --- Spectral tilt: weighted sum of bandLogE.
+	// (2+2*i-end) is negative for low bands, positive for high.
+	// Positive diff (high-freq heavy) → trim decreases → more bits to highs.
+	// pion's logBandAmp is 0.5*log2(energy)-energyMeans (relative to the
+	// per-band mean); libopus's bandLogE is log2(energy) in absolute dB. The
+	// *2 cancels the 0.5 factor; *6.02 converts log2 to dB to match libopus's
+	// Q7 domain. libopus adds a +16 dB offset (QCONST32(1.f, DB_SHIFT-5)) to
+	// center the clamp around typical absolute bandLogE values; pion's
+	// mean-relative domain is already centered at 0, so the offset is dropped.
+	const dbPerLog2 = 6.0206 // 20/log2(10)
+	var diff float32
+	for ch := range channelCount {
+		for i := range endBand {
+			diff += logBandAmp[ch][i] * 2.0 * dbPerLog2 * float32(2+2*i-endBand)
+		}
+	}
+	diff /= float32(channelCount * (endBand - 1))
+	tiltContrib := diff * 4.0 / 6.0
+	tiltContrib = max32(-2.0, min32(2.0, tiltContrib))
+	trim -= tiltContrib
+
+	// Round and clamp to [0, 10].
+	trimIndex := int(trim + 0.5)
+	if trimIndex < 0 {
+		trimIndex = 0
+	} else if trimIndex > 10 {
+		trimIndex = 10
+	}
+	return trimIndex
+}
+
 func abs64(x int64) int64 {
 	if x < 0 {
 		return -x
 	}
 	return x
 }
+
+func abs32(x float32) float32 {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+func max32(a, b float32) float32 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func min32(a, b float32) float32 {
+	if a < b {
+		return a
+	}
+
+	return b
+}
+
+func sqrtf(x float32) float32 { return float32(math.Sqrt(float64(x))) }
