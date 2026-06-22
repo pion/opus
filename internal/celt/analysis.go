@@ -245,6 +245,59 @@ func computeBandLogAmp(freq []float32, lm int, startBand int, endBand int) [maxB
 	return logAmp
 }
 
+// spreadingDecision computes the spread level for one frame from the MDCT
+// spectrum and updates the inter-frame average in prevAvg.
+//
+// The metric is the mean of (1 - bandMean/bandPeak) across coded bands.
+// A band where one bin dominates gives a value near 1 (tonal); a band with
+// uniform energy gives a value near 0 (noise-like). This is the floating-point
+// equivalent of the per-band CDF step inside libopus spreading_decision
+// (celt_encoder.c), using a uniform band weight since the tonality-based
+// spread_weight is disabled in libopus production.
+func spreadingDecision(mdct []float32, lm, startBand, endBand int, prevAvg *float32, prevDecision int) int {
+	scale := 1 << lm
+	var sum float32
+	nBands := 0
+
+	for band := startBand; band < endBand; band++ {
+		lo := scale * int(bandEdges[band])
+		hi := scale * int(bandEdges[band+1])
+		n := hi - lo
+		if n < 2 {
+			continue
+		}
+
+		var energy, maxE float32
+		for i := lo; i < hi; i++ {
+			e := mdct[i] * mdct[i]
+			energy += e
+			if e > maxE {
+				maxE = e
+			}
+		}
+
+		mean := energy / float32(n)
+		if mean < 1e-30 || maxE < 1e-30 {
+			continue
+		}
+
+		// 0 when all bins are equal (noise), near 1 when one bin dominates (tonal).
+		sum += 1 - mean/maxE
+		nBands++
+	}
+
+	if nBands == 0 {
+		return prevDecision
+	}
+
+	avg := sum / float32(nBands)
+	// Recursive inter-frame average damps single-frame spikes.
+	avg = 0.5 * (avg + *prevAvg)
+	*prevAvg = avg
+
+	return hysteresisDecision(avg, prevDecision, [3]float32{0.15, 0.40, 0.65})
+}
+
 // applyDCBlock applies a first-order IIR high-pass at dcBlockCutoffHz to
 // remove DC bias. mem must persist across frames. Not normative — encoder-only
 // pre-processing (libopus dc_reject, src/opus_encoder.c:479-507).
