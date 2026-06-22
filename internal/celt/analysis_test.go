@@ -395,7 +395,7 @@ func TestChooseAllocationTrimStereoCorrelated(t *testing.T) {
 func makeFlatLogBandAmp(v float32) [maxBands]float32 {
 	var out [maxBands]float32
 	for i := range out {
-		out[i] = v
+		out[i] = v //nolint:gosec // G602: i is always in bounds, sourced from range out.
 	}
 
 	return out
@@ -406,7 +406,7 @@ func makeFlatLogBandAmp(v float32) [maxBands]float32 {
 func makeTiltedLogBandAmp(slope float32) [maxBands]float32 {
 	var out [maxBands]float32
 	for i := range out {
-		out[i] = slope * (float32(i) - float32(maxBands-1)/2.0)
+		out[i] = slope * (float32(i) - float32(maxBands-1)/2.0) //nolint:gosec // G602: i is always in bounds, sourced from range out.
 	}
 
 	return out
