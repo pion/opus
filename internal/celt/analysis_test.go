@@ -534,7 +534,7 @@ func TestMedianOf5(t *testing.T) {
 func uniformSpreadWeight() [maxBands]int {
 	var w [maxBands]int
 	for i := range w {
-		w[i] = 32
+		w[i] = 32 //nolint:gosec // G602: i from range.
 	}
 
 	return w
