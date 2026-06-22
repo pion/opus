@@ -43,6 +43,7 @@ type Encoder struct {
 	prevSpreadAvg      float32
 	prevSpreadDecision int
 	prevIntensityBand  int
+	prevLogBandAmp     [2][maxBands]float32
 }
 
 func NewEncoder() Encoder {
@@ -210,22 +211,44 @@ func (e *Encoder) encodeSpread(info *frameSideInfo) {
 	}
 }
 
-// encodeDynamicAllocation mirrors decodeDynamicAllocation by emitting a zero
-// boost flag per band while budget allows. The decoder reads one flag per
-// band per RFC 6716 Section 4.3.3, so the encoder must emit the matching
-// flags in the same order to keep the range coder in sync — even when no
-// boost is applied.
-func (e *Encoder) encodeDynamicAllocation(info *frameSideInfo) uint {
+// encodeDynamicAllocation mirrors decodeDynamicAllocation by emitting boost
+// flags per band. offsets[band] is the number of boost quanta computed by
+// dynallocAnalysis; the encoder writes one flag per quantum, stopping when
+// the flag is 0 or the budget is exhausted. The decoder reads the same
+// sequence (RFC 6716 Section 4.3.3), so the two must stay in lockstep.
+func (e *Encoder) encodeDynamicAllocation(info *frameSideInfo, offsets [maxBands]int) uint {
 	totalBitsEighth := info.totalBits << bitResolution
+	caps := allocationCaps(info.lm, info.channelCount)
 	dynamicAllocationLogP := initialDynamicAllocationLogP
 	tellFrac := e.rangeEncoder.TellFrac()
 
 	for band := info.startBand; band < info.endBand; band++ {
-		if tellFrac+uint(dynamicAllocationLogP<<bitResolution) < totalBitsEighth {
-			e.rangeEncoder.EncodeSymbolLogP(uint(dynamicAllocationLogP), 0)
+		width := info.channelCount * (int(bandEdges[band+1]-bandEdges[band]) << info.lm)
+		quanta := min(width<<bitResolution, max(allocationTrimBitCost<<bitResolution, width))
+		quantaBits := uint(quanta)
+		loopLogP := dynamicAllocationLogP
+		boost := 0
+
+		for j := 0; tellFrac+uint(loopLogP<<bitResolution) < totalBitsEighth && boost < caps[band]; j++ {
+			flag := j < offsets[band]
+			e.rangeEncoder.EncodeSymbolLogP(uint(loopLogP), uint32(boolIndex(flag)))
 			tellFrac = e.rangeEncoder.TellFrac()
+			if !flag {
+				break
+			}
+			boost += quanta
+			if quantaBits >= totalBitsEighth {
+				totalBitsEighth = 0
+			} else {
+				totalBitsEighth -= quantaBits
+			}
+			loopLogP = 1
 		}
-		info.bandBoost[band] = 0
+
+		info.bandBoost[band] = boost
+		if boost > 0 {
+			dynamicAllocationLogP = max(minDynamicAllocationLogP, dynamicAllocationLogP-1)
+		}
 	}
 
 	return totalBitsEighth
@@ -295,13 +318,23 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 	e.encodeCoarseEnergy(&info, targetLogE)
 
 	e.encodeTimeFrequencyChanges(&info)
+	// Compute dynalloc offsets and spread_weight BEFORE the spread decision,
+	// because spread_weight feeds spreadingDecision (libopus computes
+	// dynalloc_analysis before spreading_decision).
+	effectiveBytes := frameBytes
+	offsets, spreadWeight := dynallocAnalysis(
+		analysis.logBandAmp, e.prevLogBandAmp,
+		info.lm, info.startBand, info.endBand, info.channelCount,
+		effectiveBytes, info.transient,
+	)
+
 	info.spread = spreadingDecision(
 		analysis.mdct[0], info.lm, info.startBand, info.endBand,
-		&e.prevSpreadAvg, e.prevSpreadDecision,
+		&e.prevSpreadAvg, e.prevSpreadDecision, spreadWeight,
 	)
 	e.prevSpreadDecision = info.spread
 	e.encodeSpread(&info)
-	totalBitsEighth := e.encodeDynamicAllocation(&info)
+	totalBitsEighth := e.encodeDynamicAllocation(&info, offsets)
 	info.allocationTrim = chooseAllocationTrim(
 		analysis.logBandAmp,
 		analysis.mdct,
@@ -371,6 +404,7 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 	bitsLeft := int(info.totalBits) - int(e.rangeEncoder.Tell())
 	e.finalizeFineEnergy(&info, info.allocation.fineQuant, info.allocation.finePriority, targetLogE, bitsLeft)
 
+	e.prevLogBandAmp = analysis.logBandAmp
 	e.rng = e.rangeEncoder.FinalRange()
 
 	return e.rangeEncoder.FlushInto(dst), nil
