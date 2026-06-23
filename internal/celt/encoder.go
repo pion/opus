@@ -4,7 +4,11 @@
 //nolint:gosec // G115/G602: integer conversions are bounded by CELT frame and band sizes.
 package celt
 
-import "github.com/pion/opus/internal/rangecoding"
+import (
+	"math/bits"
+
+	"github.com/pion/opus/internal/rangecoding"
+)
 
 // Encoder encodes PCM audio into CELT-only Opus frames.
 //
@@ -141,10 +145,33 @@ func (e *Encoder) encodeSilenceFlag() {
 	}
 }
 
-// encodePostFilter writes the disabled RFC 6716 post-filter symbol.
+// encodePostFilter writes the RFC 6716 Table 56 post-filter symbols.
 func (e *Encoder) encodePostFilter(info *frameSideInfo) {
-	if info.startBand == 0 && e.rangeEncoder.Tell()+16 <= info.totalBits {
+	if info.startBand != 0 || e.rangeEncoder.Tell()+16 > info.totalBits {
+		return
+	}
+	if !info.postFilter.enabled {
 		e.rangeEncoder.EncodeSymbolLogP(1, 0)
+
+		return
+	}
+
+	e.rangeEncoder.EncodeSymbolLogP(1, 1)
+
+	// Encode period as octave + fine pitch (RFC 6716 §4.3.7.1).
+	// pitch_index = period + 1 is split into octave = floor(log2) - 4
+	// and fine = pitch_index - (16 << octave), matching libopus
+	// celt_encoder.c lines 2055-2058.
+	period1 := uint32(info.postFilter.period + 1)
+	octave := uint(bits.Len32(period1) - 5)
+	e.rangeEncoder.EncodeUniform(6, uint32(octave))
+	fine := period1 - (16 << octave)
+	e.rangeEncoder.EncodeRawBits(4+octave, fine)
+
+	e.rangeEncoder.EncodeRawBits(3, uint32(info.postFilter.qq))
+
+	if e.rangeEncoder.Tell()+2 <= info.totalBits {
+		e.rangeEncoder.EncodeSymbolWithICDF(icdfTapset, uint32(info.postFilter.tapset))
 	}
 }
 
@@ -344,12 +371,12 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 	e.encodeAllocationTrim(&info, totalBitsEighth)
 
 	tellFrac := int(e.rangeEncoder.TellFrac())
-	bits := (int(info.totalBits) << bitResolution) - tellFrac - 1
+	shapeBits := (int(info.totalBits) << bitResolution) - tellFrac - 1
 	info.antiCollapseRsv = 0
-	if info.transient && info.lm >= 2 && bits >= (info.lm+2)<<bitResolution {
+	if info.transient && info.lm >= 2 && shapeBits >= (info.lm+2)<<bitResolution {
 		info.antiCollapseRsv = 1 << bitResolution
 	}
-	bits -= info.antiCollapseRsv
+	shapeBits -= info.antiCollapseRsv
 	targetIntensity := 0
 	targetDualStereo := 0
 	if info.channelCount == 2 {
@@ -373,7 +400,7 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 			targetDualStereo = 1
 		}
 	}
-	info.allocation = e.computeAllocationMono(&info, bits, targetIntensity, targetDualStereo)
+	info.allocation = e.computeAllocationMono(&info, shapeBits, targetIntensity, targetDualStereo)
 	e.encodeFineEnergy(&info, info.allocation.fineQuant, targetLogE)
 
 	totalBits := (int(info.totalBits) << bitResolution) - info.antiCollapseRsv
