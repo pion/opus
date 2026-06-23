@@ -248,13 +248,17 @@ func computeBandLogAmp(freq []float32, lm int, startBand int, endBand int) [maxB
 // spreadingDecision computes the spread level for one frame from the MDCT
 // spectrum and updates the inter-frame average in prevAvg.
 //
-// The metric is the mean of (1 - bandMean/bandPeak) across coded bands.
-// A band where one bin dominates gives a value near 1 (tonal); a band with
-// uniform energy gives a value near 0 (noise-like). This is the floating-point
+// The metric is the weighted mean of (1 - bandMean/bandPeak) across coded
+// bands, where spreadWeight[band] controls each band's contribution. A band
+// where one bin dominates gives a value near 1 (tonal); a band with uniform
+// energy gives a value near 0 (noise-like). This is the floating-point
 // equivalent of the per-band CDF step inside libopus spreading_decision
-// (celt_encoder.c), using a uniform band weight since the tonality-based
-// spread_weight is disabled in libopus production.
-func spreadingDecision(mdct []float32, lm, startBand, endBand int, prevAvg *float32, prevDecision int) int {
+// (celt_encoder.c). spreadWeight comes from dynallocAnalysis masking model.
+func spreadingDecision(
+	mdct []float32, lm, startBand, endBand int,
+	prevAvg *float32, prevDecision int,
+	spreadWeight [maxBands]int,
+) int {
 	scale := 1 << lm
 	var sum float32
 	nBands := 0
@@ -264,6 +268,11 @@ func spreadingDecision(mdct []float32, lm, startBand, endBand int, prevAvg *floa
 		hi := scale * int(bandEdges[band+1])
 		n := hi - lo
 		if n < 2 {
+			continue
+		}
+
+		weight := spreadWeight[band]
+		if weight == 0 {
 			continue
 		}
 
@@ -282,8 +291,9 @@ func spreadingDecision(mdct []float32, lm, startBand, endBand int, prevAvg *floa
 		}
 
 		// 0 when all bins are equal (noise), near 1 when one bin dominates (tonal).
-		sum += 1 - mean/maxE
-		nBands++
+		tonality := 1 - mean/maxE
+		sum += tonality * float32(weight)
+		nBands += weight
 	}
 
 	if nBands == 0 {

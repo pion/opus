@@ -31,7 +31,7 @@ func TestSpreadingDecisionTonalSignal(t *testing.T) {
 	prev := defaultSpreadDecision
 	var decision int
 	for range 8 {
-		decision = spreadingDecision(mdct, lm, 0, maxBands, &prevAvg, prev)
+		decision = spreadingDecision(mdct, lm, 0, maxBands, &prevAvg, prev, uniformSpreadWeight())
 		prev = decision
 	}
 	assert.GreaterOrEqual(t, decision, spreadNormal,
@@ -52,7 +52,7 @@ func TestSpreadingDecisionNoiseSignal(t *testing.T) {
 	prev := defaultSpreadDecision
 	var decision int
 	for range 8 {
-		decision = spreadingDecision(mdct, lm, 0, maxBands, &prevAvg, prev)
+		decision = spreadingDecision(mdct, lm, 0, maxBands, &prevAvg, prev, uniformSpreadWeight())
 		prev = decision
 	}
 	assert.LessOrEqual(t, decision, spreadLight,
@@ -73,13 +73,13 @@ func TestSpreadingDecisionRecursiveAvg(t *testing.T) {
 	var avgA float32
 	prevA := defaultSpreadDecision
 	for range 4 {
-		prevA = spreadingDecision(mdct, lm, 0, maxBands, &avgA, prevA)
+		prevA = spreadingDecision(mdct, lm, 0, maxBands, &avgA, prevA, uniformSpreadWeight())
 	}
 
 	var avgB float32
 	prevB := defaultSpreadDecision
 	for range 8 {
-		prevB = spreadingDecision(mdct, lm, 0, maxBands, &avgB, prevB)
+		prevB = spreadingDecision(mdct, lm, 0, maxBands, &avgB, prevB, uniformSpreadWeight())
 	}
 
 	// After more frames the avg should converge further; after 8 frames it
@@ -92,7 +92,7 @@ func TestSpreadingDecisionSilentFrame(t *testing.T) {
 	mdct := make([]float32, (1<<lm)*int(bandEdges[maxBands]))
 	var prevAvg float32
 	// All zero input: should return prevDecision unchanged.
-	got := spreadingDecision(mdct, lm, 0, maxBands, &prevAvg, spreadNormal)
+	got := spreadingDecision(mdct, lm, 0, maxBands, &prevAvg, spreadNormal, uniformSpreadWeight())
 	assert.Equal(t, spreadNormal, got, "silent frame should return prevDecision")
 }
 
@@ -392,7 +392,7 @@ func TestChooseAllocationTrimStereoCorrelated(t *testing.T) {
 
 // makeFlatLogBandAmp returns a per-band log amplitude array with every band
 // set to v. Used to feed chooseAllocationTrim a spectrally flat input.
-func makeFlatLogBandAmp(v float32) [maxBands]float32 {
+func makeFlatLogBandAmp(v float32) [maxBands]float32 { //nolint:unparam // v is kept for future tests
 	var out [maxBands]float32
 	for i := range out {
 		out[i] = v //nolint:gosec // G602: i is always in bounds, sourced from range out.
@@ -457,4 +457,85 @@ func makeNoiseMDCT(seed uint32) []float32 {
 	}
 
 	return mdct
+}
+
+func TestDynallocFlatSpectrumNoBoost(t *testing.T) {
+	// Flat spectrum → no isolated peaks → all offsets zero.
+	logBandAmp := makeFlatLogBandAmp(0.0)
+	prev := makeFlatLogBandAmp(0.0)
+	offsets, _ := dynallocAnalysis(
+		[2][maxBands]float32{logBandAmp, logBandAmp},
+		[2][maxBands]float32{prev, prev},
+		maxLM, 0, maxBands, 1, 120, false,
+	)
+	for band := range maxBands {
+		assert.Equal(t, 0, offsets[band], "flat spectrum band %d should get no boost", band)
+	}
+}
+
+func TestDynallocIsolatedPeakGetsBoost(t *testing.T) {
+	// Isolated peak in band 10 → that band gets boost.
+	logBandAmp := makeFlatLogBandAmp(0.0)
+	logBandAmp[10] = 10.0
+	prev := makeFlatLogBandAmp(0.0)
+	offsets, _ := dynallocAnalysis(
+		[2][maxBands]float32{logBandAmp, logBandAmp},
+		[2][maxBands]float32{prev, prev},
+		maxLM, 0, maxBands, 1, 120, false,
+	)
+	assert.Greater(t, offsets[10], 0, "isolated peak should get boost")
+}
+
+func TestDynallocSpreadWeightMaskedBandReduced(t *testing.T) {
+	// Strong peak in band 15 → neighboring bands are masked → lower weight.
+	logBandAmp := makeFlatLogBandAmp(0.0)
+	logBandAmp[15] = 20.0
+	prev := makeFlatLogBandAmp(0.0)
+	_, spreadWeight := dynallocAnalysis(
+		[2][maxBands]float32{logBandAmp, logBandAmp},
+		[2][maxBands]float32{prev, prev},
+		maxLM, 0, maxBands, 1, 120, false,
+	)
+	// Bands far from the peak should have reduced weight.
+	assert.Less(t, spreadWeight[5], 32, "band far from peak should have reduced weight")
+}
+
+func TestDynallocLowBitrateGated(t *testing.T) {
+	// Below 30+5*LM bytes → dynalloc disabled, all offsets zero.
+	logBandAmp := makeFlatLogBandAmp(0.0)
+	logBandAmp[10] = 10.0
+	prev := makeFlatLogBandAmp(0.0)
+	offsets, _ := dynallocAnalysis(
+		[2][maxBands]float32{logBandAmp, logBandAmp},
+		[2][maxBands]float32{prev, prev},
+		maxLM, 0, maxBands, 1, 10, false, // 10 bytes < 30+15=45
+	)
+	for band := range maxBands {
+		assert.Equal(t, 0, offsets[band], "low bitrate should gate dynalloc")
+	}
+}
+
+func TestMedianOf3(t *testing.T) {
+	assert.Equal(t, float32(2), medianOf3([3]float32{1, 2, 3}))
+	assert.Equal(t, float32(2), medianOf3([3]float32{3, 1, 2}))
+	assert.Equal(t, float32(2), medianOf3([3]float32{2, 3, 1}))
+	assert.Equal(t, float32(1), medianOf3([3]float32{1, 1, 1}))
+}
+
+func TestMedianOf5(t *testing.T) {
+	assert.Equal(t, float32(3), medianOf5([5]float32{1, 2, 3, 4, 5}))
+	assert.Equal(t, float32(3), medianOf5([5]float32{5, 4, 3, 2, 1}))
+	assert.Equal(t, float32(3), medianOf5([5]float32{3, 1, 4, 5, 2}))
+	assert.Equal(t, float32(2), medianOf5([5]float32{2, 2, 2, 2, 2}))
+}
+
+// uniformSpreadWeight returns a weight array where every band has weight 32
+// (no masking). This matches the pre-7c behavior of spreadingDecision.
+func uniformSpreadWeight() [maxBands]int {
+	var w [maxBands]int
+	for i := range w {
+		w[i] = 32 //nolint:gosec // G602: i from range.
+	}
+
+	return w
 }

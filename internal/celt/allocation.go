@@ -16,6 +16,10 @@ const (
 	fineOffset      = 21
 )
 
+// lsbDepth is the assumed bit depth of the input PCM. libopus uses 24 for
+// float input and 16 for int16. pion always receives float32, so 24.
+const lsbDepth = 24
+
 type allocationState struct {
 	pulses       [maxBands]int // Shape budget in 1/8-bit units; PVQ converts this to a pulse count later.
 	fineQuant    [maxBands]int
@@ -727,3 +731,323 @@ func min32(a, b float32) float32 {
 }
 
 func sqrtf(x float32) float32 { return float32(math.Sqrt(float64(x))) }
+
+// medianOf3 returns the median of three float32 values. Port of libopus
+// celt_encoder.c:median_of_3.
+func medianOf3(vals [3]float32) float32 {
+	if vals[0] > vals[1] {
+		if vals[1] > vals[2] {
+			return vals[1]
+		} else if vals[0] > vals[2] {
+			return vals[2]
+		}
+
+		return vals[0]
+	}
+
+	if vals[0] > vals[2] {
+		return vals[0]
+	} else if vals[1] > vals[2] {
+		return vals[2]
+	}
+
+	return vals[1]
+}
+
+// medianOf5 returns the median of five float32 values. Port of libopus
+// celt_encoder.c:median_of_5.
+func medianOf5(vals [5]float32) float32 {
+	lo0, hi0 := vals[0], vals[1]
+	if lo0 > hi0 {
+		lo0, hi0 = hi0, lo0
+	}
+	mid := vals[2]
+	lo1, hi1 := vals[3], vals[4]
+	if lo1 > hi1 {
+		lo1, hi1 = hi1, lo1
+	}
+	if lo0 > lo1 {
+		_, hi0, lo1, hi1 = lo1, hi1, lo0, hi0
+	}
+	if mid > hi0 {
+		if hi0 < lo1 {
+			return min32(mid, lo1)
+		}
+
+		return min32(hi1, hi0)
+	}
+	if mid < lo1 {
+		return min32(hi0, lo1)
+	}
+
+	return min32(mid, hi1)
+}
+
+// dynallocAnalysis computes per-band boost offsets and spread weights.
+// Mirrors libopus celt_encoder.c:dynalloc_analysis.
+//
+// pion's logBandAmp = 0.5*log2(energy)-energyMeans; libopus bandLogE =
+// log2(energy). We convert internally so the follower thresholds match.
+func dynallocAnalysis(
+	logBandAmp [2][maxBands]float32,
+	prevLogBandAmp [2][maxBands]float32,
+	lm, startBand, endBand, channelCount int,
+	effectiveBytes int,
+	isTransient bool,
+) (offsets [maxBands]int, spreadWeight [maxBands]int) {
+	var noiseFloor [maxBands]float32
+	for band := range endBand {
+		logN := float32(logN400[band]) / 8.0 // log2(band width)
+		noiseFloor[band] = 0.0625*logN +
+			0.5 + float32(9-lsbDepth) -
+			energyMeans[band] +
+			0.0062*float32((band+5)*(band+5))
+	}
+
+	var bandLogE [2][maxBands]float32
+	for ch := range channelCount {
+		for band := range endBand {
+			bandLogE[ch][band] = 2.0 * (logBandAmp[ch][band] + energyMeans[band])
+		}
+	}
+
+	maxDepth := float32(-31.9)
+	for ch := range channelCount {
+		for band := range endBand {
+			depth := bandLogE[ch][band] - noiseFloor[band]
+			if depth > maxDepth {
+				maxDepth = depth
+			}
+		}
+	}
+
+	{
+		var mask, sig [maxBands]float32
+		for band := range endBand {
+			mask[band] = bandLogE[0][band] - noiseFloor[band]
+			if channelCount == 2 {
+				d1 := bandLogE[1][band] - noiseFloor[band]
+				if d1 > mask[band] {
+					mask[band] = d1
+				}
+			}
+			sig[band] = mask[band]
+		}
+		// Forward: -6 dB/Bark → -0.996 log2.
+		for band := 1; band < endBand; band++ {
+			if mask[band-1]-0.996 > mask[band] {
+				mask[band] = mask[band-1] - 0.996
+			}
+		}
+		// Backward: -9 dB/Bark → -1.495 log2.
+		for band := endBand - 2; band >= 0; band-- {
+			if mask[band+1]-1.495 > mask[band] {
+				mask[band] = mask[band+1] - 1.495
+			}
+		}
+		// SMR → shift → spread_weight = 32 >> shift.
+		for band := range endBand {
+			masked := max32(0, maxDepth-12.0)
+			if mask[band] > masked {
+				masked = mask[band]
+			}
+			smr := sig[band] - masked
+			shift := 0
+			if smr < 0 {
+				shift = int(-smr + 0.5)
+			}
+			if shift > 5 {
+				shift = 5
+			}
+			if shift < 0 {
+				shift = 0
+			}
+			spreadWeight[band] = 32 >> shift
+		}
+	}
+
+	if effectiveBytes < 30+5*lm {
+		return offsets, spreadWeight
+	}
+
+	// follower tracks the previous frame's spectrum (bandLogE2 in libopus).
+	var follower [2][maxBands]float32
+	for ch := range channelCount {
+		var bandLogE3 [maxBands]float32
+		for band := range endBand {
+			bandLogE3[band] = 2.0 * (prevLogBandAmp[ch][band] + energyMeans[band])
+		}
+
+		// For LM==0, first 8 bands have 1 bin → unreliable. Take max with
+		// current bandLogE so at least 2 "bins" of context are used.
+		if lm == 0 {
+			for band := 0; band < endBand && band < 8; band++ {
+				if bandLogE[ch][band] > bandLogE3[band] {
+					bandLogE3[band] = bandLogE[ch][band]
+				}
+			}
+		}
+
+		follow := &follower[ch]
+		follow[0] = bandLogE3[0]
+		last := 0
+		for band := 1; band < endBand; band++ {
+			if bandLogE3[band] > bandLogE3[band-1]+0.5 {
+				last = band
+			}
+			prev := follow[band-1] + 1.5
+			follow[band] = bandLogE3[band]
+			if prev < follow[band] {
+				follow[band] = prev
+			}
+		}
+		for band := last - 1; band > 0; band-- {
+			next := follow[band+1] + 2.0
+			if next < follow[band] {
+				follow[band] = next
+			}
+			if bandLogE3[band] < follow[band] {
+				follow[band] = bandLogE3[band]
+			}
+		}
+
+		// Median filter with 1.0 dB offset (≈ 0.166 log2) to avoid
+		// triggering on smooth spectral tilts.
+		const offset = 1.0
+		for band := 2; band < endBand-2; band++ {
+			m := medianOf5([5]float32{
+				bandLogE3[band-2], bandLogE3[band-1], bandLogE3[band],
+				bandLogE3[band+1], bandLogE3[band+2],
+			}) - offset
+			if m > follow[band] {
+				follow[band] = m
+			}
+		}
+
+		if endBand >= 3 {
+			tmp := medianOf3([3]float32{bandLogE3[0], bandLogE3[1], bandLogE3[2]}) - offset
+			if tmp > follow[0] {
+				follow[0] = tmp
+			}
+			if tmp > follow[1] {
+				follow[1] = tmp
+			}
+			tmp = medianOf3([3]float32{
+				bandLogE3[endBand-3], bandLogE3[endBand-2], bandLogE3[endBand-1],
+			}) - offset
+			if tmp > follow[endBand-2] {
+				follow[endBand-2] = tmp
+			}
+			if tmp > follow[endBand-1] {
+				follow[endBand-1] = tmp
+			}
+		}
+
+		for band := range endBand {
+			if noiseFloor[band] > follow[band] {
+				follow[band] = noiseFloor[band]
+			}
+		}
+	}
+
+	var combined [maxBands]float32
+	if channelCount == 2 {
+		for band := startBand; band < endBand; band++ {
+			if follower[1][band] < follower[0][band]-4.0 {
+				follower[1][band] = follower[0][band] - 4.0
+			}
+			if follower[0][band] < follower[1][band]-4.0 {
+				follower[0][band] = follower[1][band] - 4.0
+			}
+			d0 := bandLogE[0][band] - follower[0][band]
+			if d0 < 0 {
+				d0 = 0
+			}
+			d1 := bandLogE[1][band] - follower[1][band]
+			if d1 < 0 {
+				d1 = 0
+			}
+			combined[band] = 0.5 * (d0 + d1)
+		}
+	} else {
+		for band := startBand; band < endBand; band++ {
+			d := bandLogE[0][band] - follower[0][band]
+			if d < 0 {
+				d = 0
+			}
+			combined[band] = d
+		}
+	}
+
+	// Halve non-transient frames (CBR path); boost low bands, reduce high.
+	if !isTransient {
+		for band := startBand; band < endBand; band++ {
+			combined[band] *= 0.5
+		}
+	}
+	for band := startBand; band < endBand; band++ {
+		if band < 8 {
+			combined[band] *= 2
+		}
+		if band >= 12 {
+			combined[band] *= 0.5
+		}
+	}
+
+	// Extra boost for band 0 at very high bitrate.
+	if effectiveBytes > 320 {
+		extra := float32(0.001) * float32(effectiveBytes-320)
+		if extra > 1.5 {
+			extra = 1.5
+		}
+		combined[0] += extra
+	}
+
+	// Cap at 4.0 log2 (≈ 24 dB) then divide by 8 to match libopus boost scale.
+	totBoostBits := 0
+	boostCap := 2 * effectiveBytes / 3 * 8 * 8 // 2/3 of budget in 1/8-bit units
+	for band := startBand; band < endBand; band++ {
+		if combined[band] > 4.0 {
+			combined[band] = 4.0
+		}
+		scaled := combined[band] / 8.0
+		width := channelCount * (int(bandEdges[band+1] - bandEdges[band])) << lm
+
+		var boost int
+		var boostBits int
+		switch {
+		case width < 6:
+			boost = int(scaled)
+			boostBits = boost * width << bitResolution
+		case width > 48:
+			boost = int(scaled * 8)
+			boostBits = (boost * width << bitResolution) / 8
+		default:
+			boost = int(scaled * float32(width) / 6.0)
+			boostBits = boost * 6 << bitResolution
+		}
+
+		if totBoostBits+boostBits > boostCap {
+			// Clamp to remaining budget.
+			remaining := max(0, boostCap-totBoostBits)
+			// convert remaining bits back to boost quanta
+			switch {
+			case width < 6:
+				boost = remaining >> bitResolution / max(1, width)
+			case width > 48:
+				boost = remaining << 3 / max(1, width) >> bitResolution
+			default:
+				boost = remaining >> bitResolution / 6
+			}
+			if boost < 0 {
+				boost = 0
+			}
+			boostBits = remaining
+		}
+
+		offsets[band] = boost
+		totBoostBits += boostBits
+	}
+
+	return offsets, spreadWeight
+}
