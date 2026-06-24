@@ -94,6 +94,7 @@ func (e *Encoder) Reset() {
 	e.prevSpreadAvg = 0
 	e.prevSpreadDecision = defaultSpreadDecision
 	e.prevIntensityBand = 0
+	e.analysis.prefilter = postFilterState{}
 }
 
 func (e *Encoder) Mode() *Mode {
@@ -318,9 +319,23 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 	e.rangeEncoder.Init()
 
 	transient := detectTransient(pcm, &e.analysis)
+
+	// Run pitch detection on raw PCM — period is stable across pre-emphasis.
+	pitchPeriod, pitchGain := detectPitch(pcm[0])
+
+	prefilterEnabled, prefilterQq, prefilterGain := prefilterDecision(
+		pitchPeriod, pitchGain,
+		e.analysis.prefilter.period, e.analysis.prefilter.gain,
+		frameBytes, len(pcm), transient,
+		uint(frameBytes)*8, e.rangeEncoder.Tell(),
+	)
+
+	prefilterTapset := tapsetFromSpread(e.prevSpreadDecision)
+
 	analysis, err := analyzeFrame(
 		e.mode, pcm, startBand, endBand, &e.analysis, &e.mdctScratch, &e.fftScratch,
 		transient,
+		prefilterEnabled, pitchPeriod, prefilterGain, prefilterTapset,
 	)
 	if err != nil {
 		return 0, err
@@ -328,6 +343,31 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 
 	info := analysis.info
 	info.totalBits = uint(frameBytes) * 8
+
+	// Update pre-filter state for the next frame.
+	if prefilterEnabled {
+		e.analysis.prefilter.oldPeriod = e.analysis.prefilter.period
+		e.analysis.prefilter.oldGain = e.analysis.prefilter.gain
+		e.analysis.prefilter.oldTapset = e.analysis.prefilter.tapset
+		e.analysis.prefilter.period = pitchPeriod
+		e.analysis.prefilter.gain = prefilterGain
+		e.analysis.prefilter.tapset = prefilterTapset
+
+		info.postFilter = postFilter{
+			enabled: true,
+			period:  pitchPeriod,
+			gain:    prefilterGain,
+			qq:      prefilterQq,
+			tapset:  prefilterTapset,
+		}
+	} else {
+		e.analysis.prefilter.oldPeriod = e.analysis.prefilter.period
+		e.analysis.prefilter.oldGain = e.analysis.prefilter.gain
+		e.analysis.prefilter.oldTapset = e.analysis.prefilter.tapset
+		e.analysis.prefilter.period = combFilterMinPeriod
+		e.analysis.prefilter.gain = 0
+		e.analysis.prefilter.tapset = 0
+	}
 
 	if e.rangeEncoder.Tell() > info.totalBits {
 		return e.rangeEncoder.FlushInto(dst), nil
