@@ -62,6 +62,7 @@ type postFilter struct {
 	period  int
 	gain    float32
 	tapset  int
+	qq      int
 }
 
 // decodeFrameSideInfo consumes the initial CELT symbols through the allocation
@@ -230,6 +231,7 @@ func (d *Decoder) decodePostFilter(info *frameSideInfo) error {
 		octave:  int(octave),
 		period:  (postFilterPitchBase << octave) + int(rawPeriod) - 1,
 		gain:    postFilterGainStep * float32(rawGain+1),
+		qq:      int(rawGain),
 	}
 
 	if d.rangeDecoder.Tell()+2 <= info.totalBits {
