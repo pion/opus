@@ -85,3 +85,112 @@ func quantizePitchGain(gain float32) (qq int, quantized float32) {
 
 	return qq, quantized
 }
+
+// tapsetFromSpread maps the spread decision to a pre-filter tapset.
+// AGGRESSIVE (tonal) → tapset 2 (strongest), NORMAL → 1, NONE → 0 (lightest).
+// This is a simplified version of libopus spreading_decision's hf_sum logic
+// (celt/bands.c) — the full HF tonality measure with ±4 hysteresis is left
+// for a future PR.
+func tapsetFromSpread(spread int) int {
+	switch spread {
+	case spreadAggressive:
+		return 2
+	case spreadNormal:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// prefilterDecision implements the gain-threshold logic from libopus
+// run_prefilter (celt_encoder.c lines 1499-1540). Returns enabled=false when
+// the pre-filter would hurt more than help (low gain, low bitrate, strong
+// transient without continuity).
+//
+//nolint:cyclop // Mirrors libopus threshold chain with multiple conditions.
+func prefilterDecision(
+	period int, gain float32, prevPeriod int, prevGain float32,
+	frameBytes, channels int, transient bool,
+	totalBits, tell uint,
+) (enabled bool, qq int, quantizedGain float32) {
+	// Bitrate gate: need enough bytes for the ~15-bit post-filter header.
+	if frameBytes <= 12*channels {
+		return false, 0, 0
+	}
+	// Bit budget gate: need 16 bits for the enable flag + parameters.
+	if tell+16 > totalBits {
+		return false, 0, 0
+	}
+
+	// Strong transient without pitch continuity → disable.
+	if transient && absInt(period-prevPeriod)*10 > period {
+		return false, 0, 0
+	}
+
+	// Gain threshold: base 0.2, adjusted for continuity and bitrate.
+	threshold := float32(0.2)
+	if absInt(period-prevPeriod)*10 > period {
+		threshold += 0.2
+	}
+	if frameBytes < 25 {
+		threshold += 0.1
+	}
+	if frameBytes < 35 {
+		threshold += 0.1
+	}
+	if prevGain > 0.4 {
+		threshold -= 0.1
+	}
+	if prevGain > 0.55 {
+		threshold -= 0.1
+	}
+	// Hard floor at 0.2.
+	if threshold < 0.2 {
+		threshold = 0.2
+	}
+
+	if gain < threshold {
+		return false, 0, 0
+	}
+
+	qq, quantizedGain = quantizePitchGain(gain)
+
+	return true, qq, quantizedGain
+}
+
+func absInt(x int) int {
+	if x < 0 {
+		return -x
+	}
+
+	return x
+}
+
+// applyPrefilter applies the pitch pre-filter before MDCT by calling
+// combFilter with negated gains — the inverse of the decoder's post-filter.
+// Mirrors libopus run_prefilter (celt_encoder.c lines 1543-1558).
+func applyPrefilter(
+	buf []float32,
+	oldPeriod, period int,
+	n int,
+	oldGain, gain float32,
+	oldTapset, tapset int,
+) {
+	start := postfilterHistorySampleCount
+
+	// Clamp periods to the valid range, matching applyPostfilter.
+	oldPeriod = max(oldPeriod, combFilterMinPeriod)
+	period = max(period, combFilterMinPeriod)
+
+	combFilter(
+		buf,
+		start,
+		oldPeriod,
+		period,
+		n,
+		-oldGain,
+		-gain,
+		oldTapset,
+		tapset,
+	)
+}
