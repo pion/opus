@@ -4,7 +4,81 @@
 //nolint:gosec // G602: slice indices are bounded by combFilterMinPeriod/MaxPeriod and len(pcm).
 package celt
 
-import "math"
+// removeDoubling checks whether the detected pitch period T0 is actually
+// an octave of the true fundamental. For each sub-multiple k in {2..15},
+// it evaluates T1 = (2*T0 + offset) / (2*k) and switches if the normalized
+// autocorrelation at T1 exceeds a threshold.
+//
+// libopus celt/pitch.c: remove_doubling().
+//
+//nolint:cyclop // Mirrors libopus octave correction chain.
+func removeDoubling(
+	pcm []float32,
+	bestPeriod int,
+	bestGain float32,
+	prevPeriod int,
+	prevGain float32,
+) (period int, gain float32) {
+	const minPeriod = combFilterMinPeriod
+	secondCheck := [16]int{0, 0, 3, 2, 3, 2, 5, 2, 3, 2, 3, 2, 5, 2, 3, 2}
+
+	currentPeriod := bestPeriod
+	currentGain := bestGain
+
+	if currentPeriod == 0 || currentGain <= 0 {
+		return 0, 0
+	}
+
+	n := len(pcm)
+	if n < minPeriod+1 {
+		return currentPeriod, currentGain
+	}
+
+	for k := 2; k <= 15; k++ {
+		candidatePeriod := (2*currentPeriod + secondCheck[k]) / (2 * k)
+		if candidatePeriod < minPeriod {
+			continue
+		}
+
+		candidateGain := normalizedCorrelation(pcm, candidatePeriod, n)
+		if candidateGain <= 0 {
+			continue
+		}
+
+		var cont float32
+		if prevPeriod > 0 && absInt(candidatePeriod-prevPeriod)*10 < candidatePeriod {
+			cont = prevGain
+		}
+
+		if candidateGain > currentGain && candidateGain > doublingThreshold(currentGain, cont, candidatePeriod) {
+			currentPeriod = candidatePeriod
+			currentGain = candidateGain
+		}
+	}
+
+	// Sanity: if period is very short, check 5/8 and 6/8 sub-harmonics.
+	if currentPeriod < 2*minPeriod && currentPeriod >= 5 {
+		gainFiveEighths := normalizedCorrelation(pcm, currentPeriod*5/8, n)
+		gainSixEighths := normalizedCorrelation(pcm, currentPeriod*6/8, n)
+		if gainFiveEighths > currentGain || gainSixEighths > currentGain {
+			return 0, 0
+		}
+	}
+
+	return currentPeriod, currentGain
+}
+
+func doublingThreshold(gain float32, continuity float32, period int) float32 {
+	threshold := max(float32(0.3), 0.7*gain-continuity)
+	if period < 3*combFilterMinPeriod {
+		threshold = max(float32(0.4), 0.85*gain-continuity)
+	}
+	if period < 2*combFilterMinPeriod {
+		threshold = max(float32(0.5), 0.9*gain-continuity)
+	}
+
+	return threshold
+}
 
 // detectPitch finds the dominant pitch period via normalized autocorrelation
 // over [combFilterMinPeriod, combFilterMaxPeriod-2] (RFC 6716 §4.3.7.1 range).
@@ -41,13 +115,14 @@ func detectPitch(pcm []float32) (period int, gain float32) {
 	bestPeriod := combFilterMinPeriod
 
 	for lag := combFilterMinPeriod; lag <= maxPeriod; lag++ {
-		if energyCurrent > 1e-30 && lagEnergy > 1e-30 {
+		denom := energyCurrent + lagEnergy
+		if denom > 1e-30 {
 			var xcorr float64
 			for i := lag; i < sampleCount; i++ {
 				xcorr += float64(pcm[i]) * float64(pcm[i-lag])
 			}
 
-			normGain := xcorr / math.Sqrt(energyCurrent*lagEnergy)
+			normGain := 2 * xcorr / denom
 			if normGain > bestGain {
 				bestGain = normGain
 				bestPeriod = lag
@@ -193,4 +268,117 @@ func applyPrefilter(
 		oldTapset,
 		tapset,
 	)
+}
+
+func shouldCancelPrefilter(
+	pcm [][]float32,
+	sampleRate int,
+	state *analysisState,
+	period int,
+	gain float32,
+	tapset int,
+) bool {
+	var before [2]float64
+	var after [2]float64
+	for ch := range pcm {
+		pre := state.preScratch[ch][:len(pcm[ch])]
+		copy(pre, pcm[ch])
+		dcMem := state.dcBlockMem[ch]
+		preemphasisMem := state.preemphasisMem[ch]
+		applyDCBlock(pre, sampleRate, &dcMem)
+		applyPreemphasis(pre, pre, &preemphasisMem)
+
+		buf := state.prefilterBuf[ch][:postfilterHistorySampleCount+len(pre)]
+		copy(buf, state.prefilterMem[ch])
+		copy(buf[postfilterHistorySampleCount:], pre)
+		before[ch] = measureEnergy(buf, postfilterHistorySampleCount, len(pre))
+		applyPrefilter(
+			buf,
+			state.prefilter.oldPeriod, period,
+			len(pre),
+			state.prefilter.oldGain, gain,
+			state.prefilter.oldTapset, tapset,
+		)
+		after[ch] = measureEnergy(buf, postfilterHistorySampleCount, len(pre))
+	}
+
+	return cancelPitch(len(pcm), gain, before, after)
+}
+
+// normalizedCorrelation returns the normalized autocorrelation of pcm at the
+// given lag. The normalization is 2*xcorr / (e1+e2) which peaks at 1.0 for
+// a perfect match.
+func normalizedCorrelation(pcm []float32, lag int, n int) float32 {
+	if lag < 1 || lag >= n {
+		return 0
+	}
+
+	var xcorr, e1, e2 float64
+	for i := 0; i < n-lag; i++ {
+		xcorr += float64(pcm[i]) * float64(pcm[i+lag])
+		e1 += float64(pcm[i]) * float64(pcm[i])
+		e2 += float64(pcm[i+lag]) * float64(pcm[i+lag])
+	}
+
+	denom := e1 + e2
+	if denom < 1e-30 {
+		return 0
+	}
+
+	r := 2 * xcorr / denom
+	if r > 1 {
+		r = 1
+	}
+	if r < 0 {
+		r = 0
+	}
+
+	return float32(r)
+}
+
+// cancelPitch measures whether the pre-filter improved or hurt the signal
+// by comparing the sum of absolute samples before and after filtering.
+// Returns true when the filter should be reverted.
+//
+// libopus celt_encoder.c: run_prefilter lines 1548-1584.
+func cancelPitch(
+	channels int,
+	gain float32,
+	before [2]float64,
+	after [2]float64,
+) bool {
+	if channels == 1 {
+		return after[0] > before[0]
+	}
+
+	gain64 := float64(gain)
+	thresh0 := 0.25*gain64*before[0] + 0.01*before[1]
+	thresh1 := 0.25*gain64*before[1] + 0.01*before[0]
+
+	// Revert if either channel worsened beyond its threshold.
+	if after[0]-before[0] > thresh0 || after[1]-before[1] > thresh1 {
+		return true
+	}
+
+	// Revert if neither channel improved enough.
+	if before[0]-after[0] < thresh0 && before[1]-after[1] < thresh1 {
+		return true
+	}
+
+	return false
+}
+
+// measureEnergy returns the sum of absolute values of buf[start:start+n].
+func measureEnergy(buf []float32, start, n int) float64 {
+	var sum float64
+	end := min(start+n, len(buf))
+	for i := start; i < end; i++ {
+		value := buf[i]
+		if value < 0 {
+			value = -value
+		}
+		sum += float64(value)
+	}
+
+	return sum
 }

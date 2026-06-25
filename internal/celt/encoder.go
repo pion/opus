@@ -289,6 +289,29 @@ func (e *Encoder) encodeAllocationTrim(info *frameSideInfo, totalBitsEighth uint
 	}
 }
 
+func (e *Encoder) choosePrefilter(pcm [][]float32, frameBytes int, transient bool) (bool, int, int, float32, int) {
+	// Run pitch detection on raw PCM — period is stable across pre-emphasis.
+	pitchPeriod, pitchGain := detectPitch(pcm[0])
+	pitchPeriod, pitchGain = removeDoubling(
+		pcm[0], pitchPeriod, pitchGain,
+		e.analysis.prefilter.period, e.analysis.prefilter.gain,
+	)
+
+	enabled, qq, quantizedGain := prefilterDecision(
+		pitchPeriod, pitchGain,
+		e.analysis.prefilter.period, e.analysis.prefilter.gain,
+		frameBytes, len(pcm), transient,
+		uint(frameBytes)*8, e.rangeEncoder.Tell(),
+	)
+
+	tapset := tapsetFromSpread(e.prevSpreadDecision)
+	if enabled && shouldCancelPrefilter(pcm, e.mode.SampleRate(), &e.analysis, pitchPeriod, quantizedGain, tapset) {
+		return false, pitchPeriod, 0, 0, tapset
+	}
+
+	return enabled, pitchPeriod, qq, quantizedGain, tapset
+}
+
 // EncodeFrame encodes one CELT frame from float PCM into dst.
 // It returns the number of bytes written. dst must be at least frameBytes long.
 //
@@ -319,18 +342,9 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 	e.rangeEncoder.Init()
 
 	transient := detectTransient(pcm, &e.analysis)
-
-	// Run pitch detection on raw PCM — period is stable across pre-emphasis.
-	pitchPeriod, pitchGain := detectPitch(pcm[0])
-
-	prefilterEnabled, prefilterQq, prefilterGain := prefilterDecision(
-		pitchPeriod, pitchGain,
-		e.analysis.prefilter.period, e.analysis.prefilter.gain,
-		frameBytes, len(pcm), transient,
-		uint(frameBytes)*8, e.rangeEncoder.Tell(),
+	prefilterEnabled, pitchPeriod, prefilterQq, prefilterGain, prefilterTapset := e.choosePrefilter(
+		pcm, frameBytes, transient,
 	)
-
-	prefilterTapset := tapsetFromSpread(e.prevSpreadDecision)
 
 	analysis, err := analyzeFrame(
 		e.mode, pcm, startBand, endBand, &e.analysis, &e.mdctScratch, &e.fftScratch,
