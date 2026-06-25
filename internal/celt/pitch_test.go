@@ -55,6 +55,30 @@ func TestDetectPitchShortInput(t *testing.T) {
 	assert.Zero(t, gain)
 }
 
+func TestRemoveDoublingKeepsFundamental(t *testing.T) {
+	pcm := generateSine(200, 48000, 960)
+	period, gain := removeDoubling(pcm, 240, 0.95, 0, 0)
+
+	assert.InDelta(t, 240, period, 2)
+	assert.Greater(t, gain, float32(0.8))
+}
+
+func TestRemoveDoublingCorrectsOctave(t *testing.T) {
+	pcm := generateSine(200, 48000, 960)
+	period, gain := removeDoubling(pcm, 480, 0.9, 0, 0)
+
+	assert.InDelta(t, 240, period, 2)
+	assert.Greater(t, gain, float32(0.8))
+}
+
+func TestRemoveDoublingNoPitch(t *testing.T) {
+	pcm := make([]float32, 960)
+	period, gain := removeDoubling(pcm, 240, 0, 0, 0)
+
+	assert.Zero(t, period)
+	assert.Zero(t, gain)
+}
+
 func TestQuantizePitchGain(t *testing.T) {
 	cases := []struct {
 		gain      float32
@@ -191,6 +215,27 @@ func TestTapsetFromSpread(t *testing.T) {
 	assert.Equal(t, 1, tapsetFromSpread(spreadNormal))
 	assert.Equal(t, 0, tapsetFromSpread(spreadNone))
 	assert.Equal(t, 0, tapsetFromSpread(spreadLight))
+}
+
+func TestCancelPitchMono(t *testing.T) {
+	before := [2]float64{100}
+
+	assert.True(t, cancelPitch(1, 0.5, before, [2]float64{110}))
+	assert.False(t, cancelPitch(1, 0.5, before, [2]float64{90}))
+}
+
+func TestCancelPitchStereo(t *testing.T) {
+	before := [2]float64{100, 100}
+
+	assert.False(t, cancelPitch(2, 0.5, before, [2]float64{80, 80}))
+	assert.True(t, cancelPitch(2, 0.9, before, [2]float64{140, 80}))
+	assert.True(t, cancelPitch(2, 0.1, before, [2]float64{99, 99}))
+}
+
+func TestMeasureEnergy(t *testing.T) {
+	buf := []float32{10, -1.5, 2, -3, 20}
+
+	assert.Equal(t, 6.5, measureEnergy(buf, 1, 3))
 }
 
 func absFloat32(x float32) float32 {
