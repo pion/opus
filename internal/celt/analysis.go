@@ -26,6 +26,9 @@ type analysisState struct {
 	preScratch     [2][]float32
 	mdctInput      [2][]float32
 	transientMDCT  [2][]float32
+	prefilterMem   [2][]float32
+	prefilter      postFilterState
+	prefilterBuf   [2][]float32
 }
 
 type analysisResult struct {
@@ -53,6 +56,14 @@ func newAnalysisState() analysisState {
 			make([]float32, maxFrame),
 			make([]float32, maxFrame),
 		},
+		prefilterMem: [2][]float32{
+			make([]float32, postfilterHistorySampleCount),
+			make([]float32, postfilterHistorySampleCount),
+		},
+		prefilterBuf: [2][]float32{
+			make([]float32, postfilterHistorySampleCount+maxFrame),
+			make([]float32, postfilterHistorySampleCount+maxFrame),
+		},
 	}
 
 	return state
@@ -68,6 +79,7 @@ func analyzeFrame(
 	mode *Mode, pcm [][]float32, startBand, endBand int,
 	state *analysisState, mdctScratch *forwardMDCTScratch, fftScratch *[]complex32,
 	transient bool,
+	prefilterEnabled bool, prefilterPeriod int, prefilterGain float32, prefilterTapset int,
 ) (analysisResult, error) {
 	lm, err := mode.LMForFrameSampleCount(len(pcm[0]))
 	if err != nil {
@@ -96,6 +108,23 @@ func analyzeFrame(
 		copy(pre, pcm[ch])
 		applyDCBlock(pre, mode.SampleRate(), &state.dcBlockMem[ch])
 		applyPreemphasis(pre, pre, &state.preemphasisMem[ch])
+
+		// Apply pitch pre-filter (whitening) before MDCT, mirroring
+		// libopus run_prefilter. Reuses combFilter with negated gains.
+		if prefilterEnabled {
+			buf := state.prefilterBuf[ch][:postfilterHistorySampleCount+len(pre)]
+			copy(buf, state.prefilterMem[ch])
+			copy(buf[postfilterHistorySampleCount:], pre)
+			applyPrefilter(
+				buf,
+				state.prefilter.oldPeriod, prefilterPeriod,
+				len(pre),
+				state.prefilter.oldGain, prefilterGain,
+				state.prefilter.oldTapset, prefilterTapset,
+			)
+			copy(pre, buf[postfilterHistorySampleCount:])
+			copy(state.prefilterMem[ch], buf[len(pre):len(pre)+postfilterHistorySampleCount])
+		}
 
 		if useShortBlocks {
 			analyzeTransientChannel(
