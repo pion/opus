@@ -6,6 +6,7 @@
 package opus
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"math"
@@ -15,6 +16,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -406,7 +408,17 @@ func TestEncoderQualityVsReference(t *testing.T) {
 
 	opusDemo, opusCompare := buildRFC6716ReferenceTools(t, refDir)
 	baseline := loadQualityBaseline(t)
-	for _, sig := range qualityTestSignals() {
+	signals := qualityTestSignals()
+
+	type refResult struct {
+		pionWSNR string
+		refWSNR  string
+	}
+
+	refResults := make([]refResult, len(signals))
+	var mu sync.Mutex
+
+	for i, sig := range signals {
 		t.Run(sig.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -463,8 +475,47 @@ func TestEncoderQualityVsReference(t *testing.T) {
 			if sigData, ok := baseline.Signals[sig.name]; ok && sigData.Tier2WSNRDB != 0 {
 				t.Logf("baseline tier2_wsnr_db=%.1f", sigData.Tier2WSNRDB)
 			}
+
+			mu.Lock()
+			refResults[i] = refResult{pionWSNR: goWSNR, refWSNR: refWSNR}
+			mu.Unlock()
 		})
 	}
+
+	t.Cleanup(func() {
+		mdPath := os.Getenv("OPUS_QUALITY_MARKDOWN")
+		if mdPath == "" {
+			return
+		}
+
+		existing, _ := os.ReadFile(mdPath) //nolint:gosec // G304: path from test env var, internal tool.
+
+		var buf bytes.Buffer
+		buf.Write(existing)
+		fmt.Fprintln(&buf)
+		fmt.Fprintln(&buf, "### Tier 2 — opus_compare vs libopus (96 kbps CBR)")
+		fmt.Fprintln(&buf)
+		fmt.Fprintln(&buf, "Weighted error: lower is better. The gap reflects pion lacking constrained VBR; libopus ships with it enabled by default.")
+		fmt.Fprintln(&buf)
+		fmt.Fprintln(&buf, "| Signal | pion weighted error ↓ | libopus weighted error ↓ |")
+		fmt.Fprintln(&buf, "|---|---:|---:|")
+		for i, sig := range signals {
+			res := refResults[i]
+			pionErr := res.pionWSNR
+			if pionErr == "" {
+				pionErr = "—"
+			}
+			refErr := res.refWSNR
+			if refErr == "" {
+				refErr = "—"
+			}
+			fmt.Fprintf(&buf, "| %s | %s | %s |\n", sig.name, pionErr, refErr)
+		}
+
+		if err := os.WriteFile(mdPath, buf.Bytes(), 0o600); err != nil { //nolint:gosec // G306: 0o600 is intentional.
+			t.Logf("write quality markdown tier 2: %v", err)
+		}
+	})
 }
 
 func float32ToS16LEBytes(samples []float32) []byte {

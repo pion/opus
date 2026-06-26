@@ -16,12 +16,15 @@ trap 'rm -rf "${WORK_DIR}"' EXIT
 result_file="${OPUS_QUALITY_RESULT:-${WORK_DIR}/encoder-quality.md}"
 mkdir -p "$(dirname "${result_file}")"
 
+markdown_file="${WORK_DIR}/quality-tables.md"
+
 # --- Tier 1: SNR regression (pure Go, no external tools) ---
 echo "=== Tier 1: SNR regression ==="
 cd "${REPO_DIR}"
 tier1_log="${WORK_DIR}/tier1.log"
 set +e
-go test -v -run TestEncoderQuality -count=1 . 2>&1 | tee "${tier1_log}"
+OPUS_QUALITY_MARKDOWN="${markdown_file}" \
+    go test -v -run TestEncoderQuality -count=1 . 2>&1 | tee "${tier1_log}"
 tier1_exit=${PIPESTATUS[0]}
 set -e
 echo ""
@@ -40,36 +43,46 @@ prepare_reference_source "${WORK_DIR}" "${reference_dir}"
 
 tier2_log="${WORK_DIR}/tier2.log"
 set +e
-OPUS_RFC6716_REFERENCE="${reference_dir}" \
+OPUS_QUALITY_MARKDOWN="${markdown_file}" \
+    OPUS_RFC6716_REFERENCE="${reference_dir}" \
     go test -v -tags conformance -run TestEncoderQualityVsReference -count=1 . 2>&1 | tee "${tier2_log}"
 tier2_exit=${PIPESTATUS[0]}
 set -e
 echo ""
 
 # --- Report ---
+status_text="pass"
+if [ "${tier1_exit}" -ne 0 ] || [ "${tier2_exit}" -ne 0 ]; then
+    status_text="fail (informational)"
+fi
+
 {
     echo "<!-- opus-encoder-quality -->"
     echo "## Encoder Quality Report"
-    echo ""
-    echo "### Tier 1: SNR (pion encode → pion decode)"
-    echo ""
+    echo
+    echo "**Status:** ${status_text}"
+    echo
+    if [ -s "${markdown_file}" ]; then
+        cat "${markdown_file}"
+    else
+        echo "No quality tables generated."
+    fi
+    echo
+    echo "<details><summary>Run output</summary>"
+    echo
+    echo '```text'
+    tail -n 200 "${tier1_log}"
+    [ -s "${tier2_log}" ] && tail -n 200 "${tier2_log}"
     echo '```'
-    grep -E "signal=|baseline=|--- PASS|--- FAIL" "${tier1_log}" 2>/dev/null \
-        | sed 's/^    [^:]*:[0-9]*: //' \
-        || echo "(no output)"
-    echo '```'
-    echo ""
-    echo "### Tier 2: opus_compare (vs RFC 6716 reference)"
-    echo ""
-    echo '```'
-    grep -E "pion quality=|libopus quality=|--- PASS|--- FAIL|--- SKIP" "${tier2_log}" 2>/dev/null \
-        | sed 's/^    [^:]*:[0-9]*: //' \
-        || echo "(no output)"
-    echo '```'
-    echo ""
+    echo "</details>"
+    echo
     echo "---"
     echo "*Baseline: \`testdata/encoder-quality-baseline.json\`*"
 } >"${result_file}"
+
+if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+    cat "${result_file}" >>"${GITHUB_STEP_SUMMARY}"
+fi
 
 if [ "${tier1_exit}" -ne 0 ] || [ "${tier2_exit}" -ne 0 ]; then
     echo "FAILED: tier1=${tier1_exit} tier2=${tier2_exit}"

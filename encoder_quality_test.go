@@ -4,10 +4,13 @@
 package opus
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -131,7 +134,19 @@ func generateOnset(n int) []float32 {
 
 func TestEncoderQuality(t *testing.T) {
 	baseline := loadQualityBaseline(t)
-	for _, sig := range qualityTestSignals() {
+	signals := qualityTestSignals()
+
+	type signalResult struct {
+		snr     float64
+		base    float64
+		delta   float64
+		hasBase bool
+	}
+
+	results := make([]signalResult, len(signals))
+	var mu sync.Mutex
+
+	for i, sig := range signals {
 		t.Run(sig.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -142,18 +157,54 @@ func TestEncoderQuality(t *testing.T) {
 			snr := computeSNR(original, decoded)
 			t.Logf("signal=%s SNR=%.1f dB", sig.name, snr)
 
+			res := signalResult{snr: snr}
 			if sigData, ok := baseline.Signals[sig.name]; ok {
-				delta := sigData.Tier1SNRDB - snr
+				res.base = sigData.Tier1SNRDB
+				res.delta = sigData.Tier1SNRDB - snr
+				res.hasBase = true
 				t.Logf("baseline=%.1f dB delta=%.1f dB threshold=%.1f dB",
-					sigData.Tier1SNRDB, delta, regressionThresholdDB)
-				assert.LessOrEqualf(t, delta, float64(regressionThresholdDB),
+					sigData.Tier1SNRDB, res.delta, regressionThresholdDB)
+				assert.LessOrEqualf(t, res.delta, float64(regressionThresholdDB),
 					"quality regression: signal=%s SNR=%.1f dB baseline=%.1f dB",
 					sig.name, snr, sigData.Tier1SNRDB)
 			} else {
 				t.Logf("no baseline for signal %s, pass (first run)", sig.name)
 			}
+
+			mu.Lock()
+			results[i] = res
+			mu.Unlock()
 		})
 	}
+
+	t.Cleanup(func() {
+		mdPath := os.Getenv("OPUS_QUALITY_MARKDOWN")
+		if mdPath == "" {
+			return
+		}
+
+		var buf bytes.Buffer
+		fmt.Fprintln(&buf, "### Tier 1 — SNR regression (96 kbps, pion encode → pion decode)")
+		fmt.Fprintln(&buf)
+		fmt.Fprintf(&buf, "Delta = baseline − current SNR; positive = regression. Fail threshold: %.1f dB.\n",
+			regressionThresholdDB)
+		fmt.Fprintln(&buf)
+		fmt.Fprintln(&buf, "| Signal | SNR (dB) | Baseline (dB) | Delta | Status |")
+		fmt.Fprintln(&buf, "|---|---:|---:|---:|---|")
+		for i, sig := range signals {
+			res := results[i]
+			status := "OK"
+			if res.hasBase && res.delta > float64(regressionThresholdDB) {
+				status = "FAIL"
+			}
+			fmt.Fprintf(&buf, "| %s | %.1f | %.1f | %+.1f | %s |\n",
+				sig.name, res.snr, res.base, res.delta, status)
+		}
+
+		if err := os.WriteFile(mdPath, buf.Bytes(), 0o600); err != nil { //nolint:gosec // G306: 0o600 is intentional.
+			t.Logf("write quality markdown: %v", err)
+		}
+	})
 }
 
 func roundTripGo(t *testing.T, pcm []float32, channels int) []float32 {
