@@ -5,12 +5,10 @@
 
 set -euo pipefail
 
-readonly RFC6716_URL="${RFC6716_URL:-https://www.rfc-editor.org/rfc/rfc6716.txt}"
-# RFC 6716 Appendix A.1 publishes this SHA-1 for opus-rfc6716.tar.gz.
-readonly RFC6716_SOURCE_SHA1="86a927223e73d2476646a1b933fcd3fffb6ecc8c"
-readonly RFC8251_PATCH_URL="${RFC8251_PATCH_URL:-https://www.ietf.org/proceedings/98/slides/materials-98-codec-opus-update-00.patch}"
-# RFC 8251 Section 1 publishes this SHA-1 for the properly formatted patch.
-readonly RFC8251_PATCH_SHA1="029e3aa88fc342c91e67a21e7bfbc9458661cd5f"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib-opus-reference.sh
+source "${SCRIPT_DIR}/lib-opus-reference.sh"
+
 readonly RFC6716_VECTORS_URL="${RFC6716_VECTORS_URL:-https://opus-codec.org/static/testvectors/opus_testvectors.tar.gz}"
 readonly RFC8251_VECTORS_URL="${RFC8251_VECTORS_URL:-https://opus-codec.org/static/testvectors/opus_testvectors-rfc8251.tar.gz}"
 
@@ -20,116 +18,71 @@ log_file="${work_dir}/go-test.log"
 matrix_file="${work_dir}/conformance-matrix.md"
 
 write_early_failure_comment() {
-  local status="$1"
+    local status="$1"
 
-  mkdir -p "$(dirname "${result_file}")"
-  {
-    echo "<!-- opus-rfc-conformance -->"
-    echo "## RFC 6716 / 8251 conformation"
-    echo
-    echo "**Status:** fail"
-    echo
-    echo "The conformance action failed before the test matrix was available."
-    echo
-    echo "Exit status: \`${status}\`"
-    if [ -f "${log_file}" ]; then
-      echo
-      echo "<details><summary>Run output</summary>"
-      echo
-      echo '```text'
-      tail -n 200 "${log_file}"
-      echo '```'
-      echo "</details>"
-    fi
-  } >"${result_file}"
+    mkdir -p "$(dirname "${result_file}")"
+    {
+        echo "<!-- opus-rfc-conformance -->"
+        echo "## RFC 6716 / 8251 conformation"
+        echo
+        echo "**Status:** fail"
+        echo
+        echo "The conformance action failed before the test matrix was available."
+        echo
+        echo "Exit status: \`${status}\`"
+        if [ -f "${log_file}" ]; then
+            echo
+            echo "<details><summary>Run output</summary>"
+            echo
+            echo '```text'
+            tail -n 200 "${log_file}"
+            echo '```'
+            echo "</details>"
+        fi
+    } >"${result_file}"
 }
 
 on_exit() {
-  local status="$1"
+    local status="$1"
 
-  if [ "${status}" -ne 0 ] && [ ! -s "${result_file}" ]; then
-    write_early_failure_comment "${status}"
-  fi
+    if [ "${status}" -ne 0 ] && [ ! -s "${result_file}" ]; then
+        write_early_failure_comment "${status}"
+    fi
 }
 trap 'on_exit "$?"' EXIT
 
-require_command() {
-  if ! command -v "$1" >/dev/null 2>&1; then
-    echo "missing required command: $1" >&2
-    exit 1
-  fi
-}
-
-download() {
-  local url="$1"
-  local out="$2"
-
-  curl --fail --location --show-error --silent "${url}" --output "${out}"
-}
-
-verify_sha1() {
-  local want="$1"
-  local path="$2"
-
-  if command -v sha1sum >/dev/null 2>&1; then
-    printf "%s  %s\n" "${want}" "${path}" | sha1sum -c -
-  else
-    printf "%s  %s\n" "${want}" "${path}" | shasum -a 1 -c -
-  fi
-}
-
 verify_sha1_manifest() {
-  local dir="$1"
+    local dir="$1"
 
-  if command -v sha1sum >/dev/null 2>&1; then
-    (cd "${dir}" && sha1sum -c -)
-  else
-    (cd "${dir}" && shasum -a 1 -c -)
-  fi
-}
-
-base64_decode() {
-  if base64 --help 2>&1 | grep -q -- "--decode"; then
-    base64 --decode
-  else
-    base64 -D
-  fi
-}
-
-extract_reference_source() {
-  local rfc_path="$1"
-  local archive_path="$2"
-  local reference_dir="$3"
-
-  grep '^   ###' "${rfc_path}" | sed -e 's/...###//' | base64_decode >"${archive_path}"
-  verify_sha1 "${RFC6716_SOURCE_SHA1}" "${archive_path}"
-
-  mkdir -p "${reference_dir}"
-  tar -xzf "${archive_path}" -C "${reference_dir}" --strip-components=1
+    if command -v sha1sum >/dev/null 2>&1; then
+        (cd "${dir}" && sha1sum -c -)
+    else
+        (cd "${dir}" && shasum -a 1 -c -)
+    fi
 }
 
 extract_vector_archive() {
-  local archive_path="$1"
-  local dest_dir="$2"
-  local expected_count="$3"
-  local tmp_dir
-  local found_count
+    local archive_path="$1"
+    local dest_dir="$2"
+    local expected_count="$3"
+    local tmp_dir
+    local found_count
 
-  tmp_dir="$(mktemp -d "${work_dir}/vectors.XXXXXX")"
-  mkdir -p "${dest_dir}"
-  tar -xzf "${archive_path}" -C "${tmp_dir}"
-  find "${tmp_dir}" -type f \( -name 'testvector*.bit' -o -name 'testvector*.dec' \) -exec cp {} "${dest_dir}" \;
+    tmp_dir="$(mktemp -d "${work_dir}/vectors.XXXXXX")"
+    mkdir -p "${dest_dir}"
+    tar -xzf "${archive_path}" -C "${tmp_dir}"
+    find "${tmp_dir}" -type f \( -name 'testvector*.bit' -o -name 'testvector*.dec' \) -exec cp {} "${dest_dir}" \;
 
-  found_count="$(find "${dest_dir}" -type f | wc -l | tr -d ' ')"
-  if [ "${found_count}" != "${expected_count}" ]; then
-    echo "expected ${expected_count} vector files in ${dest_dir}, found ${found_count}" >&2
-    exit 1
-  fi
+    found_count="$(find "${dest_dir}" -type f | wc -l | tr -d ' ')"
+    if [ "${found_count}" != "${expected_count}" ]; then
+        echo "expected ${expected_count} vector files in ${dest_dir}, found ${found_count}" >&2
+        exit 1
+    fi
 }
 
 verify_rfc6716_vector_sha1s() {
-  # RFC 6716 Appendix A.4 publishes SHA-1 hashes for the extracted vector files.
-  verify_sha1_manifest "$1" <<'EOF'
+    # RFC 6716 Appendix A.4 publishes SHA-1 hashes for the extracted vector files.
+    verify_sha1_manifest "$1" <<'EOF'
 e49b2862ceec7324790ed8019eb9744596d5be01  testvector01.bit
 b809795ae1bcd606049d76de4ad24236257135e0  testvector02.bit
 e0c4ecaeab44d35a2f5b6575cd996848e5ee2acc  testvector03.bit
@@ -158,8 +111,8 @@ EOF
 }
 
 verify_rfc8251_vector_sha1s() {
-  # RFC 8251 Section 11 publishes SHA-1 hashes for the extracted vector files.
-  verify_sha1_manifest "$1" <<'EOF'
+    # RFC 8251 Section 11 publishes SHA-1 hashes for the extracted vector files.
+    verify_sha1_manifest "$1" <<'EOF'
 e49b2862ceec7324790ed8019eb9744596d5be01  testvector01.bit
 b809795ae1bcd606049d76de4ad24236257135e0  testvector02.bit
 e0c4ecaeab44d35a2f5b6575cd996848e5ee2acc  testvector03.bit
@@ -200,93 +153,83 @@ EOF
 }
 
 write_result_comment() {
-  local status="$1"
-  local status_text="pass"
+    local status="$1"
+    local status_text="pass"
 
-  if [ "${status}" -ne 0 ]; then
-    status_text="fail (informational)"
-  fi
-
-  {
-    echo "<!-- opus-rfc-conformance -->"
-    echo "## RFC 6716 / 8251 conformation"
-    echo
-    echo "**Status:** ${status_text}"
-    echo
-    echo "The action extracts the RFC 6716 reference implementation, applies the RFC 8251 decoder update patch, and then builds the patched reference tools."
     if [ "${status}" -ne 0 ]; then
-      echo
-      echo "This check is informational while CELT support is incomplete; the workflow still reports success."
+        status_text="fail (informational)"
     fi
-    echo
-    if [ -s "${matrix_file}" ]; then
-      cat "${matrix_file}"
-    else
-      echo "The conformance run did not produce a result matrix."
-    fi
-    echo
-    echo "<details><summary>Run output</summary>"
-    echo
-    echo '```text'
-    tail -n 200 "${log_file}"
-    echo '```'
-    echo "</details>"
-  } >"${result_file}"
 
-  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-    cat "${result_file}" >>"${GITHUB_STEP_SUMMARY}"
-  fi
+    {
+        echo "<!-- opus-rfc-conformance -->"
+        echo "## RFC 6716 / 8251 conformation"
+        echo
+        echo "**Status:** ${status_text}"
+        echo
+        echo "The action extracts the RFC 6716 reference implementation, applies the RFC 8251 decoder update patch, and then builds the patched reference tools."
+        if [ "${status}" -ne 0 ]; then
+            echo
+            echo "This check is informational while CELT support is incomplete; the workflow still reports success."
+        fi
+        echo
+        if [ -s "${matrix_file}" ]; then
+            cat "${matrix_file}"
+        else
+            echo "The conformance run did not produce a result matrix."
+        fi
+        echo
+        echo "<details><summary>Run output</summary>"
+        echo
+        echo '```text'
+        tail -n 200 "${log_file}"
+        echo '```'
+        echo "</details>"
+    } >"${result_file}"
+
+    if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+        cat "${result_file}" >>"${GITHUB_STEP_SUMMARY}"
+    fi
 }
 
 main() {
-  require_command base64
-  require_command curl
-  require_command find
-  require_command go
-  require_command make
-  require_command patch
-  require_command sed
-  require_command tar
+    require_command base64
+    require_command curl
+    require_command find
+    require_command go
+    require_command make
+    require_command patch
+    require_command sed
+    require_command tar
 
-  rm -rf "${work_dir}"
-  mkdir -p "${work_dir}"
+    rm -rf "${work_dir}"
+    mkdir -p "${work_dir}"
 
-  local rfc_path="${work_dir}/rfc6716.txt"
-  local source_archive="${work_dir}/opus-rfc6716.tar.gz"
-  local patch_path="${work_dir}/rfc8251.patch"
-  local reference_dir="${work_dir}/reference"
-  local vector_dir="${work_dir}/testvectors"
-  local rfc6716_vectors="${work_dir}/opus_testvectors.tar.gz"
-  local rfc8251_vectors="${work_dir}/opus_testvectors-rfc8251.tar.gz"
+    prepare_reference_source "${work_dir}" "${work_dir}/reference"
 
-  download "${RFC6716_URL}" "${rfc_path}"
-  extract_reference_source "${rfc_path}" "${source_archive}" "${reference_dir}"
+    local vector_dir="${work_dir}/testvectors"
+    local rfc6716_vectors="${work_dir}/opus_testvectors.tar.gz"
+    local rfc8251_vectors="${work_dir}/opus_testvectors-rfc8251.tar.gz"
 
-  download "${RFC8251_PATCH_URL}" "${patch_path}"
-  verify_sha1 "${RFC8251_PATCH_SHA1}" "${patch_path}"
-  echo "Applying RFC 8251 decoder update patch to the RFC 6716 reference implementation"
-  patch -d "${reference_dir}" -p1 <"${patch_path}"
+    download "${RFC6716_VECTORS_URL}" "${rfc6716_vectors}"
+    extract_vector_archive "${rfc6716_vectors}" "${vector_dir}/rfc6716" 24
+    verify_rfc6716_vector_sha1s "${vector_dir}/rfc6716"
 
-  download "${RFC6716_VECTORS_URL}" "${rfc6716_vectors}"
-  extract_vector_archive "${rfc6716_vectors}" "${vector_dir}/rfc6716" 24
-  verify_rfc6716_vector_sha1s "${vector_dir}/rfc6716"
+    download "${RFC8251_VECTORS_URL}" "${rfc8251_vectors}"
+    extract_vector_archive "${rfc8251_vectors}" "${vector_dir}/rfc8251" 36
+    verify_rfc8251_vector_sha1s "${vector_dir}/rfc8251"
 
-  download "${RFC8251_VECTORS_URL}" "${rfc8251_vectors}"
-  extract_vector_archive "${rfc8251_vectors}" "${vector_dir}/rfc8251" 36
-  verify_rfc8251_vector_sha1s "${vector_dir}/rfc8251"
+    export OPUS_RFC6716_REFERENCE="${work_dir}/reference"
+    export OPUS_RFC6716_TESTVECTORS="${vector_dir}"
+    export OPUS_CONFORMANCE_MARKDOWN="${matrix_file}"
 
-  export OPUS_RFC6716_REFERENCE="${reference_dir}"
-  export OPUS_RFC6716_TESTVECTORS="${vector_dir}"
-  export OPUS_CONFORMANCE_MARKDOWN="${matrix_file}"
+    set +e
+    go test -v -timeout 60m -tags conformance -run TestRFC6716Conformance . 2>&1 | tee "${log_file}"
+    local test_status="${PIPESTATUS[0]}"
+    set -e
 
-  set +e
-  go test -v -timeout 60m -tags conformance -run TestRFC6716Conformance . 2>&1 | tee "${log_file}"
-  local test_status="${PIPESTATUS[0]}"
-  set -e
+    write_result_comment "${test_status}"
 
-  write_result_comment "${test_status}"
-
-  return "${test_status}"
+    return "${test_status}"
 }
 
 main "$@"

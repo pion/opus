@@ -394,6 +394,133 @@ func logReferenceEncoderBaseline(
 	)
 }
 
+func TestEncoderQualityVsReference(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("RFC 6716 conformance uses the POSIX-oriented reference Makefile")
+	}
+
+	refDir := os.Getenv(envRFC6716Reference)
+	if refDir == "" {
+		t.Skipf("%s is required for Tier 2 quality tests", envRFC6716Reference)
+	}
+
+	opusDemo, opusCompare := buildRFC6716ReferenceTools(t, refDir)
+	baseline := loadQualityBaseline(t)
+	for _, sig := range qualityTestSignals() {
+		t.Run(sig.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			n := qualityTestFrameSize * qualityTestFrameCount
+			original := sig.generate(n)
+			decoded := roundTripGo(t, original, sig.channels)
+
+			originalStereo := toStereoS16LEBytes(original, sig.channels)
+			decodedStereo := toStereoS16LEBytes(decoded, sig.channels)
+
+			originalStereoPath := filepath.Join(dir, "original-stereo.pcm")
+			decodedPath := filepath.Join(dir, "decoded.pcm")
+			writeQualityBytes(t, originalStereoPath, originalStereo)
+			writeQualityBytes(t, decodedPath, decodedStereo)
+
+			trimmedOriginal := filepath.Join(dir, "original-trimmed.pcm")
+			trimmedDecoded := filepath.Join(dir, "decoded-trimmed.pcm")
+			trimAndAlignPCM(t, originalStereo, decodedPath, trimmedOriginal, trimmedDecoded)
+
+			goOut, err := runOpusCompare(opusCompare, qualityTestRate, 2, trimmedOriginal, trimmedDecoded)
+			goQuality := opusCompareQuality(goOut)
+			goWSNR := opusCompareInternalError(goOut)
+			if err != nil && goWSNR == "" {
+				t.Fatalf("opus_compare Go encoder: %v\n%s", err, goOut)
+			}
+			t.Logf("Go encoder quality=%s weighted_error=%s", goQuality, goWSNR)
+
+			refBitstream := filepath.Join(dir, "reference.bit")
+			refDecoded := filepath.Join(dir, "reference-dec.pcm")
+			originalPath := filepath.Join(dir, "original.pcm")
+			writeQualityBytes(t, originalPath, float32ToS16LEBytes(original))
+			runReferenceOpusDemo(t, opusDemo, "encode with reference",
+				"-e", "audio", strconv.Itoa(qualityTestRate), strconv.Itoa(sig.channels),
+				strconv.Itoa(qualityTestBitrate), "-cbr", originalPath, refBitstream,
+			)
+			runReferenceOpusDemo(t, opusDemo, "decode reference bitstream",
+				"-d", strconv.Itoa(qualityTestRate), "2",
+				refBitstream, refDecoded,
+			)
+
+			trimmedRefOriginal := filepath.Join(dir, "ref-original-trimmed.pcm")
+			trimmedRefDecoded := filepath.Join(dir, "ref-decoded-trimmed.pcm")
+			trimAndAlignPCM(t, originalStereo, refDecoded, trimmedRefOriginal, trimmedRefDecoded)
+
+			refOut, err := runOpusCompare(opusCompare, qualityTestRate, 2, trimmedRefOriginal, trimmedRefDecoded)
+			refQuality := opusCompareQuality(refOut)
+			refWSNR := opusCompareInternalError(refOut)
+			if err != nil && refWSNR == "" {
+				t.Fatalf("opus_compare reference encoder: %v\n%s", err, refOut)
+			}
+			t.Logf("reference encoder quality=%s weighted_error=%s", refQuality, refWSNR)
+
+			if sigData, ok := baseline.Signals[sig.name]; ok && sigData.Tier2WSNRDB != 0 {
+				t.Logf("baseline tier2_wsnr_db=%.1f", sigData.Tier2WSNRDB)
+			}
+		})
+	}
+}
+
+func float32ToS16LEBytes(samples []float32) []byte {
+	out := make([]byte, len(samples)*2)
+	for i, s := range samples {
+		v := int16(math.Round(float64(s) * 32767))
+		binary.LittleEndian.PutUint16(out[i*2:], uint16(v)) //nolint:gosec // G115.
+	}
+
+	return out
+}
+
+func toStereoS16LEBytes(samples []float32, channels int) []byte {
+	if channels == 2 {
+		return float32ToS16LEBytes(samples)
+	}
+
+	out := make([]byte, len(samples)*4)
+	for i, s := range samples {
+		v := uint16(int16(math.Round(float64(s) * 32767))) //nolint:gosec // G115.
+		idx := i * 4
+		binary.LittleEndian.PutUint16(out[idx:], v)
+		binary.LittleEndian.PutUint16(out[idx+2:], v)
+	}
+
+	return out
+}
+
+// trimAndAlignPCM aligns decodedPCM against originalStereo by cross-correlation,
+// trims both to the same length, and writes the results.
+func trimAndAlignPCM(t *testing.T, originalStereo []byte, decodedPCM, outOriginal, outDecoded string) {
+	t.Helper()
+
+	decoded, err := os.ReadFile(decodedPCM)
+	if err != nil {
+		t.Fatalf("read decoded PCM: %v", err)
+	}
+
+	lag := estimateCodecDelay(originalStereo, decoded)
+	trimBytes := lag * 4
+	common := min(len(originalStereo), len(decoded)) - trimBytes
+	if common <= 0 {
+		t.Fatalf("decoded too short to align: lag %d samples", lag)
+	}
+
+	writeQualityBytes(t, outOriginal, originalStereo[:common])
+	writeQualityBytes(t, outDecoded, decoded[trimBytes:trimBytes+common])
+}
+
+func writeQualityBytes(t *testing.T, path string, data []byte) {
+	t.Helper()
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write %s: %v", filepath.Base(path), err)
+	}
+}
+
 // estimateCodecDelay cross-correlates the original and decoded stereo PCM to
 // find the constant codec delay in samples (CELT alone is 120, libopus 312).
 func estimateCodecDelay(originalStereo, decoded []byte) int {
