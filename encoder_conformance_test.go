@@ -433,7 +433,7 @@ func TestEncoderQualityVsReference(t *testing.T) {
 			if err != nil && goWSNR == "" {
 				t.Fatalf("opus_compare Go encoder: %v\n%s", err, goOut)
 			}
-			t.Logf("Go encoder quality=%s weighted_error=%s", goQuality, goWSNR)
+			t.Logf("pion quality=%s weighted_error=%s", goQuality, goWSNR)
 
 			refBitstream := filepath.Join(dir, "reference.bit")
 			refDecoded := filepath.Join(dir, "reference-dec.pcm")
@@ -458,7 +458,7 @@ func TestEncoderQualityVsReference(t *testing.T) {
 			if err != nil && refWSNR == "" {
 				t.Fatalf("opus_compare reference encoder: %v\n%s", err, refOut)
 			}
-			t.Logf("reference encoder quality=%s weighted_error=%s", refQuality, refWSNR)
+			t.Logf("libopus quality=%s weighted_error=%s", refQuality, refWSNR)
 
 			if sigData, ok := baseline.Signals[sig.name]; ok && sigData.Tier2WSNRDB != 0 {
 				t.Logf("baseline tier2_wsnr_db=%.1f", sigData.Tier2WSNRDB)

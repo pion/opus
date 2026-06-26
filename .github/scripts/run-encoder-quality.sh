@@ -54,13 +54,17 @@ echo ""
     echo "### Tier 1: SNR (pion encode → pion decode)"
     echo ""
     echo '```'
-    grep -E "signal=|baseline=|--- PASS|--- FAIL" "${tier1_log}" 2>/dev/null || echo "(no output)"
+    grep -E "signal=|baseline=|--- PASS|--- FAIL" "${tier1_log}" 2>/dev/null \
+        | sed 's/^    [^:]*:[0-9]*: //' \
+        || echo "(no output)"
     echo '```'
     echo ""
     echo "### Tier 2: opus_compare (vs RFC 6716 reference)"
     echo ""
     echo '```'
-    grep -E "quality=|weighted_error=|--- PASS|--- FAIL|--- SKIP" "${tier2_log}" 2>/dev/null || echo "(no output)"
+    grep -E "pion quality=|libopus quality=|--- PASS|--- FAIL|--- SKIP" "${tier2_log}" 2>/dev/null \
+        | sed 's/^    [^:]*:[0-9]*: //' \
+        || echo "(no output)"
     echo '```'
     echo ""
     echo "---"
