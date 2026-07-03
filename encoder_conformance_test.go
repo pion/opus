@@ -518,11 +518,25 @@ func TestEncoderQualityVsReference(t *testing.T) {
 	})
 }
 
+// clampToS16 saturates a float32 sample to the int16 range: CELT ringing can
+// push a decoded sample slightly past ±1, and an unclamped round trips wraps
+// around instead of saturating, injecting large artifacts into opus_compare.
+func clampToS16(s float32) int16 {
+	v := math.Round(float64(s) * 32767)
+	switch {
+	case v > math.MaxInt16:
+		return math.MaxInt16
+	case v < math.MinInt16:
+		return math.MinInt16
+	default:
+		return int16(v)
+	}
+}
+
 func float32ToS16LEBytes(samples []float32) []byte {
 	out := make([]byte, len(samples)*2)
 	for i, s := range samples {
-		v := int16(math.Round(float64(s) * 32767))
-		binary.LittleEndian.PutUint16(out[i*2:], uint16(v)) //nolint:gosec // G115.
+		binary.LittleEndian.PutUint16(out[i*2:], uint16(clampToS16(s))) //nolint:gosec // G115.
 	}
 
 	return out
@@ -535,7 +549,7 @@ func toStereoS16LEBytes(samples []float32, channels int) []byte {
 
 	out := make([]byte, len(samples)*4)
 	for i, s := range samples {
-		v := uint16(int16(math.Round(float64(s) * 32767))) //nolint:gosec // G115.
+		v := uint16(clampToS16(s)) //nolint:gosec // G115.
 		idx := i * 4
 		binary.LittleEndian.PutUint16(out[idx:], v)
 		binary.LittleEndian.PutUint16(out[idx+2:], v)

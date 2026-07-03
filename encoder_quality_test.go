@@ -18,13 +18,14 @@ import (
 )
 
 const (
-	qualityTestRate       = 48000
-	qualityTestFrameSize  = 960
-	qualityTestFrameCount = 100
-	qualityTestBitrate    = 96000
-	qualityTestChannels   = 1
-	regressionThresholdDB = 1.5
-	qualityTestMaxLag     = 2048
+	qualityTestRate        = 48000
+	qualityTestFrameSize   = 960
+	qualityTestFrameCount  = 100
+	qualityTestBitrate     = 96000
+	qualityTestChannels    = 1
+	regressionThresholdDB  = 1.5
+	qualityTestMaxLag      = 2048
+	qualityBaselineVersion = 1
 
 	// harmonicsPeakAmplitude is the sum of the amplitudes of the 5-harmonic
 	// series (1 + 1/2 + 1/3 + 1/4 + 1/5), used to normalize generateHarmonics
@@ -164,7 +165,7 @@ func TestEncoderQuality(t *testing.T) {
 				res.hasBase = true
 				t.Logf("baseline=%.1f dB delta=%.1f dB threshold=%.1f dB",
 					sigData.Tier1SNRDB, res.delta, regressionThresholdDB)
-				assert.LessOrEqualf(t, res.delta, float64(regressionThresholdDB),
+				assert.LessOrEqualf(t, res.delta, regressionThresholdDB,
 					"quality regression: signal=%s SNR=%.1f dB baseline=%.1f dB",
 					sig.name, snr, sigData.Tier1SNRDB)
 			} else {
@@ -184,20 +185,20 @@ func TestEncoderQuality(t *testing.T) {
 		}
 
 		var buf bytes.Buffer
-		fmt.Fprintln(&buf, "### Tier 1 — SNR regression (96 kbps, pion encode → pion decode)")
-		fmt.Fprintln(&buf)
-		fmt.Fprintf(&buf, "Delta = baseline − current SNR; positive = regression. Fail threshold: %.1f dB.\n",
+		_, _ = fmt.Fprintln(&buf, "### Tier 1 — SNR regression (96 kbps, pion encode → pion decode)")
+		_, _ = fmt.Fprintln(&buf)
+		_, _ = fmt.Fprintf(&buf, "Delta = baseline − current SNR; positive = regression. Fail threshold: %.1f dB.\n",
 			regressionThresholdDB)
-		fmt.Fprintln(&buf)
-		fmt.Fprintln(&buf, "| Signal | SNR (dB) | Baseline (dB) | Delta | Status |")
-		fmt.Fprintln(&buf, "|---|---:|---:|---:|---|")
+		_, _ = fmt.Fprintln(&buf)
+		_, _ = fmt.Fprintln(&buf, "| Signal | SNR (dB) | Baseline (dB) | Delta | Status |")
+		_, _ = fmt.Fprintln(&buf, "|---|---:|---:|---:|---|")
 		for i, sig := range signals {
 			res := results[i]
 			status := "OK"
-			if res.hasBase && res.delta > float64(regressionThresholdDB) {
+			if res.hasBase && res.delta > regressionThresholdDB {
 				status = "FAIL"
 			}
-			fmt.Fprintf(&buf, "| %s | %.1f | %.1f | %+.1f | %s |\n",
+			_, _ = fmt.Fprintf(&buf, "| %s | %.1f | %.1f | %+.1f | %s |\n",
 				sig.name, res.snr, res.base, res.delta, status)
 		}
 
@@ -294,7 +295,7 @@ func loadQualityBaseline(t *testing.T) qualityBaseline {
 		t.Logf("no golden file at %s, baseline will be empty (first run)", path)
 
 		return qualityBaseline{
-			Version: 1,
+			Version: qualityBaselineVersion,
 			Bitrate: qualityTestBitrate,
 			Signals: make(map[string]qualityBaselineSignal),
 		}
@@ -302,6 +303,11 @@ func loadQualityBaseline(t *testing.T) qualityBaseline {
 
 	var baseline qualityBaseline
 	require.NoError(t, json.Unmarshal(data, &baseline), "parse golden file")
+
+	require.Equalf(t, qualityBaselineVersion, baseline.Version,
+		"baseline schema version mismatch: got %d, want %d", baseline.Version, qualityBaselineVersion)
+	require.Equalf(t, qualityTestBitrate, baseline.Bitrate,
+		"baseline was generated at a different bitrate: got %d, want %d", baseline.Bitrate, qualityTestBitrate)
 
 	if baseline.Signals == nil {
 		baseline.Signals = make(map[string]qualityBaselineSignal)
