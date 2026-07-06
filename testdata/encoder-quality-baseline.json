@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "bitrate": 96000,
+  "signals": {
+    "burst": {
+      "tier1SnrDb": -2.5
+    },
+    "chirp": {
+      "tier1SnrDb": 3.5
+    },
+    "harmonics": {
+      "tier1SnrDb": -0.6
+    },
+    "onset": {
+      "tier1SnrDb": -2.4
+    },
+    "shaped_noise": {
+      "tier1SnrDb": 0.6
+    }
+  }
+}

@@ -1,0 +1,77 @@
+#
+# SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
+# SPDX-License-Identifier: MIT
+
+name: Encoder quality
+on:
+  pull_request:
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: test / encoder quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+          cache: true
+
+      - name: Run encoder quality tests
+        run: bash .github/scripts/run-encoder-quality.sh
+        env:
+          OPUS_QUALITY_RESULT: ${{ runner.temp }}/opus-encoder-quality.md
+        continue-on-error: true
+        timeout-minutes: 60
+
+      - name: Post quality result
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v9
+        continue-on-error: true
+        with:
+          script: |
+            const fs = require('fs');
+            const path = process.env.OPUS_QUALITY_RESULT;
+            if (!path || !fs.existsSync(path)) {
+              console.log('No quality result file found');
+              return;
+            }
+            const body = fs.readFileSync(path, 'utf8');
+            const marker = '<!-- opus-encoder-quality -->';
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              per_page: 100,
+            });
+            const existing = comments.find(c =>
+              c.user.type === 'Bot' && c.body && c.body.includes(marker)
+            );
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+        env:
+          OPUS_QUALITY_RESULT: ${{ runner.temp }}/opus-encoder-quality.md
