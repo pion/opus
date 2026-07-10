@@ -48,6 +48,14 @@ type Encoder struct {
 	prevSpreadDecision int
 	prevIntensityBand  int
 	prevLogBandAmp     [2][maxBands]float32
+
+	// Application mode plumbing — set by root encoder via setter methods.
+	// Values flow from opus.WithApplication / opus.WithVBR / etc. CELT
+	// records them but does not yet change its encoding behavior based on
+	// them.
+	vbr            bool
+	constrainedVBR bool
+	lossRate       int
 }
 
 func NewEncoder() Encoder {
@@ -95,6 +103,19 @@ func (e *Encoder) Reset() {
 	e.prevSpreadDecision = defaultSpreadDecision
 	e.prevIntensityBand = 0
 	e.analysis.prefilter = postFilterState{}
+}
+
+func (e *Encoder) SetVBR(vbr bool) {
+	e.vbr = vbr
+}
+
+func (e *Encoder) SetConstrainedVBR(cvbr bool) {
+	e.constrainedVBR = cvbr
+}
+
+// SetLossRate sets the expected packet loss rate (0-100 percent).
+func (e *Encoder) SetLossRate(rate int) {
+	e.lossRate = rate
 }
 
 func (e *Encoder) Mode() *Mode {

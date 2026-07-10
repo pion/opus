@@ -10,6 +10,36 @@ import (
 	"github.com/pion/opus/internal/celt"
 )
 
+// Application selects the encoder's tuning profile, mirroring libopus's
+// OPUS_APPLICATION_* control values (opus_defines.h) and their numeric IDs.
+// RFC 6716 does not define per-application behavior as part of the
+// bitstream; it only describes the underlying control parameters — bitrate
+// mode, frame duration, DTX — that each profile is meant to bias (see
+// RFC 6716 Section 2.1, "Control Parameters"). Selecting an Application here
+// only records the chosen profile, retrievable via Application(); it does
+// not change VBR, frame duration, or DTX on its own — pass WithVBR,
+// WithConstrainedVBR, etc. explicitly.
+type Application int
+
+const (
+	// ApplicationAudio tunes the encoder for music and general audio. This
+	// is the default application.
+	ApplicationAudio Application = 2049
+
+	// ApplicationVoIP tunes the encoder for voice over a lossy,
+	// latency-sensitive network. In libopus this profile defaults to VBR
+	// (RFC 6716 Section 2.1.8) and DTX (RFC 6716 Section 2.1.9); this
+	// encoder does not wire those defaults automatically.
+	ApplicationVoIP Application = 2048
+
+	// ApplicationRestrictedLowDelay tunes the encoder for the lowest
+	// possible algorithmic delay by skipping mode-switching analysis
+	// between the SILK and CELT layers. Frame duration and look-ahead
+	// trade-offs are described in RFC 6716 Section 2.1.4; this encoder
+	// does not vary either by application.
+	ApplicationRestrictedLowDelay Application = 2051
+)
+
 const (
 	defaultBitrate = 24000
 	minBitrate     = 6000
@@ -24,11 +54,15 @@ const celtOnlyFullband20msConfig = 31
 
 // Encoder encodes PCM into Opus packets.
 type Encoder struct {
-	celtEncoder celt.Encoder
-	sampleRate  int
-	channels    int
-	bitrate     int
-	complexity  int
+	celtEncoder    celt.Encoder
+	sampleRate     int
+	channels       int
+	bitrate        int
+	complexity     int
+	application    Application
+	vbr            bool
+	constrainedVBR bool
+	lossRate       int
 }
 
 // EncoderOption configures an Encoder during construction.
@@ -91,6 +125,44 @@ func WithComplexity(complexity int) EncoderOption {
 	}
 }
 
+// WithApplication sets the encoder application mode.
+func WithApplication(app Application) EncoderOption {
+	return func(e *Encoder) error {
+		switch app {
+		case ApplicationAudio, ApplicationVoIP, ApplicationRestrictedLowDelay:
+		default:
+			return fmt.Errorf("%w: %d", errInvalidApplication, app)
+		}
+		e.application = app
+
+		return nil
+	}
+}
+
+// WithVBR enables or disables variable bitrate encoding. VBR is the more
+// efficient mode and is the Opus default; CBR is reserved for transports
+// that require a fixed frame size or for highly sensitive streams (RFC 6716
+// Section 2.1.8).
+func WithVBR(vbr bool) EncoderOption {
+	return func(e *Encoder) error {
+		e.vbr = vbr
+
+		return nil
+	}
+}
+
+// WithConstrainedVBR enables or disables constrained VBR. When enabled, the
+// encoder simulates a "bit reservoir" to bound short-term bitrate variation
+// instead of producing plain VBR — recommended for low-latency links over a
+// constrained connection (RFC 6716 Section 2.1.8).
+func WithConstrainedVBR(cvbr bool) EncoderOption {
+	return func(e *Encoder) error {
+		e.constrainedVBR = cvbr
+
+		return nil
+	}
+}
+
 // NewEncoder creates a new Opus encoder with the supplied options.
 //
 // Defaults: 48 kHz, mono, 24 kbit/s, complexity 0. Pass options to override
@@ -99,11 +171,15 @@ func WithComplexity(complexity int) EncoderOption {
 // in follow-up PRs.
 func NewEncoder(opts ...EncoderOption) (*Encoder, error) {
 	encoder := &Encoder{
-		celtEncoder: celt.NewEncoder(),
-		sampleRate:  celtSampleRate,
-		channels:    1,
-		bitrate:     defaultBitrate,
-		complexity:  0,
+		celtEncoder:    celt.NewEncoder(),
+		sampleRate:     celtSampleRate,
+		channels:       1,
+		bitrate:        defaultBitrate,
+		complexity:     0,
+		application:    ApplicationAudio,
+		vbr:            false,
+		constrainedVBR: true,
+		lossRate:       0,
 	}
 
 	for _, opt := range opts {
@@ -111,6 +187,10 @@ func NewEncoder(opts ...EncoderOption) (*Encoder, error) {
 			return nil, err
 		}
 	}
+
+	encoder.celtEncoder.SetVBR(encoder.vbr)
+	encoder.celtEncoder.SetConstrainedVBR(encoder.constrainedVBR)
+	encoder.celtEncoder.SetLossRate(encoder.lossRate)
 
 	return encoder, nil
 }
@@ -125,6 +205,50 @@ func (e *Encoder) SetBitrate(bps int) error {
 func (e *Encoder) SetComplexity(complexity int) error {
 	return WithComplexity(complexity)(e)
 }
+
+// SetApplication updates the encoder application mode.
+func (e *Encoder) SetApplication(app Application) error {
+	return WithApplication(app)(e)
+}
+
+// SetVBR enables or disables variable bitrate encoding (RFC 6716
+// Section 2.1.8).
+func (e *Encoder) SetVBR(vbr bool) {
+	e.vbr = vbr
+	e.celtEncoder.SetVBR(vbr)
+}
+
+// SetConstrainedVBR enables or disables constrained VBR (RFC 6716
+// Section 2.1.8).
+func (e *Encoder) SetConstrainedVBR(cvbr bool) {
+	e.constrainedVBR = cvbr
+	e.celtEncoder.SetConstrainedVBR(cvbr)
+}
+
+// SetLossRate sets the expected packet loss rate (0-100 percent), the
+// control parameter behind the packet loss resilience trade-off described
+// in RFC 6716 Section 2.1.6.
+func (e *Encoder) SetLossRate(rate int) error {
+	if rate < 0 || rate > 100 {
+		return fmt.Errorf("%w: %d", errInvalidLossRate, rate)
+	}
+	e.lossRate = rate
+	e.celtEncoder.SetLossRate(rate)
+
+	return nil
+}
+
+// Application returns the current encoder application mode.
+func (e *Encoder) Application() Application { return e.application }
+
+// VBR returns whether variable bitrate encoding is enabled.
+func (e *Encoder) VBR() bool { return e.vbr }
+
+// ConstrainedVBR returns whether constrained VBR is enabled.
+func (e *Encoder) ConstrainedVBR() bool { return e.constrainedVBR }
+
+// LossRate returns the expected packet loss rate (0-100 percent).
+func (e *Encoder) LossRate() int { return e.lossRate }
 
 // Encode encodes S16LE PCM into a single Opus packet.
 //
