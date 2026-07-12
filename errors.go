@@ -31,4 +31,8 @@ var (
 	errInvalidFrameByteBudget = errors.New("invalid frame byte budget")
 
 	errInvalidPLCFrameSize = errors.New("PLC output must contain exactly 20 ms of interleaved samples")
+
+	errInvalidApplication = errors.New("invalid application")
+
+	errInvalidLossRate = errors.New("loss rate must be 0-100")
 )

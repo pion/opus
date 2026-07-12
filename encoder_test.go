@@ -244,6 +244,170 @@ func TestSetComplexity(t *testing.T) {
 	assert.ErrorIs(t, encoder.SetComplexity(11), errInvalidComplexity)
 }
 
+func TestNewEncoderDefaultApplication(t *testing.T) {
+	encoder, err := NewEncoder()
+	require.NoError(t, err)
+
+	assert.Equal(t, ApplicationAudio, encoder.Application())
+	assert.False(t, encoder.VBR())
+	assert.True(t, encoder.ConstrainedVBR())
+	assert.Equal(t, 0, encoder.LossRate())
+}
+
+func TestWithApplication(t *testing.T) {
+	encoder, err := NewEncoder(WithApplication(ApplicationVoIP))
+	require.NoError(t, err)
+	assert.Equal(t, ApplicationVoIP, encoder.Application())
+
+	encoder, err = NewEncoder(WithApplication(ApplicationRestrictedLowDelay))
+	require.NoError(t, err)
+	assert.Equal(t, ApplicationRestrictedLowDelay, encoder.Application())
+
+	_, err = NewEncoder(WithApplication(Application(9999)))
+	assert.ErrorIs(t, err, errInvalidApplication)
+}
+
+func TestSetApplication(t *testing.T) {
+	encoder, err := NewEncoder()
+	require.NoError(t, err)
+
+	require.NoError(t, encoder.SetApplication(ApplicationVoIP))
+	assert.Equal(t, ApplicationVoIP, encoder.Application())
+
+	assert.ErrorIs(t, encoder.SetApplication(Application(0)), errInvalidApplication)
+}
+
+func TestWithVBR(t *testing.T) {
+	encoder, err := NewEncoder(WithVBR(true))
+	require.NoError(t, err)
+	assert.True(t, encoder.VBR())
+
+	encoder, err = NewEncoder(WithVBR(false))
+	require.NoError(t, err)
+	assert.False(t, encoder.VBR())
+}
+
+func TestSetVBR(t *testing.T) {
+	encoder, err := NewEncoder()
+	require.NoError(t, err)
+	require.False(t, encoder.VBR())
+
+	encoder.SetVBR(true)
+	assert.True(t, encoder.VBR())
+
+	encoder.SetVBR(false)
+	assert.False(t, encoder.VBR())
+}
+
+func TestWithConstrainedVBR(t *testing.T) {
+	encoder, err := NewEncoder(WithConstrainedVBR(false))
+	require.NoError(t, err)
+	assert.False(t, encoder.ConstrainedVBR())
+}
+
+func TestSetConstrainedVBR(t *testing.T) {
+	encoder, err := NewEncoder()
+	require.NoError(t, err)
+	require.True(t, encoder.ConstrainedVBR())
+
+	encoder.SetConstrainedVBR(false)
+	assert.False(t, encoder.ConstrainedVBR())
+
+	encoder.SetConstrainedVBR(true)
+	assert.True(t, encoder.ConstrainedVBR())
+}
+
+func TestSetLossRate(t *testing.T) {
+	encoder, err := NewEncoder()
+	require.NoError(t, err)
+
+	require.NoError(t, encoder.SetLossRate(50))
+	assert.Equal(t, 50, encoder.LossRate())
+
+	assert.ErrorIs(t, encoder.SetLossRate(-1), errInvalidLossRate)
+	assert.ErrorIs(t, encoder.SetLossRate(101), errInvalidLossRate)
+}
+
+func TestVBRPacketRoundTrip(t *testing.T) {
+	encoder, err := NewEncoder(WithVBR(true), WithConstrainedVBR(false))
+	require.NoError(t, err)
+
+	pcm := testEncoderSineFloat32()
+	packet := make([]byte, 256)
+	n, err := encoder.EncodeFloat32(pcm, packet)
+	require.NoError(t, err)
+	require.Greater(t, n, 1)
+
+	// TOC byte is unchanged by VBR for single-frame (c=0) packets.
+	// The VBR bit lives in the frame count byte, which is absent for c=0.
+	assert.Equal(t, byte(celtOnlyFullband20msConfig<<3)|byte(frameCodeOneFrame), packet[0])
+
+	decoder, err := NewDecoderWithOutput(48000, 1)
+	require.NoError(t, err)
+
+	out := make([]float32, encoderTestFrameSampleCount)
+	_, _, err = decoder.DecodeFloat32(packet[:n], out)
+	require.NoError(t, err)
+	assert.Greater(t, vectorEnergyFloat32(out), 1e-6)
+}
+
+func TestConstrainedVBRPacketRoundTrip(t *testing.T) {
+	encoder, err := NewEncoder(WithVBR(true), WithConstrainedVBR(true))
+	require.NoError(t, err)
+
+	pcm := testEncoderSineFloat32()
+	packet := make([]byte, 256)
+	n, err := encoder.EncodeFloat32(pcm, packet)
+	require.NoError(t, err)
+	require.Greater(t, n, 1)
+
+	decoder, err := NewDecoderWithOutput(48000, 1)
+	require.NoError(t, err)
+
+	out := make([]float32, encoderTestFrameSampleCount)
+	_, _, err = decoder.DecodeFloat32(packet[:n], out)
+	require.NoError(t, err)
+	assert.Greater(t, vectorEnergyFloat32(out), 1e-6)
+}
+
+func TestApplicationRoundTrip(t *testing.T) {
+	encoder, err := NewEncoder(
+		WithApplication(ApplicationVoIP),
+		WithVBR(true),
+	)
+	require.NoError(t, err)
+
+	assert.Equal(t, ApplicationVoIP, encoder.Application())
+	assert.True(t, encoder.VBR())
+
+	decoder, err := NewDecoderWithOutput(48000, 1)
+	require.NoError(t, err)
+
+	pcm := testEncoderSineFloat32()
+	packet := make([]byte, 256)
+	n, err := encoder.EncodeFloat32(pcm, packet)
+	require.NoError(t, err)
+
+	out := make([]float32, encoderTestFrameSampleCount)
+	_, _, err = decoder.DecodeFloat32(packet[:n], out)
+	require.NoError(t, err)
+	assert.Greater(t, vectorEnergyFloat32(out), 1e-6)
+}
+
+func TestLossRateGetterSetter(t *testing.T) {
+	encoder, err := NewEncoder()
+	require.NoError(t, err)
+
+	require.NoError(t, encoder.SetLossRate(0))
+	assert.Equal(t, 0, encoder.LossRate())
+
+	require.NoError(t, encoder.SetLossRate(100))
+	assert.Equal(t, 100, encoder.LossRate())
+
+	require.NoError(t, encoder.SetLossRate(25))
+	assert.Equal(t, 25, encoder.LossRate())
+}
+
 func testEncoderSineFloat32() []float32 {
 	pcm := make([]float32, encoderTestFrameSampleCount)
 	for i := range pcm {
