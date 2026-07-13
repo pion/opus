@@ -370,6 +370,129 @@ func TestConstrainedVBRPacketRoundTrip(t *testing.T) {
 	assert.Greater(t, vectorEnergyFloat32(out), 1e-6)
 }
 
+func TestVBRProducesVaryingPacketSizes(t *testing.T) {
+	enc, err := NewEncoder(WithVBR(true), WithConstrainedVBR(false))
+	require.NoError(t, err)
+
+	sizes := make(map[int]bool)
+	for i := range 20 {
+		pcm := make([]float32, encoderTestFrameSampleCount)
+		if i%2 == 0 {
+			for j := range pcm {
+				pcm[j] = float32(j%100) / 100
+			}
+		} else {
+			for j := range pcm {
+				pcm[j] = 0.0001
+			}
+		}
+		packet := make([]byte, 256)
+		n, err := enc.EncodeFloat32(pcm, packet)
+		require.NoError(t, err)
+		sizes[n] = true
+	}
+
+	assert.Greater(t, len(sizes), 1, "VBR should produce varying packet sizes")
+}
+
+func TestVBRPacketRoundTripMultiFrame(t *testing.T) {
+	enc, err := NewEncoder(WithVBR(true), WithConstrainedVBR(false))
+	require.NoError(t, err)
+
+	dec, err := NewDecoderWithOutput(48000, 1)
+	require.NoError(t, err)
+
+	for i := range 10 {
+		pcm := make([]float32, encoderTestFrameSampleCount)
+		for j := range pcm {
+			pcm[j] = float32(math.Sin(2*math.Pi*440*float64(j)/48000)) * float32(i%3) * 0.3
+		}
+		packet := make([]byte, 256)
+		n, err := enc.EncodeFloat32(pcm, packet)
+		require.NoError(t, err)
+
+		out := make([]float32, encoderTestFrameSampleCount)
+		_, _, err = dec.DecodeFloat32(packet[:n], out)
+		require.NoError(t, err)
+		assert.Greater(t, vectorEnergyFloat32(out), 1e-6)
+	}
+}
+
+func TestCVBRBoundsVariation(t *testing.T) {
+	enc, err := NewEncoder(WithVBR(true), WithConstrainedVBR(true))
+	require.NoError(t, err)
+
+	var minSize, maxSize int
+	for i := range 30 {
+		pcm := make([]float32, encoderTestFrameSampleCount)
+		for j := range pcm {
+			switch i % 3 {
+			case 0:
+				pcm[j] = float32(j%50) / 50
+			case 1:
+				pcm[j] = 0.0001
+			case 2:
+				pcm[j] = float32(j%200-100) / 200
+			}
+		}
+		packet := make([]byte, 256)
+		n, err := enc.EncodeFloat32(pcm, packet)
+		require.NoError(t, err)
+		if i == 0 || n < minSize {
+			minSize = n
+		}
+		if i == 0 || n > maxSize {
+			maxSize = n
+		}
+	}
+
+	assert.LessOrEqual(t, maxSize, minSize*3,
+		"CVBR should bound packet size variation")
+}
+
+func TestCBRUnchanged(t *testing.T) {
+	enc, err := NewEncoder()
+	require.NoError(t, err)
+
+	sizes := make(map[int]bool)
+	for i := range 10 {
+		pcm := make([]float32, encoderTestFrameSampleCount)
+		for j := range pcm {
+			pcm[j] = float32(i%3-1) * 0.1
+		}
+		packet := make([]byte, 256)
+		n, err := enc.EncodeFloat32(pcm, packet)
+		require.NoError(t, err)
+		sizes[n] = true
+	}
+
+	assert.Equal(t, 1, len(sizes), "CBR should produce constant packet sizes")
+}
+
+func TestVBRWithStereo(t *testing.T) {
+	enc, err := NewEncoder(WithChannels(2), WithVBR(true))
+	require.NoError(t, err)
+
+	dec, err := NewDecoderWithOutput(48000, 2)
+	require.NoError(t, err)
+
+	pcm := testEncoderStereoSineFloat32()
+	packet := make([]byte, 256)
+	n, err := enc.EncodeFloat32(pcm, packet)
+	require.NoError(t, err)
+
+	out := make([]float32, encoderTestFrameSampleCount*2)
+	_, _, err = dec.DecodeFloat32(packet[:n], out)
+	require.NoError(t, err)
+	assert.Greater(t, vectorEnergyFloat32(out), 1e-6)
+}
+
+func TestVBRDefaultIsCBR(t *testing.T) {
+	enc, err := NewEncoder()
+	require.NoError(t, err)
+	assert.False(t, enc.VBR(), "default encoder should be CBR")
+}
+
 func TestApplicationRoundTrip(t *testing.T) {
 	encoder, err := NewEncoder(
 		WithApplication(ApplicationVoIP),
