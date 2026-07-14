@@ -112,8 +112,8 @@ func WithBitrate(bps int) EncoderOption {
 }
 
 // WithComplexity sets the encoder complexity on the standard Opus 0..10
-// scale. The current CELT encoder does not vary behavior by complexity, but
-// the public API accepts the value for future expansion.
+// scale. Higher values enable more analysis (pitch detection, spreading,
+// dynalloc) for better quality at the cost of CPU.
 func WithComplexity(complexity int) EncoderOption {
 	return func(e *Encoder) error {
 		if complexity < 0 || complexity > 10 {
@@ -191,6 +191,7 @@ func NewEncoder(opts ...EncoderOption) (*Encoder, error) {
 	encoder.celtEncoder.SetVBR(encoder.vbr)
 	encoder.celtEncoder.SetConstrainedVBR(encoder.constrainedVBR)
 	encoder.celtEncoder.SetLossRate(encoder.lossRate)
+	encoder.celtEncoder.SetComplexity(encoder.complexity)
 
 	return encoder, nil
 }
@@ -203,7 +204,11 @@ func (e *Encoder) SetBitrate(bps int) error {
 // SetComplexity updates the encoder complexity on the standard Opus 0..10
 // scale.
 func (e *Encoder) SetComplexity(complexity int) error {
-	return WithComplexity(complexity)(e)
+	if err := WithComplexity(complexity)(e); err != nil {
+		return err
+	}
+	e.celtEncoder.SetComplexity(complexity)
+	return nil
 }
 
 // SetApplication updates the encoder application mode.
@@ -243,6 +248,8 @@ func (e *Encoder) Application() Application { return e.application }
 
 // VBR returns whether variable bitrate encoding is enabled.
 func (e *Encoder) VBR() bool { return e.vbr }
+
+func (e *Encoder) Complexity() int { return e.complexity }
 
 // ConstrainedVBR returns whether constrained VBR is enabled.
 func (e *Encoder) ConstrainedVBR() bool { return e.constrainedVBR }
