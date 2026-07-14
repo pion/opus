@@ -208,6 +208,7 @@ func (e *Encoder) SetComplexity(complexity int) error {
 		return err
 	}
 	e.celtEncoder.SetComplexity(complexity)
+
 	return nil
 }
 
