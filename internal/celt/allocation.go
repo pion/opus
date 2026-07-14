@@ -31,6 +31,13 @@ type allocationState struct {
 	bits         int
 }
 
+type dynallocResult struct {
+	offsets      [maxBands]int
+	spreadWeight [maxBands]int
+	maxDepth     float32
+	totBoostBits int
+}
+
 // computeAllocation derives the per-band shape and fine-energy budgets in
 // 1/8-bit units.  The implementation follows the RFC 6716 Section 4.3.3
 // structure: reserve later side-symbol budgets, choose and interpolate static
@@ -794,7 +801,10 @@ func dynallocAnalysis(
 	lm, startBand, endBand, channelCount int,
 	effectiveBytes int,
 	isTransient bool,
-) (offsets [maxBands]int, spreadWeight [maxBands]int) {
+) dynallocResult {
+	var offsets [maxBands]int
+	var spreadWeight [maxBands]int
+
 	var noiseFloor [maxBands]float32
 	for band := range endBand {
 		logN := float32(logN400[band]) / 8.0 // log2(band width)
@@ -867,7 +877,12 @@ func dynallocAnalysis(
 	}
 
 	if effectiveBytes < 30+5*lm {
-		return offsets, spreadWeight
+		return dynallocResult{
+			offsets:      offsets,
+			spreadWeight: spreadWeight,
+			maxDepth:     maxDepth,
+			totBoostBits: 0,
+		}
 	}
 
 	// follower tracks the previous frame's spectrum (bandLogE2 in libopus).
@@ -1049,5 +1064,10 @@ func dynallocAnalysis(
 		totBoostBits += boostBits
 	}
 
-	return offsets, spreadWeight
+	return dynallocResult{
+		offsets:      offsets,
+		spreadWeight: spreadWeight,
+		maxDepth:     maxDepth,
+		totBoostBits: totBoostBits,
+	}
 }

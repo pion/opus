@@ -463,13 +463,13 @@ func TestDynallocFlatSpectrumNoBoost(t *testing.T) {
 	// Flat spectrum → no isolated peaks → all offsets zero.
 	logBandAmp := makeFlatLogBandAmp(0.0)
 	prev := makeFlatLogBandAmp(0.0)
-	offsets, _ := dynallocAnalysis(
+	dr := dynallocAnalysis(
 		[2][maxBands]float32{logBandAmp, logBandAmp},
 		[2][maxBands]float32{prev, prev},
 		maxLM, 0, maxBands, 1, 120, false,
 	)
 	for band := range maxBands {
-		assert.Equal(t, 0, offsets[band], "flat spectrum band %d should get no boost", band)
+		assert.Equal(t, 0, dr.offsets[band], "flat spectrum band %d should get no boost", band)
 	}
 }
 
@@ -478,12 +478,12 @@ func TestDynallocIsolatedPeakGetsBoost(t *testing.T) {
 	logBandAmp := makeFlatLogBandAmp(0.0)
 	logBandAmp[10] = 10.0
 	prev := makeFlatLogBandAmp(0.0)
-	offsets, _ := dynallocAnalysis(
+	dr := dynallocAnalysis(
 		[2][maxBands]float32{logBandAmp, logBandAmp},
 		[2][maxBands]float32{prev, prev},
 		maxLM, 0, maxBands, 1, 120, false,
 	)
-	assert.Greater(t, offsets[10], 0, "isolated peak should get boost")
+	assert.Greater(t, dr.offsets[10], 0, "isolated peak should get boost")
 }
 
 func TestDynallocSpreadWeightMaskedBandReduced(t *testing.T) {
@@ -491,13 +491,13 @@ func TestDynallocSpreadWeightMaskedBandReduced(t *testing.T) {
 	logBandAmp := makeFlatLogBandAmp(0.0)
 	logBandAmp[15] = 20.0
 	prev := makeFlatLogBandAmp(0.0)
-	_, spreadWeight := dynallocAnalysis(
+	dr := dynallocAnalysis(
 		[2][maxBands]float32{logBandAmp, logBandAmp},
 		[2][maxBands]float32{prev, prev},
 		maxLM, 0, maxBands, 1, 120, false,
 	)
 	// Bands far from the peak should have reduced weight.
-	assert.Less(t, spreadWeight[5], 32, "band far from peak should have reduced weight")
+	assert.Less(t, dr.spreadWeight[5], 32, "band far from peak should have reduced weight")
 }
 
 func TestDynallocLowBitrateGated(t *testing.T) {
@@ -505,13 +505,13 @@ func TestDynallocLowBitrateGated(t *testing.T) {
 	logBandAmp := makeFlatLogBandAmp(0.0)
 	logBandAmp[10] = 10.0
 	prev := makeFlatLogBandAmp(0.0)
-	offsets, _ := dynallocAnalysis(
+	dr := dynallocAnalysis(
 		[2][maxBands]float32{logBandAmp, logBandAmp},
 		[2][maxBands]float32{prev, prev},
 		maxLM, 0, maxBands, 1, 10, false, // 10 bytes < 30+15=45
 	)
 	for band := range maxBands {
-		assert.Equal(t, 0, offsets[band], "low bitrate should gate dynalloc")
+		assert.Equal(t, 0, dr.offsets[band], "low bitrate should gate dynalloc")
 	}
 }
 
