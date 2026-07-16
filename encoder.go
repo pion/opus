@@ -63,6 +63,8 @@ type Encoder struct {
 	vbr            bool
 	constrainedVBR bool
 	lossRate       int
+	bandwidth      Bandwidth
+	maxBandwidth   Bandwidth
 }
 
 // EncoderOption configures an Encoder during construction.
@@ -163,9 +165,48 @@ func WithConstrainedVBR(cvbr bool) EncoderOption {
 	}
 }
 
+// WithBandwidth sets the encoder bandwidth explicitly (Narrowband through
+// Fullband; Mediumband is SILK-only and not supported here). Use
+// WithMaxBandwidth instead to cap auto-selection rather than fixing it.
+func WithBandwidth(bw Bandwidth) EncoderOption {
+	return func(e *Encoder) error {
+		if bw == BandwidthAuto {
+			return fmt.Errorf("%w: use WithMaxBandwidth for auto selection", errInvalidBandwidth)
+		}
+		if bw < BandwidthNarrowband || bw > BandwidthFullband {
+			return fmt.Errorf("%w: %d", errInvalidBandwidth, bw)
+		}
+		if bw == BandwidthMediumband {
+			return fmt.Errorf("%w: mediumband not supported in CELT-only mode", errInvalidBandwidth)
+		}
+		e.bandwidth = bw
+
+		return nil
+	}
+}
+
+// WithMaxBandwidth sets the maximum bandwidth the auto-select algorithm may
+// choose. Has no effect when an explicit bandwidth is set via WithBandwidth.
+func WithMaxBandwidth(bw Bandwidth) EncoderOption {
+	return func(e *Encoder) error {
+		if bw == BandwidthAuto {
+			return fmt.Errorf("%w: max bandwidth must be explicit", errInvalidBandwidth)
+		}
+		if bw < BandwidthNarrowband || bw > BandwidthFullband {
+			return fmt.Errorf("%w: %d", errInvalidBandwidth, bw)
+		}
+		if bw == BandwidthMediumband {
+			return fmt.Errorf("%w: mediumband not supported in CELT-only mode", errInvalidBandwidth)
+		}
+		e.maxBandwidth = bw
+
+		return nil
+	}
+}
+
 // NewEncoder creates a new Opus encoder with the supplied options.
 //
-// Defaults: 48 kHz, mono, 24 kbit/s, complexity 0. Pass options to override
+// Defaults: 48 kHz, mono, 24 kbit/s, complexity 5. Pass options to override
 // any of these. The current implementation supports 48 kHz, 1 or 2 channels,
 // 20 ms CELT-only packets. Transient detection and SILK encoding will land
 // in follow-up PRs.
@@ -175,11 +216,13 @@ func NewEncoder(opts ...EncoderOption) (*Encoder, error) {
 		sampleRate:     celtSampleRate,
 		channels:       1,
 		bitrate:        defaultBitrate,
-		complexity:     0,
+		complexity:     5,
 		application:    ApplicationAudio,
 		vbr:            false,
 		constrainedVBR: true,
 		lossRate:       0,
+		bandwidth:      BandwidthAuto,
+		maxBandwidth:   BandwidthFullband,
 	}
 
 	for _, opt := range opts {
@@ -244,6 +287,18 @@ func (e *Encoder) SetLossRate(rate int) error {
 	return nil
 }
 
+// SetBandwidth sets the encoder bandwidth, overriding auto-selection.
+func (e *Encoder) SetBandwidth(bw Bandwidth) error {
+	return WithBandwidth(bw)(e)
+}
+
+// SetMaxBandwidth sets the maximum bandwidth the auto-select algorithm may
+// choose. Only affects encoding when bandwidth is set to BandwidthAuto (the
+// default).
+func (e *Encoder) SetMaxBandwidth(bw Bandwidth) error {
+	return WithMaxBandwidth(bw)(e)
+}
+
 // Application returns the current encoder application mode.
 func (e *Encoder) Application() Application { return e.application }
 
@@ -257,6 +312,13 @@ func (e *Encoder) ConstrainedVBR() bool { return e.constrainedVBR }
 
 // LossRate returns the expected packet loss rate (0-100 percent).
 func (e *Encoder) LossRate() int { return e.lossRate }
+
+// Bandwidth returns the configured bandwidth (BandwidthAuto by default).
+func (e *Encoder) Bandwidth() Bandwidth { return e.bandwidth }
+
+// MaxBandwidth returns the maximum bandwidth the auto-select algorithm may
+// choose.
+func (e *Encoder) MaxBandwidth() Bandwidth { return e.maxBandwidth }
 
 // Encode encodes S16LE PCM into a single Opus packet.
 //
@@ -303,7 +365,12 @@ func (e *Encoder) EncodeFloat32(in []float32, out []byte) (int, error) {
 		return 0, errOutBufferTooSmall
 	}
 	out[0] = byte(e.tocHeader())
-	n, err := e.celtEncoder.EncodeFrame(channels, out[1:frameBytes+1], frameBytes, 0, e.celtEncoder.Mode().BandCount())
+	bw := e.autoSelectBandwidth()
+	startBand, endBand, err := e.celtEncoder.Mode().BandRangeForSampleRate(bw.SampleRate())
+	if err != nil {
+		return 0, err
+	}
+	n, err := e.celtEncoder.EncodeFrame(channels, out[1:frameBytes+1], frameBytes, startBand, endBand)
 	if err != nil {
 		return 0, err
 	}
@@ -312,13 +379,66 @@ func (e *Encoder) EncodeFloat32(in []float32, out []byte) (int, error) {
 }
 
 func (e *Encoder) tocHeader() tableOfContentsHeader {
-	header := byte(celtOnlyFullband20msConfig << 3)
-	header |= byte(frameCodeOneFrame)
+	bw := e.autoSelectBandwidth()
+	var config int
+	switch bw {
+	case BandwidthNarrowband:
+		config = 19 // CELT-only, NB, 20 ms
+	case BandwidthWideband:
+		config = 23 // CELT-only, WB, 20 ms
+	case BandwidthSuperwideband:
+		config = 27 // CELT-only, SWB, 20 ms
+	default: // BandwidthFullband
+		config = 31 // CELT-only, FB, 20 ms
+	}
+	header := byte(config<<3) | byte(frameCodeOneFrame)
 	if e.channels == 2 {
 		header |= 1 << 2
 	}
 
 	return tableOfContentsHeader(header)
+}
+
+// equivRate estimates the effective bitrate actually available for coding,
+// mirroring libopus's compute_equiv_rate (opus_encoder.c). The CELT-only
+// branch there also docks ~10% for complexity<5 lacking the pitch filter;
+// omitted here since this encoder's pitch pre-filter always runs regardless
+// of complexity. The frame-rate-overhead term is also omitted: it only
+// applies above 50 frames/sec, and this encoder is fixed at 20 ms (50/sec).
+func (e *Encoder) equivRate() int {
+	equiv := e.bitrate
+	if !e.vbr {
+		equiv -= equiv / 12 // CBR costs about 8%.
+	}
+
+	return equiv * (90 + e.complexity) / 100 // complexity spans about 10%.
+}
+
+// autoSelectBandwidth selects the best bandwidth for the current bitrate,
+// clamped to maxBandwidth. Returns the effective bandwidth to use for encoding.
+func (e *Encoder) autoSelectBandwidth() Bandwidth {
+	if e.bandwidth != BandwidthAuto {
+		return e.bandwidth
+	}
+	// Thresholds based on libopus voice defaults.
+	// NB↔WB: 9000 bps, WB↔SWB: 13500 bps, SWB↔FB: 14000 bps.
+	target := e.equivRate()
+	var bw Bandwidth
+	switch {
+	case target < 9000:
+		bw = BandwidthNarrowband
+	case target < 13500:
+		bw = BandwidthWideband
+	case target < 14000:
+		bw = BandwidthSuperwideband
+	default:
+		bw = BandwidthFullband
+	}
+	if bw > e.maxBandwidth {
+		bw = e.maxBandwidth
+	}
+
+	return bw
 }
 
 // splitChannels splits interleaved PCM into per-channel slices.

@@ -344,6 +344,225 @@ func TestSetConstrainedVBR(t *testing.T) {
 	assert.True(t, encoder.ConstrainedVBR())
 }
 
+func TestWithBandwidth(t *testing.T) {
+	enc, err := NewEncoder(WithBandwidth(BandwidthWideband))
+	require.NoError(t, err)
+	assert.Equal(t, BandwidthWideband, enc.Bandwidth())
+
+	_, err = NewEncoder(WithBandwidth(BandwidthAuto))
+	assert.ErrorIs(t, err, errInvalidBandwidth)
+
+	_, err = NewEncoder(WithBandwidth(BandwidthMediumband))
+	assert.ErrorIs(t, err, errInvalidBandwidth)
+
+	_, err = NewEncoder(WithBandwidth(Bandwidth(255)))
+	assert.ErrorIs(t, err, errInvalidBandwidth)
+}
+
+func TestSetBandwidth(t *testing.T) {
+	enc, err := NewEncoder()
+	require.NoError(t, err)
+	assert.Equal(t, BandwidthAuto, enc.Bandwidth())
+
+	require.NoError(t, enc.SetBandwidth(BandwidthWideband))
+	assert.Equal(t, BandwidthWideband, enc.Bandwidth())
+
+	assert.ErrorIs(t, enc.SetBandwidth(BandwidthMediumband), errInvalidBandwidth)
+}
+
+func TestBandwidthRoundTrip(t *testing.T) {
+	for _, bw := range []Bandwidth{
+		BandwidthNarrowband, BandwidthWideband,
+		BandwidthSuperwideband, BandwidthFullband,
+	} {
+		enc, err := NewEncoder(
+			WithBandwidth(bw),
+			WithBitrate(24000),
+		)
+		require.NoError(t, err)
+
+		dec, err := NewDecoderWithOutput(48000, 1)
+		require.NoError(t, err)
+
+		pcm := testEncoderSineFloat32()
+		packet := make([]byte, 256)
+		n, err := enc.EncodeFloat32(pcm, packet)
+		require.NoError(t, err)
+		require.Greater(t, n, 0)
+
+		out := make([]float32, encoderTestFrameSampleCount)
+		decBandwidth, _, err := dec.DecodeFloat32(packet[:n], out)
+		require.NoError(t, err)
+		assert.Equal(t, bw, decBandwidth, "decoded bandwidth should match encoded bandwidth")
+	}
+}
+
+func TestBandwidthChangesTOC(t *testing.T) {
+	for _, tc := range []struct {
+		bw     Bandwidth
+		config byte
+	}{
+		{BandwidthNarrowband, 19},
+		{BandwidthWideband, 23},
+		{BandwidthSuperwideband, 27},
+		{BandwidthFullband, 31},
+	} {
+		enc, err := NewEncoder(WithBandwidth(tc.bw))
+		require.NoError(t, err)
+
+		pcm := testEncoderSineFloat32()
+		packet := make([]byte, 256)
+		n, err := enc.EncodeFloat32(pcm, packet)
+		require.NoError(t, err)
+		require.Greater(t, n, 0)
+
+		expectedTOC := tc.config<<3 | byte(frameCodeOneFrame)
+		assert.Equal(t, expectedTOC, packet[0], "TOC byte for bandwidth %v", tc.bw)
+	}
+}
+
+func TestWithMaxBandwidth(t *testing.T) {
+	enc, err := NewEncoder(WithMaxBandwidth(BandwidthWideband))
+	require.NoError(t, err)
+	assert.Equal(t, BandwidthWideband, enc.MaxBandwidth())
+
+	_, err = NewEncoder(WithMaxBandwidth(BandwidthAuto))
+	assert.ErrorIs(t, err, errInvalidBandwidth)
+
+	_, err = NewEncoder(WithMaxBandwidth(BandwidthMediumband))
+	assert.ErrorIs(t, err, errInvalidBandwidth)
+
+	_, err = NewEncoder(WithMaxBandwidth(Bandwidth(255)))
+	assert.ErrorIs(t, err, errInvalidBandwidth)
+}
+
+func TestAutoSelectBandwidth(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		bitrate  int
+		maxBW    Bandwidth
+		expected Bandwidth
+	}{
+		// Boundaries are in equivRate() space (CBR + default complexity 5
+		// dock the raw bitrate by ~13%), not raw bitrate — see equivRate.
+		{"NB at low bitrate", 6000, BandwidthFullband, BandwidthNarrowband},
+		{"NB at threshold", 10334, BandwidthFullband, BandwidthNarrowband},       // equiv=8999
+		{"WB just above threshold", 10335, BandwidthFullband, BandwidthWideband}, // equiv=9000
+		{"WB at 12kbps", 12000, BandwidthFullband, BandwidthWideband},
+		{"WB at threshold", 15501, BandwidthFullband, BandwidthWideband},               // equiv=13499
+		{"SWB just above threshold", 15502, BandwidthFullband, BandwidthSuperwideband}, // equiv=13500
+		{"SWB at threshold", 16075, BandwidthFullband, BandwidthSuperwideband},         // equiv=13999
+		{"FB just above threshold", 16076, BandwidthFullband, BandwidthFullband},       // equiv=14000
+		{"FB at 24kbps", 24000, BandwidthFullband, BandwidthFullband},
+		{"clamped by maxBandwidth", 24000, BandwidthWideband, BandwidthWideband},
+		{"clamped to NB", 24000, BandwidthNarrowband, BandwidthNarrowband},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			enc, err := NewEncoder(
+				WithBitrate(tc.bitrate),
+				WithMaxBandwidth(tc.maxBW),
+			)
+			require.NoError(t, err)
+			assert.Equal(t, tc.expected, enc.autoSelectBandwidth())
+		})
+	}
+}
+
+func TestEquivRate(t *testing.T) {
+	enc, err := NewEncoder(WithBitrate(13500))
+	require.NoError(t, err)
+	// CBR (default) docks ~8%, complexity 5 (default) docks another ~5%.
+	assert.Equal(t, 11756, enc.equivRate())
+
+	enc.SetVBR(true)
+	assert.Equal(t, 12825, enc.equivRate(), "VBR should skip the CBR penalty")
+
+	enc.SetVBR(false)
+	require.NoError(t, enc.SetComplexity(0))
+	assert.Equal(t, 11137, enc.equivRate(), "complexity 0 should dock closer to 10%")
+}
+
+func TestAutoBandwidthDefault(t *testing.T) {
+	enc, err := NewEncoder()
+	require.NoError(t, err)
+	assert.Equal(t, BandwidthAuto, enc.Bandwidth())
+	assert.Equal(t, BandwidthFullband, enc.MaxBandwidth())
+	// At default 24 kbps, auto should select fullband.
+	assert.Equal(t, BandwidthFullband, enc.autoSelectBandwidth())
+}
+
+func TestAutoBandwidthExplicitOverrides(t *testing.T) {
+	enc, err := NewEncoder(
+		WithBandwidth(BandwidthWideband),
+		WithMaxBandwidth(BandwidthFullband),
+	)
+	require.NoError(t, err)
+	// Explicit bandwidth should be returned regardless of maxBandwidth.
+	assert.Equal(t, BandwidthWideband, enc.autoSelectBandwidth())
+}
+
+func TestAutoBandwidthTOC(t *testing.T) {
+	// At 6000 bps, auto should select NB → config 19.
+	enc, err := NewEncoder(WithBitrate(6000))
+	require.NoError(t, err)
+
+	pcm := testEncoderSineFloat32()
+	packet := make([]byte, 256)
+	n, err := enc.EncodeFloat32(pcm, packet)
+	require.NoError(t, err)
+	require.Greater(t, n, 0)
+
+	expectedTOC := byte(19<<3) | byte(frameCodeOneFrame)
+	assert.Equal(t, expectedTOC, packet[0], "auto NB TOC")
+}
+
+func TestAutoBandwidthRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		bitrate int
+		maxBW   Bandwidth
+		wantBW  Bandwidth
+	}{
+		{"NB round-trip", 6000, BandwidthFullband, BandwidthNarrowband},
+		{"WB round-trip", 12000, BandwidthFullband, BandwidthWideband},
+		{"FB round-trip", 24000, BandwidthFullband, BandwidthFullband},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			enc, err := NewEncoder(
+				WithBitrate(tc.bitrate),
+				WithMaxBandwidth(tc.maxBW),
+			)
+			require.NoError(t, err)
+
+			dec, err := NewDecoderWithOutput(48000, 1)
+			require.NoError(t, err)
+
+			pcm := testEncoderSineFloat32()
+			packet := make([]byte, 256)
+			n, err := enc.EncodeFloat32(pcm, packet)
+			require.NoError(t, err)
+			require.Greater(t, n, 0)
+
+			out := make([]float32, encoderTestFrameSampleCount)
+			decBandwidth, _, err := dec.DecodeFloat32(packet[:n], out)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantBW, decBandwidth, "decoded bandwidth should match auto-selected bandwidth")
+		})
+	}
+}
+
+func TestSetMaxBandwidth(t *testing.T) {
+	enc, err := NewEncoder()
+	require.NoError(t, err)
+	assert.Equal(t, BandwidthFullband, enc.MaxBandwidth())
+
+	require.NoError(t, enc.SetMaxBandwidth(BandwidthWideband))
+	assert.Equal(t, BandwidthWideband, enc.MaxBandwidth())
+
+	assert.ErrorIs(t, enc.SetMaxBandwidth(BandwidthAuto), errInvalidBandwidth)
+	assert.ErrorIs(t, enc.SetMaxBandwidth(BandwidthMediumband), errInvalidBandwidth)
+}
+
 func TestSetLossRate(t *testing.T) {
 	encoder, err := NewEncoder()
 	require.NoError(t, err)
