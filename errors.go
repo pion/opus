@@ -35,4 +35,6 @@ var (
 	errInvalidApplication = errors.New("invalid application")
 
 	errInvalidLossRate = errors.New("loss rate must be 0-100")
+
+	errInvalidBandwidth = errors.New("invalid bandwidth")
 )

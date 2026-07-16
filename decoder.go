@@ -270,6 +270,8 @@ func (c Configuration) silkFrameSampleCount() int {
 		return 16 * c.frameDuration().nanoseconds() / 1000000
 	case BandwidthSuperwideband, BandwidthFullband:
 		return 0
+	case BandwidthAuto:
+		return 0
 	}
 
 	return 0

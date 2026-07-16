@@ -75,7 +75,7 @@ func TestBandwidth(t *testing.T) {
 	assert.Equal(t, BandwidthWideband, Configuration(20).bandwidth())
 	assert.Equal(t, BandwidthSuperwideband, Configuration(24).bandwidth())
 	assert.Equal(t, BandwidthFullband, Configuration(28).bandwidth())
-	assert.Equal(t, Bandwidth(0), Configuration(32).bandwidth())
+	assert.Equal(t, Bandwidth(255), Configuration(32).bandwidth())
 }
 
 func TestBandwidthString(t *testing.T) {
@@ -86,7 +86,8 @@ func TestBandwidthString(t *testing.T) {
 	assert.Equal(t, "Wideband", BandwidthWideband.String())
 	assert.Equal(t, "Superwideband", BandwidthSuperwideband.String())
 	assert.Equal(t, "Fullband", BandwidthFullband.String())
-	assert.Equal(t, "Invalid Bandwidth", Bandwidth(0).String())
+	assert.Equal(t, "Auto", BandwidthAuto.String())
+	assert.Equal(t, "Invalid Bandwidth", Bandwidth(255).String())
 }
 
 func TestBandwidthSampleRate(t *testing.T) {
