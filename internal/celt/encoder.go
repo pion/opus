@@ -53,6 +53,7 @@ type Encoder struct {
 	vbr            bool
 	constrainedVBR bool
 	lossRate       int
+	complexity     int
 
 	// VBR bit reservoir state (celt_encoder.c), all in 1/8-bit units.
 	vbrReservoir int32
@@ -61,8 +62,16 @@ type Encoder struct {
 	vbrCount     int32
 }
 
+func (e *Encoder) SetComplexity(c int) {
+	e.complexity = c
+}
+
+func (e *Encoder) Complexity() int {
+	return e.complexity
+}
+
 func NewEncoder() Encoder {
-	encoder := Encoder{mode: DefaultMode()}
+	encoder := Encoder{mode: DefaultMode(), complexity: 5}
 	encoder.Reset()
 
 	return encoder
@@ -341,6 +350,67 @@ func (e *Encoder) choosePrefilter(pcm [][]float32, frameBytes int, transient boo
 	return enabled, pitchPeriod, qq, quantizedGain, tapset
 }
 
+// updatePrefilterState saves or resets the prefilter state for the next frame.
+func (e *Encoder) updatePrefilterState(
+	info *frameSideInfo, enabled bool,
+	period int, gain float32, qq int, tapset int,
+) {
+	e.analysis.prefilter.oldPeriod = e.analysis.prefilter.period
+	e.analysis.prefilter.oldGain = e.analysis.prefilter.gain
+	e.analysis.prefilter.oldTapset = e.analysis.prefilter.tapset
+
+	if enabled {
+		e.analysis.prefilter.period = period
+		e.analysis.prefilter.gain = gain
+		e.analysis.prefilter.tapset = tapset
+
+		info.postFilter = postFilter{
+			enabled: true,
+			period:  period,
+			gain:    gain,
+			qq:      qq,
+			tapset:  tapset,
+		}
+	} else {
+		e.analysis.prefilter.period = combFilterMinPeriod
+		e.analysis.prefilter.gain = 0
+		e.analysis.prefilter.tapset = 0
+	}
+}
+
+// computeIntensityAndDualStereo returns the intensity band and dual stereo flag
+// for the current frame. Intensity band includes ±1 hysteresis to avoid oscillation.
+func (e *Encoder) computeIntensityAndDualStereo(
+	info *frameSideInfo, mdct [2][]float32,
+) (targetIntensity, targetDualStereo int) {
+	if info.channelCount != 2 {
+		return 0, 0
+	}
+
+	frameSampleCount := shortBlockSampleCount << info.lm
+	bitrateBps := int(info.totalBits) * sampleRate / frameSampleCount
+	frameMs := max(1, frameSampleCount*1000/sampleRate)
+	raw := intensityStartBand(bitrateBps, frameMs)
+	if e.prevIntensityBand == 0 {
+		e.prevIntensityBand = raw
+	}
+	// ±1 dead band: require two consecutive frames to confirm a direction
+	// change, matching the hysteresis pattern in libopus CELTEncoder.
+	if raw > e.prevIntensityBand+1 {
+		raw = e.prevIntensityBand + 1
+	} else if raw < e.prevIntensityBand-1 {
+		raw = e.prevIntensityBand - 1
+	}
+	e.prevIntensityBand = raw
+
+	targetIntensity = raw
+	if chooseDualStereo(mdct[0], mdct[1], info.lm) {
+		targetDualStereo = 1
+	}
+
+	return targetIntensity, targetDualStereo
+}
+
 // computeVBR returns the VBR target in 1/8-bit units for the current frame.
 //
 // Simplified version of libopus compute_vbr() (celt_encoder.c, ~line 1605).
@@ -492,30 +562,7 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 	info := analysis.info
 	info.totalBits = uint(frameBytes) * 8
 
-	// Update pre-filter state for the next frame.
-	if prefilterEnabled {
-		e.analysis.prefilter.oldPeriod = e.analysis.prefilter.period
-		e.analysis.prefilter.oldGain = e.analysis.prefilter.gain
-		e.analysis.prefilter.oldTapset = e.analysis.prefilter.tapset
-		e.analysis.prefilter.period = pitchPeriod
-		e.analysis.prefilter.gain = prefilterGain
-		e.analysis.prefilter.tapset = prefilterTapset
-
-		info.postFilter = postFilter{
-			enabled: true,
-			period:  pitchPeriod,
-			gain:    prefilterGain,
-			qq:      prefilterQq,
-			tapset:  prefilterTapset,
-		}
-	} else {
-		e.analysis.prefilter.oldPeriod = e.analysis.prefilter.period
-		e.analysis.prefilter.oldGain = e.analysis.prefilter.gain
-		e.analysis.prefilter.oldTapset = e.analysis.prefilter.tapset
-		e.analysis.prefilter.period = combFilterMinPeriod
-		e.analysis.prefilter.gain = 0
-		e.analysis.prefilter.tapset = 0
-	}
+	e.updatePrefilterState(&info, prefilterEnabled, pitchPeriod, prefilterGain, prefilterQq, prefilterTapset)
 
 	if e.rangeEncoder.Tell() > info.totalBits {
 		return e.rangeEncoder.FlushInto(dst), nil
@@ -545,10 +592,22 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 	offsets := dr.offsets
 	spreadWeight := dr.spreadWeight
 
-	info.spread = spreadingDecision(
-		analysis.mdct[0], info.lm, info.startBand, info.endBand,
-		&e.prevSpreadAvg, e.prevSpreadDecision, spreadWeight,
-	)
+	// libopus only runs the full spreading_decision() estimator when
+	// complexity>=3 and the frame has long blocks and enough of a byte
+	// budget (celt_encoder.c ~line 2317); otherwise it uses a flat
+	// SPREAD_NORMAL, or SPREAD_NONE at complexity==0 specifically.
+	if info.transient || e.complexity < 3 || effectiveBytes < 10*info.channelCount {
+		if e.complexity == 0 {
+			info.spread = spreadNone
+		} else {
+			info.spread = spreadNormal
+		}
+	} else {
+		info.spread = spreadingDecision(
+			analysis.mdct[0], info.lm, info.startBand, info.endBand,
+			&e.prevSpreadAvg, e.prevSpreadDecision, spreadWeight,
+		)
+	}
 	e.prevSpreadDecision = info.spread
 	e.encodeSpread(&info)
 	totalBitsEighth := e.encodeDynamicAllocation(&info, offsets)
@@ -572,29 +631,7 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 		info.antiCollapseRsv = 1 << bitResolution
 	}
 	shapeBits -= info.antiCollapseRsv
-	targetIntensity := 0
-	targetDualStereo := 0
-	if info.channelCount == 2 {
-		frameSampleCount := shortBlockSampleCount << info.lm
-		bitrateBps := int(info.totalBits) * sampleRate / frameSampleCount
-		frameMs := max(1, frameSampleCount*1000/sampleRate)
-		raw := intensityStartBand(bitrateBps, frameMs)
-		if e.prevIntensityBand == 0 {
-			e.prevIntensityBand = raw
-		}
-		// ±1 dead band: require two consecutive frames to confirm a direction
-		// change, matching the hysteresis pattern in libopus CELTEncoder.
-		if raw > e.prevIntensityBand+1 {
-			raw = e.prevIntensityBand + 1
-		} else if raw < e.prevIntensityBand-1 {
-			raw = e.prevIntensityBand - 1
-		}
-		e.prevIntensityBand = raw
-		targetIntensity = raw
-		if chooseDualStereo(analysis.mdct[0], analysis.mdct[1], info.lm) {
-			targetDualStereo = 1
-		}
-	}
+	targetIntensity, targetDualStereo := e.computeIntensityAndDualStereo(&info, analysis.mdct)
 	info.allocation = e.computeAllocationMono(&info, shapeBits, targetIntensity, targetDualStereo)
 	e.encodeFineEnergy(&info, info.allocation.fineQuant, targetLogE)
 

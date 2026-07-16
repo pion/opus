@@ -41,6 +41,7 @@ func TestNewEncoderOptions(t *testing.T) {
 
 	assert.Equal(t, 64000, encoder.bitrate)
 	assert.Equal(t, 5, encoder.complexity)
+	assert.Equal(t, 5, encoder.celtEncoder.Complexity())
 
 	_, err = NewEncoder(WithBitrate(1000))
 	assert.ErrorIs(t, err, errBitrateOutOfRange)
@@ -239,9 +240,35 @@ func TestSetComplexity(t *testing.T) {
 
 	require.NoError(t, encoder.SetComplexity(10))
 	assert.Equal(t, 10, encoder.complexity)
+	assert.Equal(t, 10, encoder.Complexity())
+	assert.Equal(t, 10, encoder.celtEncoder.Complexity())
 
 	assert.ErrorIs(t, encoder.SetComplexity(-1), errInvalidComplexity)
 	assert.ErrorIs(t, encoder.SetComplexity(11), errInvalidComplexity)
+}
+
+func TestComplexityRoundTrip(t *testing.T) {
+	// Verify that encoding at complexity 0 and 10 both produce valid packets.
+	for _, complexity := range []int{0, 10} {
+		enc, err := NewEncoder(
+			WithComplexity(complexity),
+			WithBitrate(64000),
+		)
+		require.NoError(t, err)
+
+		dec, err := NewDecoderWithOutput(48000, 1)
+		require.NoError(t, err)
+
+		pcm := testEncoderSineFloat32()
+		packet := make([]byte, 256)
+		n, err := enc.EncodeFloat32(pcm, packet)
+		require.NoError(t, err)
+		require.Greater(t, n, 0)
+
+		out := make([]float32, encoderTestFrameSampleCount)
+		_, _, err = dec.DecodeFloat32(packet[:n], out)
+		require.NoError(t, err)
+	}
 }
 
 func TestNewEncoderDefaultApplication(t *testing.T) {
