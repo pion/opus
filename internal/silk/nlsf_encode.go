@@ -57,25 +57,26 @@ func nlsfSecondOperand(ind, qstepQ16 int32) int32 {
 // codebook vector and greedily quantizes the stage-2 residual for each,
 // keeping the lowest weighted distortion.
 func (e *Encoder) encodeNLSF(nlsfQ15 []int16, bandwidth Bandwidth, voiced bool) []int16 {
+	stabilizeNLSF(nlsfQ15, len(nlsfQ15), bandwidth)
+	index1, indices2, quantized := quantizeNLSF(nlsfQ15, bandwidth)
+	e.emitNLSFIndices(index1, indices2, bandwidth, voiced)
+
+	return quantized
+}
+
+// quantizeNLSF searches the two-stage NLSF codebooks (silk_NLSF_encode) and
+// returns the stage-1 index, stage-2 indices, and reconstructed NLSF vector.
+// The input must already be stabilized.
+func quantizeNLSF(nlsfQ15 []int16, bandwidth Bandwidth) (int, []int8, []int16) {
 	order := len(nlsfQ15)
-	stabilizeNLSF(nlsfQ15, order, bandwidth)
 
 	cb1Set := codebookNormalizedLSFStageOneNarrowbandOrMediumband
-	cb2Select := codebookNormalizedLSFStageTwoIndexNarrowbandOrMediumband
 	predSelect := predictionWeightSelectionForNarrowbandAndMediumbandNormalizedLSF
 	predTable := predictionWeightForNarrowbandAndMediumbandNormalizedLSF
-	stageOnePDF := icdfNormalizedLSFStageOneIndexNarrowbandOrMediumbandUnvoiced
 	if bandwidth == BandwidthWideband {
 		cb1Set = codebookNormalizedLSFStageOneWideband
-		cb2Select = codebookNormalizedLSFStageTwoIndexWideband
 		predSelect = predictionWeightSelectionForWidebandNormalizedLSF
 		predTable = predictionWeightForWidebandNormalizedLSF
-		stageOnePDF = icdfNormalizedLSFStageOneIndexWidebandUnvoiced
-		if voiced {
-			stageOnePDF = icdfNormalizedLSFStageOneIndexWidebandVoiced
-		}
-	} else if voiced {
-		stageOnePDF = icdfNormalizedLSFStageOneIndexNarrowbandOrMediumbandVoiced
 	}
 	qstepQ16, invQstepQ6 := nlsfStepSizes(bandwidth)
 
@@ -135,10 +136,27 @@ func (e *Encoder) encodeNLSF(nlsfQ15 []int16, bandwidth Bandwidth, voiced bool) 
 		}
 	}
 
-	e.rangeEncoder.EncodeSymbolWithICDF(stageOnePDF, uint32(bestIndex1)) //nolint:gosec // G115
-	cb2 := cb2Select[bestIndex1]
-	for k := range order {
-		v := int(bestIndices2[k])
+	return bestIndex1, bestIndices2, bestNLSF
+}
+
+// emitNLSFIndices range-encodes the NLSF codebook indices.
+func (e *Encoder) emitNLSFIndices(index1 int, indices2 []int8, bandwidth Bandwidth, voiced bool) {
+	cb2Select := codebookNormalizedLSFStageTwoIndexNarrowbandOrMediumband
+	stageOnePDF := icdfNormalizedLSFStageOneIndexNarrowbandOrMediumbandUnvoiced
+	if bandwidth == BandwidthWideband {
+		cb2Select = codebookNormalizedLSFStageTwoIndexWideband
+		stageOnePDF = icdfNormalizedLSFStageOneIndexWidebandUnvoiced
+		if voiced {
+			stageOnePDF = icdfNormalizedLSFStageOneIndexWidebandVoiced
+		}
+	} else if voiced {
+		stageOnePDF = icdfNormalizedLSFStageOneIndexNarrowbandOrMediumbandVoiced
+	}
+
+	e.rangeEncoder.EncodeSymbolWithICDF(stageOnePDF, uint32(index1)) //nolint:gosec // G115
+	cb2 := cb2Select[index1]
+	for k := range indices2 {
+		v := int(indices2[k])
 		switch {
 		case v <= -nlsfQuantMaxAmplitude:
 			e.rangeEncoder.EncodeSymbolWithICDF(icdfNormalizedLSFStageTwoIndex[cb2[k]], 0)
@@ -150,8 +168,6 @@ func (e *Encoder) encodeNLSF(nlsfQ15 []int16, bandwidth Bandwidth, voiced bool) 
 			e.rangeEncoder.EncodeSymbolWithICDF(icdfNormalizedLSFStageTwoIndex[cb2[k]], uint32(v+nlsfQuantMaxAmplitude)) //nolint:gosec // G115
 		}
 	}
-
-	return bestNLSF
 }
 
 // stabilizeNLSF enforces the minimum spacing between consecutive NLSF

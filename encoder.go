@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/pion/opus/internal/celt"
+	"github.com/pion/opus/internal/silk"
 )
 
 const (
@@ -22,9 +23,18 @@ const (
 // is separate (bit 2 of the TOC) and not part of this constant.
 const celtOnlyFullband20msConfig = 31
 
+// silkOnlyWideband20msConfig is the TOC config number for SILK-only, wideband,
+// 20 ms frames (RFC 6716 Table 2).
+const silkOnlyWideband20msConfig = 9
+
+// silkWidebandSampleCount is the number of 16 kHz samples in a 20 ms SILK
+// wideband frame.
+const silkWidebandSampleCount = 320
+
 // Encoder encodes PCM into Opus packets.
 type Encoder struct {
 	celtEncoder celt.Encoder
+	silkEncoder silk.Encoder
 	sampleRate  int
 	channels    int
 	bitrate     int
@@ -100,6 +110,7 @@ func WithComplexity(complexity int) EncoderOption {
 func NewEncoder(opts ...EncoderOption) (*Encoder, error) {
 	encoder := &Encoder{
 		celtEncoder: celt.NewEncoder(),
+		silkEncoder: silk.NewEncoder(),
 		sampleRate:  celtSampleRate,
 		channels:    1,
 		bitrate:     defaultBitrate,
@@ -207,6 +218,40 @@ func splitChannels(in []float32, numChannels, frameSamples int) [][]float32 {
 	}
 
 	return ch
+}
+
+// EncodeSILK encodes one 20 ms mono SILK frame into a SILK-only Opus packet.
+// pcm must hold exactly one 20 ms frame of mono s16 samples at the bandwidth's
+// internal rate: 160 (NB/8 kHz), 240 (MB/12 kHz), or 320 (WB/16 kHz). This is a
+// first, unvoiced-path SILK encoder (see internal/silk); the output is a
+// decodable Opus packet, not yet at libopus quality parity.
+func (e *Encoder) EncodeSILK(pcm []int16, bandwidth Bandwidth, out []byte) (int, error) {
+	var config int
+	switch bandwidth {
+	case BandwidthNarrowband:
+		config = 1
+	case BandwidthMediumband:
+		config = 5
+	case BandwidthWideband:
+		config = silkOnlyWideband20msConfig
+	default:
+		return 0, fmt.Errorf("%w: bandwidth %d", errInvalidSampleRate, bandwidth)
+	}
+
+	want := bandwidth.SampleRate() / 50 // 20 ms
+	if len(pcm) != want {
+		return 0, fmt.Errorf("%w: got %d samples, want %d", errInvalidFrameSize, len(pcm), want)
+	}
+
+	payload := e.silkEncoder.Encode(pcm, silk.Bandwidth(bandwidth))
+	if len(out) < len(payload)+1 {
+		return 0, errOutBufferTooSmall
+	}
+
+	out[0] = byte(config<<3) | byte(frameCodeOneFrame) // mono, one frame
+	n := copy(out[1:], payload)
+
+	return n + 1, nil
 }
 
 func (e *Encoder) frameBytes() int {

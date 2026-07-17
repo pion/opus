@@ -24,31 +24,73 @@ func (e *Encoder) encodeSubframeGains(
 	subframeCount int,
 	isFirstSilkFrameInOpusFrame bool,
 ) (gainQ16 []float32) {
-	// The first subframe gain is coded independently only at the start of a
-	// frame; otherwise it is delta coded like the rest.
 	conditional := !(isFirstSilkFrameInOpusFrame || !e.haveEncoded)
+	indices, gainQ16, _ := e.quantizeGains(gainsTargetQ16, subframeCount, conditional)
+	e.emitGainIndices(indices, signalType, conditional)
 
+	return gainQ16
+}
+
+// quantizeGains is silk_gains_quant: it turns target gains into transmit
+// indices and the dequantized gains, updating the running previousLogGain. For
+// the independent first subframe the index is the full 6-bit gain index; for
+// delta subframes it is the non-negative transmit index (0..40).
+func (e *Encoder) quantizeGains(gainsTargetQ16 []int32, subframeCount int, conditional bool) (indices []int8, gainQ16 []float32, gainQ16Int []int32) {
+	indices = make([]int8, subframeCount)
 	gainQ16 = make([]float32, subframeCount)
+	gainQ16Int = make([]int32, subframeCount)
 
 	for subframeIndex := range subframeCount {
-		// Convert to log scale, scale, floor() — silk_gains_quant() step 1.
 		ind := smulwb(gainScaleQ16, lin2log(gainsTargetQ16[subframeIndex])-gainOffsetQ7)
-
-		// Round towards previous quantized gain (hysteresis).
 		if ind < e.previousLogGain {
 			ind++
 		}
 		ind = clamp(0, ind, gainNLevels-1)
 
 		if subframeIndex == 0 && !conditional {
-			// Full (independent) index, limited so it cannot drop more than
-			// MIN_DELTA_GAIN_QUANT below the previous index.
 			ind = clamp(e.previousLogGain+gainMinDelta, ind, gainNLevels-1)
 			e.previousLogGain = ind
+			indices[subframeIndex] = int8(ind)
+		} else {
+			delta := ind - e.previousLogGain
+			doubleStepThreshold := 2*gainMaxDelta - gainNLevels + e.previousLogGain
+			if delta > doubleStepThreshold {
+				delta = doubleStepThreshold + ((delta - doubleStepThreshold + 1) >> 1)
+			}
+			delta = clamp(gainMinDelta, delta, gainMaxDelta)
+			if delta > doubleStepThreshold {
+				e.previousLogGain += (delta << 1) - doubleStepThreshold
+				if e.previousLogGain > gainNLevels-1 {
+					e.previousLogGain = gainNLevels - 1
+				}
+			} else {
+				e.previousLogGain += delta
+			}
+			indices[subframeIndex] = int8(delta - gainMinDelta)
+		}
 
-			// The 3 MSBs use a signal-type-dependent PDF; the 3 LSBs are uniform.
-			msb := uint32(ind >> 3)  //nolint:gosec // G115: ind is in [0,63].
-			lsb := uint32(ind & 0x7) //nolint:gosec // G115
+		inLogQ7 := (gainInvScaleQ16 * e.previousLogGain >> 16) + gainOffsetQ7
+		if inLogQ7 > gainMaxLogQ7 {
+			inLogQ7 = gainMaxLogQ7
+		}
+		i := inLogQ7 >> 7
+		f := inLogQ7 & 127
+		gain := (1 << i) + ((-174*f*(128-f)>>16)+f)*((1<<i)>>7)
+		gainQ16Int[subframeIndex] = gain
+		gainQ16[subframeIndex] = float32(gain)
+	}
+
+	e.haveEncoded = true
+
+	return indices, gainQ16, gainQ16Int
+}
+
+// emitGainIndices range-encodes the gain indices produced by quantizeGains.
+func (e *Encoder) emitGainIndices(indices []int8, signalType frameSignalType, conditional bool) {
+	for subframeIndex, index := range indices {
+		if subframeIndex == 0 && !conditional {
+			msb := uint32(index >> 3)  //nolint:gosec // G115: index is in [0,63].
+			lsb := uint32(index & 0x7) //nolint:gosec // G115
 			switch signalType {
 			case frameSignalTypeInactive:
 				e.rangeEncoder.EncodeSymbolWithICDF(icdfIndependentQuantizationGainMSBInactive, msb)
@@ -59,44 +101,7 @@ func (e *Encoder) encodeSubframeGains(
 			}
 			e.rangeEncoder.EncodeSymbolWithICDF(icdfIndependentQuantizationGainLSB, lsb)
 		} else {
-			// Delta index relative to the previous subframe's gain.
-			delta := ind - e.previousLogGain
-
-			// Double the quantization step size for large gain increases so
-			// the maximum gain level can still be reached.
-			doubleStepThreshold := 2*gainMaxDelta - gainNLevels + e.previousLogGain
-			if delta > doubleStepThreshold {
-				delta = doubleStepThreshold + ((delta - doubleStepThreshold + 1) >> 1)
-			}
-			delta = clamp(gainMinDelta, delta, gainMaxDelta)
-
-			// Accumulate the delta into the running index.
-			if delta > doubleStepThreshold {
-				e.previousLogGain += (delta << 1) - doubleStepThreshold
-				if e.previousLogGain > gainNLevels-1 {
-					e.previousLogGain = gainNLevels - 1
-				}
-			} else {
-				e.previousLogGain += delta
-			}
-
-			// Shift to make the transmitted index non-negative (0..40) and emit
-			// it with the delta-gain PDF, as the decoder expects.
-			transmitted := uint32(delta - gainMinDelta) //nolint:gosec // G115: delta is in [-4,36].
-			e.rangeEncoder.EncodeSymbolWithICDF(icdfDeltaQuantizationGain, transmitted)
+			e.rangeEncoder.EncodeSymbolWithICDF(icdfDeltaQuantizationGain, uint32(index)) //nolint:gosec // G115
 		}
-
-		// Dequantize using the same expression as the decoder.
-		inLogQ7 := (gainInvScaleQ16 * e.previousLogGain >> 16) + gainOffsetQ7
-		if inLogQ7 > gainMaxLogQ7 {
-			inLogQ7 = gainMaxLogQ7
-		}
-		i := inLogQ7 >> 7
-		f := inLogQ7 & 127
-		gainQ16[subframeIndex] = float32((1 << i) + ((-174*f*(128-f)>>16)+f)*((1<<i)>>7))
 	}
-
-	e.haveEncoded = true
-
-	return gainQ16
 }

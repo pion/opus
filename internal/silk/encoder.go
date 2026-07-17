@@ -25,11 +25,19 @@ type Encoder struct {
 	// selecting relative vs absolute primary-lag coding.
 	previousLag           int
 	isPreviousFrameVoiced bool
+
+	// Analysis state for the frame encoder.
+	vad          vadState
+	nsq          *nsqState
+	frameCounter int
+	sumLogGainQ7 int32     // cumulative LTP gain limit (quant_LTP_gains)
+	xBuf         []float32 // previous frame, as LTP-memory history for pitch analysis
+	ltpCorr      float32   // normalized correlation carried across frames
 }
 
 // NewEncoder creates a SILK Encoder with its prediction state reset.
 func NewEncoder() Encoder {
-	e := Encoder{}
+	e := Encoder{vad: newVADState(), nsq: newNSQState()}
 	e.resetPredictionState()
 
 	return e
@@ -42,4 +50,5 @@ func (e *Encoder) resetPredictionState() {
 	e.previousLogGain = 10
 	e.previousLag = 100
 	e.isPreviousFrameVoiced = false
+	e.sumLogGainQ7 = 0
 }
