@@ -23,6 +23,91 @@ func smulww(a, b int32) int32 {
 	return int32((int64(a) * int64(b)) >> 16)
 }
 
+// smulwt returns (a * (b>>16)) >> 16.
+func smulwt(a, b int32) int32 {
+	return int32((int64(a) * int64(b>>16)) >> 16)
+}
+
+// smlawt returns a + smulwt(b, c).
+func smlawt(a, b, c int32) int32 {
+	return a + smulwt(b, c)
+}
+
+// sub32Ovflw / add32Ovflw are two's-complement wrapping arithmetic.
+func sub32Ovflw(a, b int32) int32 { return int32(uint32(a) - uint32(b)) } //nolint:gosec // G115
+func add32Ovflw(a, b int32) int32 { return int32(uint32(a) + uint32(b)) } //nolint:gosec // G115
+
+// addLShift32 returns a + (b << shift).
+func addLShift32(a, b int32, shift uint) int32 {
+	return a + (b << shift)
+}
+
+// addSat32 saturates the signed sum of a and b to int32.
+func addSat32(a, b int32) int32 {
+	sum := int64(a) + int64(b)
+	if sum > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	if sum < math.MinInt32 {
+		return math.MinInt32
+	}
+
+	return int32(sum)
+}
+
+// lshiftSat32 saturates a << shift to int32.
+func lshiftSat32(a int32, shift uint) int32 {
+	return int32(clampI64(int64(a)<<shift, math.MinInt32, math.MaxInt32)) //nolint:gosec // G115
+}
+
+// lshiftOvflw is a two's-complement wrapping left shift.
+func lshiftOvflw(a int32, shift uint) int32 {
+	return int32(uint32(a) << shift) //nolint:gosec // G115
+}
+
+func clampI64(v, lo, hi int64) int64 {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+
+	return v
+}
+
+// silkRand advances the LCG dither seed (silk_RAND).
+func silkRand(seed int32) int32 {
+	return int32(uint32(907633515) + uint32(seed)*uint32(196314165)) //nolint:gosec // G115: wrapping LCG.
+}
+
+// smlabbOvflw returns a + (int16)b * (int16)c with wrapping.
+func smlabbOvflw(a, b, c int32) int32 {
+	return add32Ovflw(a, int32(int16(b))*int32(int16(c)))
+}
+
+// div32VarQ approximates (a << qres) / b (silk_DIV32_varQ).
+func div32VarQ(a, b int32, qres int) int32 {
+	aHeadrm := clz32(absInt32(a)) - 1
+	a32Nrm := a << uint(aHeadrm)
+	bHeadrm := clz32(absInt32(b)) - 1
+	b32Nrm := b << uint(bHeadrm)
+	b32Inv := (math.MaxInt32 >> 2) / (b32Nrm >> 16)
+	result := smulwb(a32Nrm, b32Inv)
+	a32Nrm = sub32Ovflw(a32Nrm, lshiftOvflw(smmul(b32Nrm, result), 3))
+	result = smlawb(result, a32Nrm, b32Inv)
+
+	lshift := 29 + aHeadrm - bHeadrm - qres
+	if lshift < 0 {
+		return lshiftSat32(result, uint(-lshift))
+	}
+	if lshift < 32 {
+		return result >> uint(lshift)
+	}
+
+	return 0
+}
+
 // sat16 saturates to the int16 range.
 func sat16(a int32) int32 {
 	switch {
