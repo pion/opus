@@ -46,7 +46,7 @@ type vadState struct {
 
 // newVADState initializes the VAD with approximate pink-noise levels.
 func newVADState() vadState {
-	var v vadState
+	var v vadState //nolint:varnamelen // v is the VAD state under construction.
 	for b := range vadNBands {
 		v.noiseLevelBias[b] = max(vadNoiseLevelsBias/int32(b+1), 1)
 	}
@@ -65,7 +65,11 @@ func newVADState() vadState {
 // getSpeechActivityQ8 returns the Q8 speech activity for one frame and updates
 // the VAD state (silk_VAD_GetSA_Q8). It also returns the frequency tilt and
 // per-band input-quality measures used by later analysis stages.
-func (v *vadState) getSpeechActivityQ8(pcm []int16, frameLength, fsKHz int) (saQ8 int, tiltQ15 int32, qualityQ15 [vadNBands]int32) {
+//
+//nolint:cyclop // faithful port of silk_VAD_GetSA_Q8.
+func (v *vadState) getSpeechActivityQ8(
+	pcm []int16, frameLength, fsKHz int,
+) (saQ8 int, tiltQ15 int32, qualityQ15 [vadNBands]int32) {
 	decimatedFramelength1 := frameLength >> 1
 	decimatedFramelength2 := frameLength >> 2
 	decimatedFramelength := frameLength >> 3
@@ -74,7 +78,7 @@ func (v *vadState) getSpeechActivityQ8(pcm []int16, frameLength, fsKHz int) (saQ
 	xOffset[1] = decimatedFramelength + decimatedFramelength2
 	xOffset[2] = xOffset[1] + decimatedFramelength
 	xOffset[3] = xOffset[2] + decimatedFramelength2
-	x := make([]int16, xOffset[3]+decimatedFramelength1)
+	x := make([]int16, xOffset[3]+decimatedFramelength1) //nolint:varnamelen // x holds the analysis subbands.
 
 	anaFiltBank1(pcm, &v.anaState, x, x[xOffset[3]:], frameLength)
 	anaFiltBank1(x, &v.anaState1, x, x[xOffset[2]:], decimatedFramelength1)
@@ -92,7 +96,7 @@ func (v *vadState) getSpeechActivityQ8(pcm []int16, frameLength, fsKHz int) (saQ
 
 	// Energy per band.
 	var xnrg [vadNBands]int32
-	for b := range vadNBands {
+	for b := range vadNBands { //nolint:varnamelen // b indexes the frequency band.
 		bandLength := frameLength >> min(vadNBands-b, vadNBands-1)
 		subframeLength := bandLength >> vadInternalSubframesLog2
 		offset := 0
@@ -119,7 +123,7 @@ func (v *vadState) getSpeechActivityQ8(pcm []int16, frameLength, fsKHz int) (saQ
 	// Signal-plus-noise to noise ratio.
 	var sumSquared, inputTilt int32
 	var nrgToNoiseRatioQ8 [vadNBands]int32
-	for b := range vadNBands {
+	for b := range vadNBands { //nolint:varnamelen // b indexes the frequency band.
 		speechNrg := xnrg[b] - v.nl[b]
 		if speechNrg <= 0 {
 			nrgToNoiseRatioQ8[b] = 256
@@ -140,7 +144,7 @@ func (v *vadState) getSpeechActivityQ8(pcm []int16, frameLength, fsKHz int) (saQ
 	}
 
 	sumSquared /= vadNBands
-	pSNRdBQ7 := int32(int16(3 * sqrtApprox(sumSquared)))
+	pSNRdBQ7 := int32(int16(3 * sqrtApprox(sumSquared))) //nolint:gosec // G115
 	saQ15 := sigmQ15(smulwb(vadSNRFactorQ16, pSNRdBQ7) - vadNegativeOffsetQ5)
 	tiltQ15 = (sigmQ15(inputTilt) - 16384) << 1
 
@@ -183,7 +187,7 @@ func (v *vadState) getNoiseLevels(pX *[vadNBands]int32) {
 		minCoef = math.MaxInt16 / ((v.counter >> 4) + 1)
 		v.counter++
 	}
-	for k := range vadNBands {
+	for k := range vadNBands { //nolint:varnamelen // k indexes the frequency band.
 		nl := v.nl[k]
 		nrg := addPosSat32(pX[k], v.noiseLevelBias[k])
 		invNrg := math.MaxInt32 / nrg
@@ -207,7 +211,7 @@ func (v *vadState) getNoiseLevels(pX *[vadNBands]int32) {
 
 // anaFiltBank1 splits a signal into low and high bands (silk_ana_filt_bank_1).
 func anaFiltBank1(in []int16, state *[2]int32, outL, outH []int16, n int) {
-	for k := range n >> 1 {
+	for k := range n >> 1 { //nolint:varnamelen // k indexes the sample pair.
 		in32 := int32(in[2*k]) << 10
 		y := in32 - state[0]
 		xVal := smlawb(y, y, anaFilterBankA21)
@@ -220,8 +224,8 @@ func anaFiltBank1(in []int16, state *[2]int32, outL, outH []int16, n int) {
 		out2 := state[1] + xVal
 		state[1] = in32 + xVal
 
-		outL[k] = int16(sat16(rshiftRound32(out2+out1, 11)))
-		outH[k] = int16(sat16(rshiftRound32(out2-out1, 11)))
+		outL[k] = int16(sat16(rshiftRound32(out2+out1, 11))) //nolint:gosec // G115
+		outH[k] = int16(sat16(rshiftRound32(out2-out1, 11))) //nolint:gosec // G115
 	}
 }
 
@@ -239,7 +243,7 @@ func hpVariableCutoff(
 		return smth1Q15
 	}
 
-	pitchFreqHzQ16 := (int32(fsKHz*1000) << 16) / int32(prevLag)
+	pitchFreqHzQ16 := (int32(fsKHz*1000) << 16) / int32(prevLag) //nolint:gosec // G115
 	pitchFreqLogQ7 := lin2log(pitchFreqHzQ16) - (16 << 7)
 
 	pitchFreqLogQ7 = smlawb(pitchFreqLogQ7,
@@ -252,7 +256,11 @@ func hpVariableCutoff(
 	}
 	deltaFreqQ7 = clamp(-variableHPMaxDeltaFreqQ7, deltaFreqQ7, variableHPMaxDeltaFreqQ7)
 
-	smth1Q15 = smlawb(smth1Q15, smulbb(int32(speechActivityQ8), deltaFreqQ7), variableHPSmoothCoef1Q16)
+	smth1Q15 = smlawb(
+		smth1Q15,
+		smulbb(int32(speechActivityQ8), deltaFreqQ7), //nolint:gosec // G115
+		variableHPSmoothCoef1Q16,
+	)
 
 	return clamp(lin2log(variableHPMinCutoffHz)<<8, smth1Q15, lin2log(variableHPMaxCutoffHz)<<8)
 }

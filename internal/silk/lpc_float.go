@@ -33,7 +33,7 @@ func autocorrelationFLP(results, inputData []float32, inputDataSize, correlation
 // schurFLP computes reflection coefficients from an autocorrelation sequence
 // and returns the residual energy (silk_schur_FLP).
 func schurFLP(reflCoef, autoCorr []float32, order int) float32 {
-	var c [maxLPCOrder + 1][2]float64
+	var c [maxLPCOrder + 1][2]float64 //nolint:varnamelen // c is the correlation work matrix, as in the C reference.
 	for k := 0; k <= order; k++ {
 		c[k][0] = float64(autoCorr[k])
 		c[k][1] = float64(autoCorr[k])
@@ -55,14 +55,14 @@ func schurFLP(reflCoef, autoCorr []float32, order int) float32 {
 // k2aFLP converts reflection coefficients to LPC prediction coefficients.
 func k2aFLP(a, rc []float32, order int) {
 	for k := range order {
-		rck := rc[k]
+		rck := rc[k] //nolint:gosec // G602: k < order <= maxLPCOrder.
 		for n := range (k + 1) >> 1 {
-			tmp1 := a[n]
+			tmp1 := a[n] //nolint:gosec // G602: indices bounded by k < order.
 			tmp2 := a[k-n-1]
-			a[n] = tmp1 + tmp2*rck
+			a[n] = tmp1 + tmp2*rck //nolint:gosec // G602: indices bounded by k < order.
 			a[k-n-1] = tmp2 + tmp1*rck
 		}
-		a[k] = -rck
+		a[k] = -rck //nolint:gosec // G602: k < order <= maxLPCOrder.
 	}
 }
 
@@ -81,7 +81,7 @@ func bwexpanderFLP(ar []float32, d int, chirp float32) {
 // multiple of 4.
 func applySineWindowFLP(pxWin, px []float32, winType, length int) {
 	freq := float32(math.Pi) / float32(length+1)
-	c := 2.0 - freq*freq
+	c := 2.0 - freq*freq //nolint:varnamelen // c is the recurrence coefficient, as in the C reference.
 
 	var s0, s1 float32
 	if winType < 2 {
@@ -94,10 +94,10 @@ func applySineWindowFLP(pxWin, px []float32, winType, length int) {
 
 	for k := 0; k < length; k += 4 {
 		pxWin[k+0] = px[k+0] * 0.5 * (s0 + s1)
-		pxWin[k+1] = px[k+1] * s1
+		pxWin[k+1] = px[k+1] * s1 //nolint:gosec // G602: length is a multiple of 4.
 		s0 = c*s1 - s0
-		pxWin[k+2] = px[k+2] * 0.5 * (s1 + s0)
-		pxWin[k+3] = px[k+3] * s0
+		pxWin[k+2] = px[k+2] * 0.5 * (s1 + s0) //nolint:gosec // G602: length is a multiple of 4.
+		pxWin[k+3] = px[k+3] * s0              //nolint:gosec // G602: length is a multiple of 4.
 		s1 = c*s0 - s1
 	}
 }

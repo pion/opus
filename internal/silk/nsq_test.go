@@ -36,7 +36,7 @@ func TestNSQUnvoicedSmoke(t *testing.T) {
 		gains[k] = 100 * 65536 // gain ~ signal scale so the excitation is non-degenerate
 	}
 
-	p := &nsqParams{
+	p := &nsqParams{ //nolint:varnamelen // p is the NSQ parameter block.
 		predCoefQ12:      make([]int16, 2*maxLPCOrder),
 		ltpCoefQ14:       make([]int16, ltpOrder*nbSubfr),
 		arQ13:            make([]int16, nbSubfr*maxShapeLPCOrder),

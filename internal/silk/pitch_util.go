@@ -17,7 +17,7 @@ const (
 // (silk_resampler_down2). out must have len(in)/2 samples; state persists
 // across calls.
 func resamplerDown2(state *[2]int32, out, in []int16) {
-	for k := range len(in) >> 1 {
+	for k := range len(in) >> 1 { //nolint:varnamelen // k indexes the sample pair.
 		in32 := int32(in[2*k]) << 10
 		y := in32 - state[0]
 		x := smlawb(y, y, resamplerDown2Coef1)
@@ -30,14 +30,14 @@ func resamplerDown2(state *[2]int32, out, in []int16) {
 		out32 = out32 + state[1] + x
 		state[1] = in32 + x
 
-		out[k] = int16(sat16(rshiftRound32(out32, 11)))
+		out[k] = int16(sat16(rshiftRound32(out32, 11))) //nolint:gosec // G115
 	}
 }
 
 // float2ShortArray rounds and saturates float samples to int16.
 func float2ShortArray(out []int16, in []float32) {
 	for i := range out {
-		out[i] = int16(sat16(int32(math.RoundToEven(float64(in[i])))))
+		out[i] = int16(sat16(int32(math.RoundToEven(float64(in[i]))))) //nolint:gosec // G115
 	}
 }
 
@@ -67,6 +67,8 @@ func pitchXcorr(x, y, xcorr []float32, length, maxPitch int) {
 
 // insertionSortDecreasingFLP sorts the first K of L values into decreasing
 // order, tracking their original indices (silk_insertion_sort_decreasing_FLP).
+//
+//nolint:dupl,varnamelen // twin of the increasing-order sort below; l/k are lengths, as in the C reference.
 func insertionSortDecreasingFLP(a []float32, idx []int, l, k int) {
 	for i := range k {
 		idx[i] = i
@@ -83,7 +85,7 @@ func insertionSortDecreasingFLP(a []float32, idx []int, l, k int) {
 	}
 	for i := k; i < l; i++ {
 		value := a[i]
-		if value > a[k-1] {
+		if value > a[k-1] { //nolint:gosec // G602: k-1 >= 0 for k >= 1.
 			j := k - 2
 			for ; j >= 0 && value > a[j]; j-- {
 				a[j+1] = a[j]
@@ -97,6 +99,8 @@ func insertionSortDecreasingFLP(a []float32, idx []int, l, k int) {
 
 // insertionSortIncreasing sorts the first K of L values into increasing order,
 // tracking their original indices (silk_insertion_sort_increasing).
+//
+//nolint:dupl,varnamelen // twin of the decreasing-order sort above; l/k are lengths, as in the C reference.
 func insertionSortIncreasing(a []int32, idx []int, l, k int) {
 	for i := range k {
 		idx[i] = i
@@ -113,7 +117,7 @@ func insertionSortIncreasing(a []int32, idx []int, l, k int) {
 	}
 	for i := k; i < l; i++ {
 		value := a[i]
-		if value < a[k-1] {
+		if value < a[k-1] { //nolint:gosec // G602: k-1 >= 0 for k >= 1.
 			j := k - 2
 			for ; j >= 0 && value < a[j]; j-- {
 				a[j+1] = a[j]

@@ -24,7 +24,7 @@ func (e *Encoder) encodeSubframeGains(
 	subframeCount int,
 	isFirstSilkFrameInOpusFrame bool,
 ) (gainQ16 []float32) {
-	conditional := !(isFirstSilkFrameInOpusFrame || !e.haveEncoded)
+	conditional := !isFirstSilkFrameInOpusFrame && e.haveEncoded
 	indices, gainQ16, _ := e.quantizeGains(gainsTargetQ16, subframeCount, conditional)
 	e.emitGainIndices(indices, signalType, conditional)
 
@@ -35,7 +35,11 @@ func (e *Encoder) encodeSubframeGains(
 // indices and the dequantized gains, updating the running previousLogGain. For
 // the independent first subframe the index is the full 6-bit gain index; for
 // delta subframes it is the non-negative transmit index (0..40).
-func (e *Encoder) quantizeGains(gainsTargetQ16 []int32, subframeCount int, conditional bool) (indices []int8, gainQ16 []float32, gainQ16Int []int32) {
+func (e *Encoder) quantizeGains(
+	gainsTargetQ16 []int32,
+	subframeCount int,
+	conditional bool,
+) (indices []int8, gainQ16 []float32, gainQ16Int []int32) {
 	indices = make([]int8, subframeCount)
 	gainQ16 = make([]float32, subframeCount)
 	gainQ16Int = make([]int32, subframeCount)
@@ -47,10 +51,10 @@ func (e *Encoder) quantizeGains(gainsTargetQ16 []int32, subframeCount int, condi
 		}
 		ind = clamp(0, ind, gainNLevels-1)
 
-		if subframeIndex == 0 && !conditional {
+		if subframeIndex == 0 && !conditional { //nolint:nestif // faithful port of silk_gains_quant.
 			ind = clamp(e.previousLogGain+gainMinDelta, ind, gainNLevels-1)
 			e.previousLogGain = ind
-			indices[subframeIndex] = int8(ind)
+			indices[subframeIndex] = int8(ind) //nolint:gosec // G115: ind is in [0,63].
 		} else {
 			delta := ind - e.previousLogGain
 			doubleStepThreshold := 2*gainMaxDelta - gainNLevels + e.previousLogGain
@@ -66,13 +70,11 @@ func (e *Encoder) quantizeGains(gainsTargetQ16 []int32, subframeCount int, condi
 			} else {
 				e.previousLogGain += delta
 			}
-			indices[subframeIndex] = int8(delta - gainMinDelta)
+			indices[subframeIndex] = int8(delta - gainMinDelta) //nolint:gosec // G115: delta is in [gainMinDelta,gainMaxDelta].
 		}
 
 		inLogQ7 := (gainInvScaleQ16 * e.previousLogGain >> 16) + gainOffsetQ7
-		if inLogQ7 > gainMaxLogQ7 {
-			inLogQ7 = gainMaxLogQ7
-		}
+		inLogQ7 = min(inLogQ7, gainMaxLogQ7)
 		i := inLogQ7 >> 7
 		f := inLogQ7 & 127
 		gain := (1 << i) + ((-174*f*(128-f)>>16)+f)*((1<<i)>>7)

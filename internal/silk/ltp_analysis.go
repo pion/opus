@@ -20,7 +20,7 @@ func corrVectorFLP(x, t []float32, l, order int, xt []float32) {
 
 // corrMatrixFLP computes the symmetric correlation matrix X'*X, stored row-major
 // (silk_corrMatrix_FLP).
-func corrMatrixFLP(x []float32, l, order int, xx []float32) {
+func corrMatrixFLP(x []float32, l, order int, xx []float32) { //nolint:varnamelen // l is the vector length.
 	p1 := order - 1
 	energy := energyFLP(x[p1:], l)
 	xx[0] = float32(energy)

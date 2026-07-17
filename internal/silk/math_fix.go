@@ -10,22 +10,22 @@ import "math"
 
 // smulbb returns (int16)a * (int16)b.
 func smulbb(a, b int32) int32 {
-	return int32(int16(a)) * int32(int16(b))
+	return int32(int16(a)) * int32(int16(b)) //nolint:gosec // G115: Q-format conversion.
 }
 
 // smlabb returns a + (int16)b * (int16)c.
 func smlabb(a, b, c int32) int32 {
-	return a + int32(int16(b))*int32(int16(c))
+	return a + int32(int16(b))*int32(int16(c)) //nolint:gosec // G115: Q-format conversion.
 }
 
 // smulww returns (a * b) >> 16 at 64-bit width.
 func smulww(a, b int32) int32 {
-	return int32((int64(a) * int64(b)) >> 16)
+	return int32((int64(a) * int64(b)) >> 16) //nolint:gosec // G115: Q-format conversion.
 }
 
 // smulwt returns (a * (b>>16)) >> 16.
 func smulwt(a, b int32) int32 {
-	return int32((int64(a) * int64(b>>16)) >> 16)
+	return int32((int64(a) * int64(b>>16)) >> 16) //nolint:gosec // G115: Q-format conversion.
 }
 
 // smlawt returns a + smulwt(b, c).
@@ -83,15 +83,15 @@ func silkRand(seed int32) int32 {
 
 // smlabbOvflw returns a + (int16)b * (int16)c with wrapping.
 func smlabbOvflw(a, b, c int32) int32 {
-	return add32Ovflw(a, int32(int16(b))*int32(int16(c)))
+	return add32Ovflw(a, int32(int16(b))*int32(int16(c))) //nolint:gosec // G115: Q-format conversion.
 }
 
 // div32VarQ approximates (a << qres) / b (silk_DIV32_varQ).
 func div32VarQ(a, b int32, qres int) int32 {
 	aHeadrm := clz32(absInt32(a)) - 1
-	a32Nrm := a << uint(aHeadrm)
+	a32Nrm := a << uint(aHeadrm) //nolint:gosec // G115: shift count is non-negative.
 	bHeadrm := clz32(absInt32(b)) - 1
-	b32Nrm := b << uint(bHeadrm)
+	b32Nrm := b << uint(bHeadrm) //nolint:gosec // G115: shift count is non-negative.
 	b32Inv := (math.MaxInt32 >> 2) / (b32Nrm >> 16)
 	result := smulwb(a32Nrm, b32Inv)
 	a32Nrm = sub32Ovflw(a32Nrm, lshiftOvflw(smmul(b32Nrm, result), 3))

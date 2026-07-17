@@ -26,7 +26,7 @@ func ror32(a32 int32, rot int) int32 {
 // clzFrac returns the leading-zero count of in and the 7 bits after the
 // leading one.
 func clzFrac(in int32) (lz, fracQ7 int32) {
-	lz = int32(clz32(in))
+	lz = int32(clz32(in)) //nolint:gosec // G115: leading-zero count is in [0,32].
 	fracQ7 = ror32(in, 24-int(lz)) & 0x7f
 
 	return lz, fracQ7

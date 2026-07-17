@@ -101,7 +101,7 @@ func TestEncodeLTPFilterRoundTrip(t *testing.T) {
 
 				require.Len(t, bQ7, subframes)
 				for i := range filterIndices {
-					require.Equalf(t, codebook[filterIndices[i]], []int8(bQ7[i]), "subframe %d", i)
+					require.Equalf(t, codebook[filterIndices[i]], bQ7[i], "subframe %d", i)
 				}
 				assert.Equal(t, encRange, dec.rangeDecoder.FinalRange(), "range coder desync")
 			})

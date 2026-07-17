@@ -57,6 +57,6 @@ func TestFindPitchLagsUnvoiced(t *testing.T) {
 
 	enc := NewEncoder()
 	// Not asserting hard (noise can occasionally correlate) — just that it runs.
-	_, _, _, _, res, _ := enc.findPitchLags(buf, fsKHz, 4, 50, 0)
+	_, _, _, _, res, _ := enc.findPitchLags(buf, fsKHz, 4, 50, 0) //nolint:dogsled // only the residual is under test
 	require.Len(t, res, ltpMemLength+frameLength)
 }

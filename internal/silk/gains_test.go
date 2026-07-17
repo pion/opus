@@ -110,16 +110,14 @@ func TestLin2LogRoundTripAgainstGainDequant(t *testing.T) {
 	// For every gain index 0..63, the log domain value fed to log2lin is
 	// exactly recoverable, so lin2log(log2lin(x)) must return x for the gain
 	// grid points used by the codec.
-	for logGain := int32(0); logGain < gainNLevels; logGain++ {
+	for logGain := range int32(gainNLevels) {
 		inLogQ7 := (gainInvScaleQ16 * logGain >> 16) + gainOffsetQ7
-		if inLogQ7 > gainMaxLogQ7 {
-			inLogQ7 = gainMaxLogQ7
-		}
+		inLogQ7 = min(inLogQ7, gainMaxLogQ7)
 		i := inLogQ7 >> 7
 		f := inLogQ7 & 127
 		gainQ16 := (1 << i) + ((-174*f*(128-f)>>16)+f)*((1<<i)>>7)
 
-		got := lin2log(int32(gainQ16))
+		got := lin2log(gainQ16)
 		// lin2log/log2lin are approximate inverses; the reference keeps the
 		// round-trip within a couple of Q7 units.
 		diff := got - inLogQ7

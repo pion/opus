@@ -39,7 +39,7 @@ func TestEncodePulsesRoundTrip(t *testing.T) {
 				for _, mag := range mags {
 					name := fmt.Sprintf("t%d_o%d_len%d_mag%d", signalType, offset, length, mag)
 					t.Run(name, func(t *testing.T) {
-						seed := uint32(int(signalType)*131 + int(offset)*17 + length + int(mag))
+						seed := uint32(int(signalType)*131 + int(offset)*17 + length + int(mag)) //nolint:gosec // G115
 						pulses := lcgPulses(seed, length, mag)
 
 						enc := NewEncoder()

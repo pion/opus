@@ -73,6 +73,8 @@ type nsqParams struct {
 
 // quantize runs the NSQ over one frame, filling pulses with the quantized
 // excitation indices.
+//
+//nolint:varnamelen // p is the NSQ parameter block, as in the C reference.
 func (nsq *nsqState) quantize(x16 []int16, pulses []int8, p *nsqParams) {
 	nsq.randSeed = p.seed
 	lag := nsq.lagPrev
@@ -100,7 +102,7 @@ func (nsq *nsqState) quantize(x16 []int16, pulses []int8, p *nsqParams) {
 	nsq.sLTPBufIdx = p.ltpMemLength
 	pxqIndex := p.ltpMemLength
 
-	for k := range p.nbSubfr {
+	for k := range p.nbSubfr { //nolint:varnamelen // k indexes the subframe.
 		aQ12 := p.predCoefQ12[((k>>1)|(1-lsfInterpFlag))*maxLPCOrder:]
 		bQ14 := p.ltpCoefQ14[k*ltpOrder:]
 		arShpQ13 := p.arQ13[k*maxShapeLPCOrder:]
@@ -135,7 +137,7 @@ func (nsq *nsqState) quantize(x16 []int16, pulses []int8, p *nsqParams) {
 	copy(nsq.sLTPShpQ14, nsq.sLTPShpQ14[p.frameLength:p.frameLength+p.ltpMemLength])
 }
 
-//nolint:gocyclo,cyclop // faithful port of the dense NSQ inner loop.
+//nolint:gocyclo,cyclop,varnamelen // faithful port of the dense NSQ inner loop.
 func (nsq *nsqState) noiseShapeQuantizer(
 	xScQ10 []int32, pulses []int8, xqIndex int, sLTPQ15 []int32,
 	aQ12, bQ14, arShpQ13 []int16, lag int,
@@ -235,7 +237,7 @@ func (nsq *nsqState) noiseShapeQuantizer(
 			q1Q10 = q2Q10
 		}
 
-		pulses[i] = int8(rshiftRound32(q1Q10, 10))
+		pulses[i] = int8(rshiftRound32(q1Q10, 10)) //nolint:gosec // G115
 
 		excQ14 := q1Q10 << 4
 		if nsq.randSeed < 0 {
@@ -245,7 +247,7 @@ func (nsq *nsqState) noiseShapeQuantizer(
 		lpcExcQ14 := addLShift32(excQ14, ltpPredQ13, 1)
 		xqQ14 := add32Ovflw(lpcExcQ14, lpcPredQ10<<4)
 
-		nsq.xq[xqIndex+i] = int16(sat16(rshiftRound32(smulww(xqQ14, gainQ10), 8)))
+		nsq.xq[xqIndex+i] = int16(sat16(rshiftRound32(smulww(xqQ14, gainQ10), 8))) //nolint:gosec // G115
 
 		psLPCIndex++
 		nsq.sLPCQ14[psLPCIndex] = xqQ14
@@ -264,7 +266,11 @@ func (nsq *nsqState) noiseShapeQuantizer(
 
 // scaleStates scales the input and LTP state by 1/gain and adjusts for gain
 // changes (silk_nsq_scale_states).
-func (nsq *nsqState) scaleStates(x16 []int16, xScQ10 []int32, sLTP []int16, sLTPQ15 []int32, subfr, lag int, p *nsqParams) {
+//
+//nolint:cyclop,varnamelen // faithful port of silk_nsq_scale_states.
+func (nsq *nsqState) scaleStates(
+	x16 []int16, xScQ10 []int32, sLTP []int16, sLTPQ15 []int32, subfr, lag int, p *nsqParams,
+) {
 	invGainQ31 := inverse32VarQ(max(p.gainsQ16[subfr], 1), 47)
 	invGainQ26 := rshiftRound32(invGainQ31, 5)
 	for i := range p.subfrLength {
@@ -305,7 +311,7 @@ func (nsq *nsqState) scaleStates(x16 []int16, xScQ10 []int32, sLTP []int16, sLTP
 // nsqShortPrediction returns the short-term LPC prediction
 // (silk_noise_shape_quantizer_short_prediction).
 func nsqShortPrediction(buf []int32, bufIdx int, coef []int16, order int) int32 {
-	out := int32(order >> 1)
+	out := int32(order >> 1) //nolint:gosec // G115
 	for i := range order {
 		out = smlawb(out, buf[bufIdx-i], int32(coef[i]))
 	}
@@ -320,7 +326,7 @@ func nsqNoiseShapeFeedbackLoop(data0 int32, data1 []int32, coef []int16, order i
 	tmp1 := data1[0]
 	data1[0] = tmp2
 
-	out := int32(order >> 1)
+	out := int32(order >> 1) //nolint:gosec // G115
 	out = smlawb(out, tmp2, int32(coef[0]))
 	for j := 2; j < order; j += 2 {
 		tmp2 = data1[j-1]
@@ -345,7 +351,7 @@ func lpcAnalysisFilterFixed(out, in []int16, b []int16, length, order int) {
 			out32Q12 = smlabbOvflw(out32Q12, int32(in[ix-1-j]), int32(b[j]))
 		}
 		out32Q12 = sub32Ovflw(int32(in[ix])<<12, out32Q12)
-		out[ix] = int16(sat16(rshiftRound32(out32Q12, 12)))
+		out[ix] = int16(sat16(rshiftRound32(out32Q12, 12))) //nolint:gosec // G115
 	}
 	for j := range order {
 		out[j] = 0

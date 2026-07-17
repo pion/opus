@@ -14,16 +14,16 @@ const (
 
 // silkMaxPulsesTable bounds the pulse sum per partition size (2, 4, 8, 16)
 // before the block is downscaled by an extra LSB (gain_quant.c thresholds).
-var silkMaxPulsesTable = [4]int32{8, 10, 12, 16}
+var silkMaxPulsesTable = [4]int32{8, 10, 12, 16} //nolint:gochecknoglobals // per-partition pulse-sum bounds.
 
 // silkRateLevelsBITSQ5[signalType>>1] and silkPulsesPerBlockBITSQ5 give the Q5
 // bit cost of each rate level, used to pick the cheapest one.
-var silkRateLevelsBITSQ5 = [2][9]int32{
+var silkRateLevelsBITSQ5 = [2][9]int32{ //nolint:gochecknoglobals // Q5 rate-level bit costs.
 	{131, 74, 141, 79, 80, 138, 95, 104, 134},
 	{95, 99, 91, 125, 93, 76, 123, 115, 123},
 }
 
-var silkPulsesPerBlockBITSQ5 = [9][18]int32{
+var silkPulsesPerBlockBITSQ5 = [9][18]int32{ //nolint:gochecknoglobals // Q5 pulses-per-block bit costs.
 	{31, 57, 107, 160, 205, 205, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255},
 	{69, 47, 67, 111, 166, 205, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255},
 	{82, 74, 79, 95, 109, 128, 145, 160, 173, 205, 205, 205, 224, 255, 255, 224, 255, 224},
@@ -38,7 +38,7 @@ var silkPulsesPerBlockBITSQ5 = [9][18]int32{
 // silkSignICDF holds the excitation sign thresholds, indexed by
 // 7*(quantOffsetType + 2*signalType) + min(pulseCount, 6). The decoder's named
 // sign tables are the same values in {256, 256-threshold, 256} form.
-var silkSignICDF = [42]int32{
+var silkSignICDF = [42]int32{ //nolint:gochecknoglobals // excitation sign thresholds.
 	254, 49, 67, 77, 82, 93, 99,
 	198, 11, 18, 24, 31, 36, 45,
 	255, 46, 66, 78, 87, 94, 104,
@@ -51,6 +51,8 @@ var silkSignICDF = [42]int32{
 // decoder's excitation path (RFC 6716 Section 4.2.7.8). pulses holds one signed
 // index per sample; frameLength is padded up to a whole number of 16-sample
 // shell blocks.
+//
+//nolint:gocognit,gocyclo,cyclop,maintidx // faithful port of silk_encode_pulses.
 func (e *Encoder) encodePulses(
 	signalType frameSignalType,
 	quantOffsetType frameQuantizationOffsetType,
@@ -232,10 +234,8 @@ func (e *Encoder) encodeExcitationSigns(
 			continue
 		}
 		count := int(p)
-		if count > 6 {
-			count = 6
-		}
-		icdf := []uint{256, uint(256 - silkSignICDF[base+count]), 256}
+		count = min(count, 6)
+		icdf := []uint{256, uint(256 - silkSignICDF[base+count]), 256} //nolint:gosec // G115
 		for j := range shellCodecFrameLength {
 			idx := i*shellCodecFrameLength + j
 			if idx >= len(pulses) || pulses[idx] == 0 {

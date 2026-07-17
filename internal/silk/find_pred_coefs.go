@@ -15,7 +15,10 @@ const (
 // which must have at least predictLPCOrder + max(pitchL) samples of history
 // before it. The output holds nbSubfr blocks of preLength+subfrLength samples,
 // each scaled by the subframe inverse gain.
-func ltpAnalysisFilterFLP(ltpRes, x []float32, xBase int, b []float32, pitchL []int, invGains []float32, subfrLength, nbSubfr, preLength int) {
+func ltpAnalysisFilterFLP(
+	ltpRes, x []float32, xBase int, b []float32, pitchL []int, invGains []float32,
+	subfrLength, nbSubfr, preLength int,
+) {
 	xPtr := xBase
 	resIdx := 0
 	for k := range nbSubfr {
@@ -53,6 +56,7 @@ func residualEnergyFLP(nrgs, lpcInPre, a0, a1, gains []float32, subfrLength, nbS
 // ifactQ2 (0..4) is the weight on x1.
 func interpolateNLSF(xi, x0, x1 []int16, ifactQ2, d int) {
 	for i := range d {
+		//nolint:gosec // G115: NLSFs and their interpolation stay within int16.
 		xi[i] = int16(int32(x0[i]) + (smulbb(int32(x1[i])-int32(x0[i]), int32(ifactQ2)) >> 2))
 	}
 }
@@ -61,7 +65,9 @@ func interpolateNLSF(xi, x0, x1 []int16, ifactQ2, d int) {
 // NLSF interpolation factor with the lowest first-half residual energy
 // (silk_find_LPC_FLP). It returns the interpolation index (4 = no
 // interpolation) and the NLSFs to quantize.
-func (e *Encoder) findLPCNLSF(lpcInPre []float32, minInvGain float32, bandwidth Bandwidth, order, nbSubfr, subfrLength int) (int, []int16) {
+func (e *Encoder) findLPCNLSF(
+	lpcInPre []float32, minInvGain float32, bandwidth Bandwidth, order, nbSubfr, subfrLength int,
+) (int, []int16) {
 	blockLen := subfrLength + order
 	interpQ2 := 4
 	aFull := make([]float32, order)
@@ -69,8 +75,9 @@ func (e *Encoder) findLPCNLSF(lpcInPre []float32, minInvGain float32, bandwidth 
 
 	nlsf := make([]int16, order)
 	if !e.firstFrameAfterReset && nbSubfr == maxSubframeCount {
+		half := maxSubframeCount / 2
 		aTmp := make([]float32, order)
-		resNrg -= burgModifiedFLP(aTmp, lpcInPre[(maxSubframeCount/2)*blockLen:], minInvGain, blockLen, maxSubframeCount/2, order)
+		resNrg -= burgModifiedFLP(aTmp, lpcInPre[half*blockLen:], minInvGain, blockLen, half, order)
 		a2nlsfFLP(nlsf, aTmp, order) // NLSFs of the last 10 ms
 
 		resNrg2nd := float32(math.MaxFloat32)

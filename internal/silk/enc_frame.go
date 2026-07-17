@@ -115,7 +115,8 @@ func (e *Encoder) encodeSILKFrame(input []int16, bandwidth Bandwidth) {
 	for i := range frameLength {
 		shapeBuf[laShape+i] = float32(input[i])
 	}
-	sr := e.noiseShapeAnalysis(shapeBuf, signalType, pitchL, predGain, snrDBQ7, saQ8, quality, fsKHz, subfrCount, subfrLength)
+	sr := e.noiseShapeAnalysis(
+		shapeBuf, signalType, pitchL, predGain, snrDBQ7, saQ8, quality, fsKHz, subfrCount, subfrLength)
 
 	// Prediction coefficients (find_pred_coefs). Build LPC_in_pre: the LTP
 	// residual for voiced, or the gain-normalized input for unvoiced. Both drive
@@ -229,9 +230,13 @@ func (e *Encoder) encodeSILKFrame(input []int16, bandwidth Bandwidth) {
 	e.emitNLSFIndices(index1, indices2, bandwidth, voiced)
 	e.rangeEncoder.EncodeSymbolWithICDF(icdfNormalizedLSFInterpolationIndex, uint32(nlsfInterpQ2)) //nolint:gosec // G115
 	if voiced {
-		e.encodePitchLags(int(lagIndex)+peMinLagMS*fsKHz, uint32(contourIndex), bandwidth, nanoseconds20Ms, true) //nolint:gosec
-		e.encodeLTPFilter(uint32(periodicityIndex), toUint32(filterIndices))                                      //nolint:gosec
-		e.encodeLTPScaling(uint32(ltpScaleIndex))                                                                 //nolint:gosec // G115
+		primaryLag := int(lagIndex) + peMinLagMS*fsKHz
+		contour := uint32(contourIndex)    //nolint:gosec // G115: contour index is non-negative.
+		period := uint32(periodicityIndex) //nolint:gosec // G115: periodicity index is non-negative.
+		scale := uint32(ltpScaleIndex)     //nolint:gosec // G115: scale index is 0..2.
+		e.encodePitchLags(primaryLag, contour, bandwidth, nanoseconds20Ms, true)
+		e.encodeLTPFilter(period, toUint32(filterIndices))
+		e.encodeLTPScaling(scale)
 	}
 	e.rangeEncoder.EncodeSymbolWithICDF(icdfLinearCongruentialGeneratorSeed, seed)
 	e.encodePulses(signalType, quantOffsetType, pulses, frameLength)

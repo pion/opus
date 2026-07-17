@@ -21,6 +21,8 @@ func findLPC(nlsfQ15 []int16, x []float32, minInvGain float32, subfrLength, nbSu
 // nb_subfr subframes, limiting the prediction gain to 1/minInvGain. It writes
 // the order coefficients into a and returns the residual energy
 // (silk_burg_modified_FLP).
+//
+//nolint:gocognit,gocyclo,cyclop,maintidx,varnamelen // faithful port of silk_burg_modified_FLP.
 func burgModifiedFLP(a, x []float32, minInvGain float32, subfrLength, nbSubfr, order int) float32 {
 	var cFirstRow, cLastRow [maxLPCOrder]float64
 	var cAf, cAb [maxLPCOrder + 1]float64
@@ -40,8 +42,7 @@ func burgModifiedFLP(a, x []float32, minInvGain float32, subfrLength, nbSubfr, o
 	invGain := 1.0
 	reachedMaxGain := false
 
-	var n int
-	for n = 0; n < order; n++ {
+	for n := range order {
 		for s := range nbSubfr {
 			xPtr := x[s*subfrLength:]
 			tmp1 := float64(xPtr[n])
@@ -66,10 +67,10 @@ func burgModifiedFLP(a, x []float32, minInvGain float32, subfrLength, nbSubfr, o
 			tmp1 += cLastRow[n-k-1] * atmp
 			tmp2 += cFirstRow[n-k-1] * atmp
 		}
-		cAf[n+1] = tmp1
-		cAb[n+1] = tmp2
+		cAf[n+1] = tmp1 //nolint:gosec // G602: n+1 <= order <= maxLPCOrder.
+		cAb[n+1] = tmp2 //nolint:gosec // G602: n+1 <= order <= maxLPCOrder.
 
-		num := cAb[n+1]
+		num := cAb[n+1] //nolint:gosec // G602: n+1 <= order <= maxLPCOrder.
 		nrgB := cAb[0]
 		nrgF := cAf[0]
 		for k := range n {

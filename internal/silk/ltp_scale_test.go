@@ -3,22 +3,22 @@
 
 package silk
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
 
 func TestLTPScaleControl(t *testing.T) {
 	const snrDBQ7 = 18 * 128 // ~18 dB
 
 	// No packet loss: always minimum scaling (index 0, 15565).
-	if idx, q14 := ltpScaleControl(20, snrDBQ7, 0, 1, false); idx != 0 || q14 != 15565 {
-		t.Fatalf("no loss: got index %d scale %d, want 0/15565", idx, q14)
-	}
+	idx, q14 := ltpScaleControl(20, snrDBQ7, 0, 1, false)
+	assert.Equal(t, 0, idx, "no loss: index")
+	assert.Equal(t, int32(15565), q14, "no loss: scale")
 
 	// High prediction gain and loss push toward stronger scaling.
-	idx, q14 := ltpScaleControl(40, snrDBQ7, 25, 1, false)
-	if idx == 0 {
-		t.Fatalf("high loss/gain: expected stronger scaling, got index 0")
-	}
-	if q14 != ltpScalesTableQ14[idx] {
-		t.Fatalf("scale %d does not match table entry %d", q14, ltpScalesTableQ14[idx])
-	}
+	idx, q14 = ltpScaleControl(40, snrDBQ7, 25, 1, false)
+	assert.NotEqual(t, 0, idx, "high loss/gain: expected stronger scaling")
+	assert.Equal(t, ltpScalesTableQ14[idx], q14, "scale matches table entry")
 }

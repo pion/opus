@@ -18,7 +18,9 @@ const (
 // by the current frame (length ltp_mem_length + frame_length). It returns
 // whether the frame is voiced, the per-subframe pitch lags, the lag/contour
 // indices, and the whitening residual (reused by the LTP analysis).
-func (e *Encoder) findPitchLags(analysisBuf []float32, fsKHz, nbSubfr, speechActivityQ8 int, inputTiltQ15 int32) (voiced bool, pitchL []int, lagIndex int16, contourIndex int8, res []float32, predGain float32) {
+func (e *Encoder) findPitchLags(
+	analysisBuf []float32, fsKHz, nbSubfr, speechActivityQ8 int, inputTiltQ15 int32,
+) (voiced bool, pitchL []int, lagIndex int16, contourIndex int8, res []float32, predGain float32) {
 	bufLen := len(analysisBuf)
 	laPitch := laPitchMS * fsKHz
 	winLength := findPitchLPCWinMS * fsKHz

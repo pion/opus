@@ -14,7 +14,11 @@ var ltpScalesTableQ14 = [3]int32{15565, 12288, 8192}
 // pushes toward stronger scaling so decoded frames recover faster; with no
 // configured packet loss the index is always 0. Returns the index and its Q14
 // scale.
-func ltpScaleControl(ltpredCodGain float32, snrDBQ7 int32, packetLossPerc, nFramesPerPacket int, lbrr bool) (int, int32) {
+//
+//nolint:gosec // G115: dB gains and loss percentages are small, in-range values.
+func ltpScaleControl(
+	ltpredCodGain float32, snrDBQ7 int32, packetLossPerc, nFramesPerPacket int, lbrr bool,
+) (int, int32) {
 	roundLoss := packetLossPerc * nFramesPerPacket
 	if lbrr {
 		roundLoss = 2 + int(smulbb(int32(roundLoss), int32(roundLoss)))/100

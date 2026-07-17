@@ -85,6 +85,8 @@ type shapeResult struct {
 // spectral tilt, low-frequency and harmonic shaping (silk_noise_shape_analysis_FLP).
 // shapeBuf holds la_shape samples of history, the frame, then la_shape samples
 // of look-ahead padding.
+//
+//nolint:cyclop // faithful port of the noise-shape analysis stage.
 func (e *Encoder) noiseShapeAnalysis(
 	shapeBuf []float32,
 	signalType frameSignalType,
@@ -159,7 +161,7 @@ func (e *Encoder) noiseShapeAnalysis(
 	flatPart := fsKHz * 3
 	slopePart := (shapeWinLength - flatPart) / 2
 	xPtr := 0
-	for k := range nbSubfr {
+	for k := range nbSubfr { //nolint:varnamelen // k is the subframe index throughout.
 		applySineWindowFLP(xWindowed, shapeBuf[xPtr:], 1, slopePart)
 		copy(xWindowed[slopePart:slopePart+flatPart], shapeBuf[xPtr+slopePart:])
 		applySineWindowFLP(xWindowed[slopePart+flatPart:], shapeBuf[xPtr+slopePart+flatPart:], 2, slopePart)
@@ -175,6 +177,7 @@ func (e *Encoder) noiseShapeAnalysis(
 		bwexpanderFLP(arSub, order, bwExp)
 		limitCoefsFLP(arSub, 3.999, order)
 		for j := range order {
+			//nolint:gosec // G115: bandwidth-expanded, limited shaping coefs fit int16.
 			sr.arQ13[k*maxShapeLPCOrder+j] = int16(f2iQ(arSub[j] * 8192.0))
 		}
 	}

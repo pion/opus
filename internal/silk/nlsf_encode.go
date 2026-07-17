@@ -49,7 +49,7 @@ func nlsfWeightQ9(cb1 []uint, order, k int) int32 {
 // nlsfSecondOperand mirrors the decoder's residual reconstruction term for a
 // stage-2 index.
 func nlsfSecondOperand(ind, qstepQ16 int32) int32 {
-	return (((ind << 10) - int32(sign(int(ind)))*nlsfLevelAdjQ10) * qstepQ16) >> 16
+	return (((ind << 10) - int32(sign(int(ind)))*nlsfLevelAdjQ10) * qstepQ16) >> 16 //nolint:gosec // G115
 }
 
 // encodeNLSF quantizes and range-encodes the input NLSF vector, returning the
@@ -98,11 +98,11 @@ func quantizeNLSF(nlsfQ15 []int16, bandwidth Bandwidth) (int, []int8, []int16) {
 
 		// Greedily quantize the stage-2 residual backwards.
 		prevOut := int32(0)
-		for k := order - 1; k >= 0; k-- {
-			target := (int32(nlsfQ15[k]) - int32(cb1[k])<<7) * weightsQ9[k] >> 14
+		for k := order - 1; k >= 0; k-- { //nolint:varnamelen // k indexes the coefficient, as in the C reference.
+			target := (int32(nlsfQ15[k]) - int32(cb1[k])<<7) * weightsQ9[k] >> 14 //nolint:gosec // G115
 			predQ10 := int32(0)
 			if k+1 < order {
-				predQ10 = (int32(predTable[predSelect[index1][k]][k]) * prevOut) >> 8
+				predQ10 = (int32(predTable[predSelect[index1][k]][k]) * prevOut) >> 8 //nolint:gosec // G115
 			}
 			ind := clamp((invQstepQ6*(target-predQ10))>>16, -nlsfQuantMaxAmplitudeExt, nlsfQuantMaxAmplitudeExt-1)
 			out0 := nlsfSecondOperand(ind, qstepQ16) + predQ10
@@ -111,15 +111,15 @@ func quantizeNLSF(nlsfQ15 []int16, bandwidth Bandwidth) (int, []int8, []int16) {
 			if absInt32(target-out1) < absInt32(target-out0) {
 				chosen, chosenOut = ind+1, out1
 			}
-			indices2[k] = int8(chosen)
-			resReconQ10[k] = int16(chosenOut)
+			indices2[k] = int8(chosen)        //nolint:gosec // G115
+			resReconQ10[k] = int16(chosenOut) //nolint:gosec // G115
 			prevOut = int32(resReconQ10[k])
 		}
 
 		// Reconstruct and stabilize as the decoder will, then score.
 		for k := range order {
-			candidate[k] = int16(clamp(0,
-				int32((int(cb1[k])<<7)+(int(resReconQ10[k])<<14)/int(weightsQ9[k])), 32767))
+			candidate[k] = int16(clamp(0, //nolint:gosec // G115
+				int32((int(cb1[k])<<7)+(int(resReconQ10[k])<<14)/int(weightsQ9[k])), 32767)) //nolint:gosec // G115
 		}
 		stabilizeNLSF(candidate, order, bandwidth)
 
@@ -155,23 +155,34 @@ func (e *Encoder) emitNLSFIndices(index1 int, indices2 []int8, bandwidth Bandwid
 
 	e.rangeEncoder.EncodeSymbolWithICDF(stageOnePDF, uint32(index1)) //nolint:gosec // G115
 	cb2 := cb2Select[index1]
-	for k := range indices2 {
-		v := int(indices2[k])
+	for k := range indices2 { //nolint:varnamelen // k indexes the coefficient.
+		v := int(indices2[k]) //nolint:varnamelen // v is the stage-2 index value.
 		switch {
 		case v <= -nlsfQuantMaxAmplitude:
 			e.rangeEncoder.EncodeSymbolWithICDF(icdfNormalizedLSFStageTwoIndex[cb2[k]], 0)
-			e.rangeEncoder.EncodeSymbolWithICDF(icdfNormalizedLSFStageTwoIndexExtension, uint32(-nlsfQuantMaxAmplitude-v)) //nolint:gosec // G115
+			e.rangeEncoder.EncodeSymbolWithICDF(
+				icdfNormalizedLSFStageTwoIndexExtension,
+				uint32(-nlsfQuantMaxAmplitude-v), //nolint:gosec // G115
+			)
 		case v >= nlsfQuantMaxAmplitude:
 			e.rangeEncoder.EncodeSymbolWithICDF(icdfNormalizedLSFStageTwoIndex[cb2[k]], 2*nlsfQuantMaxAmplitude)
-			e.rangeEncoder.EncodeSymbolWithICDF(icdfNormalizedLSFStageTwoIndexExtension, uint32(v-nlsfQuantMaxAmplitude)) //nolint:gosec // G115
+			e.rangeEncoder.EncodeSymbolWithICDF(
+				icdfNormalizedLSFStageTwoIndexExtension,
+				uint32(v-nlsfQuantMaxAmplitude), //nolint:gosec // G115
+			)
 		default:
-			e.rangeEncoder.EncodeSymbolWithICDF(icdfNormalizedLSFStageTwoIndex[cb2[k]], uint32(v+nlsfQuantMaxAmplitude)) //nolint:gosec // G115
+			e.rangeEncoder.EncodeSymbolWithICDF(
+				icdfNormalizedLSFStageTwoIndex[cb2[k]],
+				uint32(v+nlsfQuantMaxAmplitude), //nolint:gosec // G115
+			)
 		}
 	}
 }
 
 // stabilizeNLSF enforces the minimum spacing between consecutive NLSF
 // coefficients (RFC 6716 Section 4.2.7.5.4).
+//
+//nolint:cyclop // faithful port of silk_NLSF_stabilize.
 func stabilizeNLSF(nlsfQ15 []int16, dLPC int, bandwidth Bandwidth) {
 	NDeltaMinQ15 := codebookMinimumSpacingForNormalizedLSCoefficientsNarrowbandAndMediumband
 	if bandwidth == BandwidthWideband {

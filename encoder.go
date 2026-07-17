@@ -222,9 +222,10 @@ func splitChannels(in []float32, numChannels, frameSamples int) [][]float32 {
 
 // EncodeSILK encodes one 20 ms mono SILK frame into a SILK-only Opus packet.
 // pcm must hold exactly one 20 ms frame of mono s16 samples at the bandwidth's
-// internal rate: 160 (NB/8 kHz), 240 (MB/12 kHz), or 320 (WB/16 kHz). This is a
-// first, unvoiced-path SILK encoder (see internal/silk); the output is a
-// decodable Opus packet, not yet at libopus quality parity.
+// internal rate: 160 (NB/8 kHz), 240 (MB/12 kHz), or 320 (WB/16 kHz). The
+// encoder covers voiced/LTP prediction, noise shaping and NLSF interpolation
+// (see internal/silk); the delayed-decision NSQ, stereo and hybrid mode are
+// not yet implemented.
 func (e *Encoder) EncodeSILK(pcm []int16, bandwidth Bandwidth, out []byte) (int, error) {
 	var config int
 	switch bandwidth {

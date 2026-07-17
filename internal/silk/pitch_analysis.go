@@ -15,30 +15,30 @@ func silkLog2(x float64) float32 {
 }
 
 // stage3Params selects the codebook/range tables for the stage-3 search.
-func stage3Params(nbSubfr, complexity int) (lagRange [][2]int8, lagCB [][]int8, nbCbkSearch, cbkSize int) {
+func stage3Params(nbSubfr, complexity int) (lagRange [][2]int8, lagCB [][]int8, nbCbkSearch int) {
 	if nbSubfr == peMaxNBSubfr {
 		rng := silkLagRangeStage3[complexity]
 		lagRange = rng[:]
 		lagCB = silkCBLagsStage3[:]
 
-		return lagRange, lagCB, int(silkNbCbkSearchsStage3[complexity]), peNBCbksStage3Max
+		return lagRange, lagCB, int(silkNbCbkSearchsStage3[complexity])
 	}
 	rng := silkLagRangeStage3_10ms
 	lagRange = rng[:]
 	lagCB = silkCBLagsStage3_10ms[:]
 
-	return lagRange, lagCB, peNBCbksStage3_10ms, peNBCbksStage3_10ms
+	return lagRange, lagCB, peNBCbksStage3_10ms
 }
 
 // calcCorrST3 fills the stage-3 cross-correlation array
 // (silk_P_Ana_calc_corr_st3).
 func calcCorrST3(crossCorr *stage3Array, frame []float32, startLag, sfLength, nbSubfr, complexity int) {
-	lagRange, lagCB, nbCbkSearch, _ := stage3Params(nbSubfr, complexity)
+	lagRange, lagCB, nbCbkSearch := stage3Params(nbSubfr, complexity)
 
 	var scratch [scratchSizePitch]float32
 	var xcorr [scratchSizePitch]float32
 	targetOffset := sfLength << 2
-	for k := range nbSubfr {
+	for k := range nbSubfr { //nolint:varnamelen // k indexes the subframe.
 		lagLow := int(lagRange[k][0])
 		lagHigh := int(lagRange[k][1])
 		pitchXcorr(frame[targetOffset:], frame[targetOffset-startLag-lagHigh:], xcorr[:], sfLength, lagHigh-lagLow+1)
@@ -62,11 +62,11 @@ func calcCorrST3(crossCorr *stage3Array, frame []float32, startLag, sfLength, nb
 
 // calcEnergyST3 fills the stage-3 energy array (silk_P_Ana_calc_energy_st3).
 func calcEnergyST3(energies *stage3Array, frame []float32, startLag, sfLength, nbSubfr, complexity int) {
-	lagRange, lagCB, nbCbkSearch, _ := stage3Params(nbSubfr, complexity)
+	lagRange, lagCB, nbCbkSearch := stage3Params(nbSubfr, complexity)
 
 	var scratch [scratchSizePitch]float32
 	targetOffset := sfLength << 2
-	for k := range nbSubfr {
+	for k := range nbSubfr { //nolint:varnamelen // k indexes the subframe.
 		lagCounter := 0
 		basisOffset := targetOffset - (startLag + int(lagRange[k][0]))
 		energy := energyFLP(frame[basisOffset:], sfLength) + 1e-3
@@ -96,6 +96,8 @@ func calcEnergyST3(energies *stage3Array, frame []float32, startLag, sfLength, n
 // It returns the lag index, contour index, per-subframe lags in pitchOut, and
 // whether the frame is voiced. ltpCorr is updated in place. Only 8 and 16 kHz
 // are handled; 12 kHz (medium-band) is pending down2_3.
+//
+//nolint:gocognit,gocyclo,cyclop,maintidx,unparam // faithful port; complexity is fixed at 2 today.
 func pitchAnalysisCore(
 	frame []float32,
 	pitchOut []int,
@@ -142,14 +144,16 @@ func pitchAnalysisCore(
 		frame4kHz[i] = float32(sat16(int32(frame4kHz[i]) + int32(frame4kHz[i-1])))
 	}
 
-	var c [peMaxNBSubfr][(peMaxLag >> 1) + 5]float32
+	var c [peMaxNBSubfr][(peMaxLag >> 1) + 5]float32 //nolint:varnamelen // c is the correlation grid.
 	xcorr := make([]float32, maxLag4kHz-minLag4kHz+1)
 
 	// First stage at 4 kHz.
 	targetOffset := sfLength4kHz << 2
 	for k := 0; k < nbSubfr>>1; k++ {
 		basisOffset := targetOffset - minLag4kHz
-		pitchXcorr(frame4kHz[targetOffset:], frame4kHz[targetOffset-maxLag4kHz:], xcorr, sfLength8kHz, maxLag4kHz-minLag4kHz+1)
+		pitchXcorr(
+			frame4kHz[targetOffset:], frame4kHz[targetOffset-maxLag4kHz:], xcorr, sfLength8kHz, maxLag4kHz-minLag4kHz+1,
+		)
 
 		crossCorr := float64(xcorr[maxLag4kHz-minLag4kHz])
 		normalizer := energyFLP(frame4kHz[targetOffset:], sfLength8kHz) +
@@ -187,7 +191,7 @@ func pitchAnalysisCore(
 	threshold := searchThres1 * cmax
 	for i := range lengthDSrch {
 		if c[0][minLag4kHz+i] > threshold {
-			dSrch[i] = (dSrch[i] + minLag4kHz) << 1
+			dSrch[i] = (dSrch[i] + minLag4kHz) << 1 //nolint:gosec // G602: i < lengthDSrch.
 		} else {
 			lengthDSrch = i
 
@@ -204,7 +208,7 @@ func pitchAnalysisCore(
 	}
 	lengthDSrch = 0
 	for i := minLag8kHz; i < maxLag8kHz+1; i++ {
-		if dComp[i+1] > 0 {
+		if dComp[i+1] > 0 { //nolint:gosec // G602: i+1 <= maxLag8kHz+1 < len(dComp).
 			dSrch[lengthDSrch] = i
 			lengthDSrch++
 		}
@@ -214,7 +218,7 @@ func pitchAnalysisCore(
 	}
 	lengthDComp := 0
 	for i := minLag8kHz; i < maxLag8kHz+4; i++ {
-		if dComp[i] > 0 {
+		if dComp[i] > 0 { //nolint:gosec // G602: i < maxLag8kHz+4 < len(dComp).
 			dComp[lengthDComp] = int16(i - 2)
 			lengthDComp++
 		}
@@ -222,8 +226,8 @@ func pitchAnalysisCore(
 
 	// Second stage at 8 kHz.
 	for k := range c {
-		for d := range c[k] {
-			c[k][d] = 0
+		for d := range c[k] { //nolint:gosec // G602: k < len(c).
+			c[k][d] = 0 //nolint:gosec // G602: indices within c.
 		}
 	}
 	src8kHz := frame8kHz
@@ -231,7 +235,7 @@ func pitchAnalysisCore(
 		src8kHz = frame
 	}
 	targetOffset = peLTPMemLengthMS * 8
-	for k := 0; k < nbSubfr; k++ {
+	for k := range nbSubfr {
 		energyTmp := energyFLP(src8kHz[targetOffset:], sfLength8kHz) + 1.0
 		for j := 0; j < lengthDComp; j++ {
 			d := int(dComp[j])
@@ -277,7 +281,7 @@ func pitchAnalysisCore(
 
 	cc := make([]float32, peNBCbksStage2Ext)
 	for k := 0; k < lengthDSrch; k++ {
-		d := dSrch[k]
+		d := dSrch[k] //nolint:varnamelen // d is the candidate lag, as in the C reference.
 		for j := range nbCbkSearch {
 			cc[j] = 0
 			for i := range nbSubfr {
@@ -319,8 +323,8 @@ func pitchAnalysisCore(
 	*ltpCorr = ccmax / float32(nbSubfr)
 
 	if fsKHz > 8 {
-		lag <<= 1 // fsKHz == 16
-		lag = int(clamp(int32(minLag), int32(lag), int32(maxLag)))
+		lag <<= 1                                                  // fsKHz == 16
+		lag = int(clamp(int32(minLag), int32(lag), int32(maxLag))) //nolint:gosec // G115
 		startLag := max(lag-2, minLag)
 		endLag := min(lag+2, maxLag)
 		lagNew := lag
@@ -338,8 +342,8 @@ func pitchAnalysisCore(
 		targetOffset := peLTPMemLengthMS * fsKHz
 		energyTmp := energyFLP(frame[targetOffset:], nbSubfr*sfLength) + 1.0
 		lagCounter := 0
-		for d := startLag; d <= endLag; d++ {
-			for j := range nbCbkSearch3 {
+		for d := startLag; d <= endLag; d++ { //nolint:varnamelen // d is the candidate lag, as in the C reference.
+			for j := range nbCbkSearch3 { //nolint:varnamelen // j indexes the codebook.
 				crossCorr := 0.0
 				energy := energyTmp
 				for k := range nbSubfr {
@@ -362,9 +366,9 @@ func pitchAnalysisCore(
 
 		for k := range nbSubfr {
 			pitchOut[k] = lagNew + int(lagCB3[k][cbimax])
-			pitchOut[k] = int(clamp(int32(minLag), int32(pitchOut[k]), int32(peMaxLagMS*fsKHz)))
+			pitchOut[k] = int(clamp(int32(minLag), int32(pitchOut[k]), int32(peMaxLagMS*fsKHz))) //nolint:gosec // G115
 		}
-		lagIndex = int16(lagNew - minLag)
+		lagIndex = int16(lagNew - minLag) //nolint:gosec // G115
 		contourIndex = int8(cbimax)
 	} else {
 		for k := range nbSubfr {

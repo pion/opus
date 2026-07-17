@@ -26,7 +26,7 @@ func TestA2NLSFRoundTrip(t *testing.T) {
 	for _, tc := range cases {
 		for seed := range 8 {
 			t.Run(fmt.Sprintf("bw%d_seed%d", tc.bandwidth, seed), func(t *testing.T) {
-				nlsf := genNLSF(tc.order, uint32(seed*131+tc.order))
+				nlsf := genNLSF(tc.order, uint32(seed*131+tc.order)) //nolint:gosec // G115: non-negative test seed.
 				stabilizeNLSF(nlsf, tc.order, tc.bandwidth)
 
 				dec := NewDecoder()

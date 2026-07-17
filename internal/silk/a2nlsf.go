@@ -86,6 +86,8 @@ func bwexpander32(ar []int32, d int, chirpQ16 int32) {
 
 // a2nlsf converts monic whitening filter coefficients (Q16, modified in place)
 // to Q15 NLSFs, bandwidth-expanding until the roots converge.
+//
+//nolint:gocognit,gocyclo,cyclop,maintidx,varnamelen // faithful port of silk_A2NLSF.
 func a2nlsf(nlsf []int16, aQ16 []int32, d int) {
 	dd := d >> 1
 	pPoly := make([]int32, dd+1)
@@ -93,7 +95,7 @@ func a2nlsf(nlsf []int16, aQ16 []int32, d int) {
 	a2nlsfInit(aQ16, pPoly, qPoly, dd)
 	polys := [2][]int32{pPoly, qPoly}
 
-	p := pPoly
+	p := pPoly //nolint:varnamelen // p tracks the active P/Q polynomial, as in the C reference.
 	xlo := int32(silkLSFCosTabFIXQ12[0])
 	ylo := a2nlsfEvalPoly(p, xlo, dd)
 
@@ -105,14 +107,14 @@ func a2nlsf(nlsf []int16, aQ16 []int32, d int) {
 		rootIx = 1
 	}
 
-	k := 1
+	k := 1 //nolint:varnamelen // k indexes the cosine grid, as in the C reference.
 	iterations := 0
 	thr := int32(0)
 	for {
 		xhi := int32(silkLSFCosTabFIXQ12[k])
 		yhi := a2nlsfEvalPoly(p, xhi, dd)
 
-		if (ylo <= 0 && yhi >= thr) || (ylo >= 0 && yhi <= -thr) {
+		if (ylo <= 0 && yhi >= thr) || (ylo >= 0 && yhi <= -thr) { //nolint:nestif // faithful port of silk_A2NLSF.
 			if yhi == 0 {
 				thr = 1
 			} else {
@@ -158,7 +160,7 @@ func a2nlsf(nlsf []int16, aQ16 []int32, d int) {
 			if k > lsfCosTabSz {
 				iterations++
 				if iterations > maxIterA2NLSF {
-					nlsf[0] = int16((1 << 15) / int32(d+1))
+					nlsf[0] = int16((1 << 15) / int32(d+1)) //nolint:gosec // G115: quotient fits int16.
 					for k = 1; k < d; k++ {
 						nlsf[k] = nlsf[k-1] + nlsf[0]
 					}

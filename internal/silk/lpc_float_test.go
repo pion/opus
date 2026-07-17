@@ -40,7 +40,7 @@ func TestK2ASingleCoefficient(t *testing.T) {
 // filter from its autocorrelation.
 func TestSchurThenK2A(t *testing.T) {
 	// AR(1) process x[n] = a*x[n-1] + e: autocorr r[k] = r[0]*a^|k|.
-	const a = 0.8
+	const a = 0.8 //nolint:varnamelen // a is the AR(1) coefficient in the test model.
 	order := 4
 	autoCorr := make([]float32, order+1)
 	for k := range autoCorr {
@@ -89,9 +89,9 @@ func TestApplySineWindowFLP(t *testing.T) {
 }
 
 func TestLPCAnalysisFilterFLP(t *testing.T) {
-	s := []float32{1, 2, 3, 4, 5, 6, 7, 8}
+	s := []float32{1, 2, 3, 4, 5, 6, 7, 8} //nolint:varnamelen // s is the input signal.
 	order := 2
-	r := make([]float32, len(s))
+	r := make([]float32, len(s)) //nolint:varnamelen // r is the residual buffer.
 
 	// Zero predictor: residual equals the input past the first order samples.
 	lpcAnalysisFilterFLP(r, []float32{0, 0}, s, len(s), order)

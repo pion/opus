@@ -89,7 +89,9 @@ func log2lin(inLogQ7 int32) int32 {
 // vqWMatEC finds the codebook vector minimizing the weighted quantization error
 // plus rate (silk_VQ_WMat_EC). XX_Q17 is the 5x5 correlation matrix (row-major),
 // xX_Q17 the correlation vector, both Q17.
-func vqWMatEC(xxQ17, xXQ17 []int32, cb [][]int8, cbGain, clQ5 []uint8, subfrLen int, maxGainQ7 int32, l int) (ind int, resNrgQ15, rateDistQ8, gainQ7 int32) {
+func vqWMatEC(
+	xxQ17, xXQ17 []int32, cb [][]int8, cbGain, clQ5 []uint8, subfrLen int, maxGainQ7 int32, l int,
+) (ind int, resNrgQ15, rateDistQ8, gainQ7 int32) {
 	var negXX [ltpOrder]int32
 	for i := range ltpOrder {
 		negXX[i] = -(xXQ17[i] << 7)
@@ -97,7 +99,7 @@ func vqWMatEC(xxQ17, xXQ17 []int32, cb [][]int8, cbGain, clQ5 []uint8, subfrLen 
 
 	rateDistQ8 = math.MaxInt32
 	resNrgQ15 = math.MaxInt32
-	for k := range l {
+	for k := range l { //nolint:varnamelen // k indexes the codebook, as in the C reference.
 		row := cb[k]
 		gainTmp := int32(cbGain[k])
 		sum1 := int32(32801) // 1.001 in Q15
@@ -123,7 +125,7 @@ func vqWMatEC(xxQ17, xXQ17 []int32, cb [][]int8, cbGain, clQ5 []uint8, subfrLen 
 		sum1 = smlawb(sum1, sum2, int32(row[4]))
 
 		if sum1 >= 0 {
-			bitsResQ8 := smulbb(int32(subfrLen), lin2log(sum1+penalty)-(15<<7))
+			bitsResQ8 := smulbb(int32(subfrLen), lin2log(sum1+penalty)-(15<<7)) //nolint:gosec // G115
 			bitsTotQ8 := addLShift32(bitsResQ8, int32(clQ5[k]), 2)
 			if bitsTotQ8 <= rateDistQ8 {
 				rateDistQ8 = bitsTotQ8
@@ -141,7 +143,9 @@ func vqWMatEC(xxQ17, xXQ17 []int32, cb [][]int8, cbGain, clQ5 []uint8, subfrLen 
 // filter coefficients, per-subframe codebook indices, the periodicity index,
 // and the LTP prediction gain in dB. sumLogGainQ7 carries the cumulative gain
 // limit across frames.
-func (e *Encoder) quantLTPGains(xx, xX []float32, subfrLen, nbSubfr int) (ltpCoefQ14 []int16, cbkIndex []int8, periodicityIndex int, predGainDB float32) {
+func (e *Encoder) quantLTPGains(
+	xx, xX []float32, subfrLen, nbSubfr int,
+) (ltpCoefQ14 []int16, cbkIndex []int8, periodicityIndex int, predGainDB float32) {
 	xxQ17 := make([]int32, nbSubfr*ltpMatrixSize)
 	xXQ17 := make([]int32, nbSubfr*ltpOrder)
 	for i := range xxQ17 {
@@ -158,7 +162,7 @@ func (e *Encoder) quantLTPGains(xx, xX []float32, subfrLen, nbSubfr int) (ltpCoe
 	minRateDist := int32(math.MaxInt32)
 	bestSumLogGain := int32(0)
 	var lastResNrg int32
-	for k := range nLTPCodebooks {
+	for k := range nLTPCodebooks { //nolint:varnamelen // k indexes the codebook, as in the C reference.
 		cb := ltpCodebook(k)
 		cbGain := ltpGainTable(k)
 		clQ5 := ltpBitsTable(k)
@@ -171,7 +175,7 @@ func (e *Encoder) quantLTPGains(xx, xX []float32, subfrLen, nbSubfr int) (ltpCoe
 			maxGainQ7 := log2lin((maxSumLogGainDBQ7-sumLogGainTmp)+(7<<7)) - ltpGainSafetyQ7
 			ind, resNrgSubfr, rateDistSubfr, gainQ7 := vqWMatEC(
 				xxQ17[j*ltpMatrixSize:], xXQ17[j*ltpOrder:], cb, cbGain, clQ5, subfrLen, maxGainQ7, size)
-			tempIdx[j] = int8(ind)
+			tempIdx[j] = int8(ind) //nolint:gosec // G115
 			resNrg = addPosSat32(resNrg, resNrgSubfr)
 			rateDist = addPosSat32(rateDist, rateDistSubfr)
 			sumLogGainTmp = max(0, sumLogGainTmp+lin2log(ltpGainSafetyQ7+gainQ7)-(7<<7))

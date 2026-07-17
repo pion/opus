@@ -46,7 +46,7 @@ func TestEncodeNLSFRoundTrip(t *testing.T) {
 			for seed := range 12 {
 				name := fmt.Sprintf("bw%d_voiced%t_seed%d", tc.bandwidth, voiced, seed)
 				t.Run(name, func(t *testing.T) {
-					input := genNLSF(tc.order, uint32(seed*97+tc.order+boolSeed(voiced)))
+					input := genNLSF(tc.order, uint32(seed*97+tc.order+boolSeed(voiced))) //nolint:gosec // G115
 
 					enc := NewEncoder()
 					enc.rangeEncoder.Init()
