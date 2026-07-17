@@ -3,13 +3,11 @@
 
 package silk
 
-import "math"
-
 // This file assembles a full SILK frame: analysis, quantization, the NSQ, and
-// range coding of every field in decode order. This first version encodes
-// mono, 20 ms, SILK-only frames on the unvoiced path (no long-term prediction)
-// with simplified noise shaping. Voiced/LTP coding, the delayed-decision NSQ,
-// stereo, NLSF interpolation, and rate control are follow-up refinements.
+// range coding of every field in decode order. It encodes mono, 20 ms,
+// SILK-only frames with voiced/LTP prediction, faithful noise shaping and NLSF
+// interpolation. The delayed-decision NSQ, stereo, and the rate-control loop
+// are follow-up refinements.
 
 const (
 	silkGainFloor    = 1.0
@@ -59,7 +57,10 @@ func nlsfToLPCQ12(nlsfQ15 []int16, bandwidth Bandwidth) []int16 {
 // Encode encodes one 20 ms mono SILK frame from internal-rate PCM and returns
 // the range-coded SILK payload (the SILK header plus frame, without the Opus
 // TOC byte).
-func (e *Encoder) Encode(input []int16, bandwidth Bandwidth) []byte {
+func (e *Encoder) Encode(input []int16, bandwidth Bandwidth, targetBitrate int) []byte {
+	if targetBitrate > 0 {
+		e.targetBitrate = targetBitrate
+	}
 	e.rangeEncoder.Init()
 	e.encodeSILKFrame(input, bandwidth)
 
@@ -79,7 +80,7 @@ func (e *Encoder) encodeSILKFrame(input []int16, bandwidth Bandwidth) {
 	ltpMemLength := 20 * fsKHz
 
 	// Voice activity.
-	saQ8, tiltQ15, _ := e.vad.getSpeechActivityQ8(input, frameLength, fsKHz)
+	saQ8, tiltQ15, quality := e.vad.getSpeechActivityQ8(input, frameLength, fsKHz)
 	active := saQ8 > silkVADThreshold
 
 	// Pitch analysis on the whitening residual (with LTP-memory history).
@@ -91,7 +92,7 @@ func (e *Encoder) encodeSILKFrame(input []int16, bandwidth Bandwidth) {
 	for i := range frameLength {
 		analysis[ltpMemLength+i] = float32(input[i])
 	}
-	voiced, pitchL, lagIndex, contourIndex, res := e.findPitchLags(
+	voiced, pitchL, lagIndex, contourIndex, res, predGain := e.findPitchLags(
 		analysis[:ltpMemLength+frameLength], fsKHz, subfrCount, saQ8, tiltQ15)
 	// Keep a few zero samples of headroom after the residual for find_LTP.
 	res = append(res, make([]float32, ltpOrder)...)
@@ -104,57 +105,89 @@ func (e *Encoder) encodeSILKFrame(input []int16, bandwidth Bandwidth) {
 	case active:
 		signalType = frameSignalTypeUnvoiced
 	}
-	quantOffsetType := frameQuantizationOffsetTypeLow
 
-	// Short-term prediction: Burg -> NLSF -> quantize -> quantized LPC (Q12).
-	xf := make([]float32, frameLength)
-	for i := range xf {
-		xf[i] = float32(input[i])
+	// Noise-shaping analysis: AR shaping filters, initial gains, spectral tilt,
+	// low-frequency and harmonic shaping.
+	snrDBQ7 := controlSNR(fsKHz, subfrCount, e.targetBitrate)
+	laShape := laShapeMSLowComplex * fsKHz
+	shapeBuf := make([]float32, laShape+frameLength+laShape)
+	copy(shapeBuf, e.xBuf[ltpMemLength-laShape:ltpMemLength])
+	for i := range frameLength {
+		shapeBuf[laShape+i] = float32(input[i])
 	}
-	aFloat := make([]float32, order)
-	burgModifiedFLP(aFloat, xf, burgMinInvGain, frameLength, 1, order)
-	nlsf := make([]int16, order)
-	a2nlsfFLP(nlsf, aFloat, order)
-	stabilizeNLSF(nlsf, order, bandwidth)
-	index1, indices2, quantNLSF := quantizeNLSF(nlsf, bandwidth)
-	predCoefQ12 := nlsfToLPCQ12(quantNLSF, bandwidth)
-	predCoef2 := make([]int16, 2*maxLPCOrder)
-	copy(predCoef2, predCoefQ12)
-	copy(predCoef2[maxLPCOrder:], predCoefQ12)
+	sr := e.noiseShapeAnalysis(shapeBuf, signalType, pitchL, predGain, snrDBQ7, saQ8, quality, fsKHz, subfrCount, subfrLength)
 
-	// Long-term prediction (voiced only).
+	// Prediction coefficients (find_pred_coefs). Build LPC_in_pre: the LTP
+	// residual for voiced, or the gain-normalized input for unvoiced. Both drive
+	// the short-term LPC and the residual energy.
+	invGains := make([]float32, subfrCount)
+	for k := range subfrCount {
+		invGains[k] = 1.0 / sr.gains[k]
+	}
 	ltpCoefQ14 := make([]int16, ltpOrder*subfrCount)
 	nsqPitchL := make([]int, subfrCount)
+	lpcInPre := make([]float32, subfrCount*(order+subfrLength))
+	xBase := ltpMemLength - order
 	var periodicityIndex int
 	var filterIndices []int8
 	var predGainDB float32
+	ltpScaleIndex := 0
+	ltpScaleQ14 := int32(silkLTPScaleQ14)
 	if voiced {
 		xxLTP := make([]float32, subfrCount*ltpMatrixSize)
 		xXLTP := make([]float32, subfrCount*ltpOrder)
 		findLTPFLP(xxLTP, xXLTP, res, ltpMemLength, pitchL, subfrLength, subfrCount)
 		ltpCoefQ14, filterIndices, periodicityIndex, predGainDB = e.quantLTPGains(xxLTP, xXLTP, subfrLength, subfrCount)
 		copy(nsqPitchL, pitchL)
+		ltpScaleIndex, ltpScaleQ14 = ltpScaleControl(predGainDB, snrDBQ7, e.packetLossPerc, 1, false)
+
+		ltpCoefFloat := make([]float32, ltpOrder*subfrCount)
+		for i := range ltpCoefFloat {
+			ltpCoefFloat[i] = float32(ltpCoefQ14[i]) * (1.0 / 16384.0)
+		}
+		ltpAnalysisFilterFLP(lpcInPre, analysis, xBase, ltpCoefFloat, pitchL, invGains, subfrLength, subfrCount, order)
+	} else {
+		e.sumLogGainQ7 = 0
+		for k := range subfrCount {
+			dst := k * (order + subfrLength)
+			src := xBase + k*subfrLength
+			for i := range order + subfrLength {
+				lpcInPre[dst+i] = analysis[src+i] * invGains[k]
+			}
+		}
 	}
 
-	// Gains from the LPC residual energy, reduced when the LTP gain is high.
-	resFixed := make([]int16, frameLength)
-	lpcAnalysisFilterFixed(resFixed, input, predCoefQ12, frameLength, order)
-	gainScale := float64(1)
-	if voiced {
-		gainScale = 1.0 - 0.5*float64(sigmoid(0.25*(predGainDB-12.0)))
+	// Short-term prediction: Burg over LPC_in_pre, search the NLSF interpolation
+	// factor, then quantize and build both frame-half LPC sets.
+	minInvGain := predCoefsMinInvGain(e.firstFrameAfterReset, predGainDB, sr.codingQuality)
+	nlsfInterpQ2, nlsf := e.findLPCNLSF(lpcInPre, minInvGain, bandwidth, order, subfrCount, subfrLength)
+	stabilizeNLSF(nlsf, order, bandwidth)
+	index1, indices2, quantNLSF := quantizeNLSF(nlsf, bandwidth)
+	predCoefQ12 := nlsfToLPCQ12(quantNLSF, bandwidth) // second frame half
+	predCoefQ12Half0 := predCoefQ12
+	if nlsfInterpQ2 < 4 {
+		nlsf0 := make([]int16, order)
+		interpolateNLSF(nlsf0, e.prevNLSFq, quantNLSF, nlsfInterpQ2, order)
+		predCoefQ12Half0 = nlsfToLPCQ12(nlsf0, bandwidth) // interpolated first half
 	}
-	gainsTargetQ16 := make([]int32, subfrCount)
-	for k := range subfrCount {
-		var nrg float64
-		for i := range subfrLength {
-			v := float64(resFixed[k*subfrLength+i])
-			nrg += v * v
-		}
-		gain := math.Sqrt(nrg) * gainScale
-		gain = math.Max(silkGainFloor, math.Min(gain, silkGainCeil))
-		gainsTargetQ16[k] = int32(gain * 65536)
+	predCoef2 := make([]int16, 2*maxLPCOrder)
+	copy(predCoef2, predCoefQ12Half0)
+	copy(predCoef2[maxLPCOrder:], predCoefQ12)
+	copy(e.prevNLSFq, quantNLSF)
+
+	// Residual energy per subframe from the quantized LPC (gain soft-limit).
+	predCoefFloat0 := make([]float32, order)
+	predCoefFloat1 := make([]float32, order)
+	for j := range order {
+		predCoefFloat0[j] = float32(predCoefQ12Half0[j]) * (1.0 / 4096.0)
+		predCoefFloat1[j] = float32(predCoefQ12[j]) * (1.0 / 4096.0)
 	}
-	gainIndices, _, gainsQ16Int := e.quantizeGains(gainsTargetQ16, subfrCount, false)
+	resNrg := make([]float32, subfrCount)
+	residualEnergyFLP(resNrg, lpcInPre, predCoefFloat0, predCoefFloat1, sr.gains, subfrLength, subfrCount, order)
+
+	// Process gains: reduce for high LTP gain, soft-limit, quantize; Lambda + offset.
+	gainsQ16Int, gainIndices, lambdaQ10, quantOffsetType := e.processGains(
+		sr, resNrg, signalType, predGainDB, snrDBQ7, saQ8, tiltQ15, subfrLength, subfrCount, false)
 
 	// Noise-shaping quantization.
 	pulses := make([]int8, frameLength)
@@ -162,24 +195,24 @@ func (e *Encoder) encodeSILKFrame(input []int16, bandwidth Bandwidth) {
 	e.nsq.quantize(input, pulses, &nsqParams{
 		predCoefQ12:      predCoef2,
 		ltpCoefQ14:       ltpCoefQ14,
-		arQ13:            make([]int16, subfrCount*maxShapeLPCOrder),
-		harmShapeGainQ14: make([]int32, subfrCount),
-		tiltQ14:          make([]int32, subfrCount),
-		lfShpQ14:         make([]int32, subfrCount),
+		arQ13:            sr.arQ13,
+		harmShapeGainQ14: sr.harmShapeQ14,
+		tiltQ14:          sr.tiltQ14,
+		lfShpQ14:         sr.lfShpQ14,
 		gainsQ16:         gainsQ16Int,
 		pitchL:           nsqPitchL,
-		lambdaQ10:        silkLambdaQ10,
-		ltpScaleQ14:      silkLTPScaleQ14,
+		lambdaQ10:        lambdaQ10,
+		ltpScaleQ14:      ltpScaleQ14,
 		seed:             int32(seed), //nolint:gosec // G115
 		signalType:       signalType,
 		quantOffsetType:  quantOffsetType,
-		nlsfInterpCoefQ2: 4,
+		nlsfInterpCoefQ2: nlsfInterpQ2,
 		ltpMemLength:     ltpMemLength,
 		frameLength:      frameLength,
 		subfrLength:      subfrLength,
 		nbSubfr:          subfrCount,
 		predictLPCOrder:  order,
-		shapingLPCOrder:  order,
+		shapingLPCOrder:  shapeLPCOrderLowComplex,
 	})
 	e.frameCounter++
 
@@ -194,11 +227,11 @@ func (e *Encoder) encodeSILKFrame(input []int16, bandwidth Bandwidth) {
 	e.emitFrameType(signalType, quantOffsetType, active)
 	e.emitGainIndices(gainIndices, signalType, false)
 	e.emitNLSFIndices(index1, indices2, bandwidth, voiced)
-	e.rangeEncoder.EncodeSymbolWithICDF(icdfNormalizedLSFInterpolationIndex, 4) // no interpolation
+	e.rangeEncoder.EncodeSymbolWithICDF(icdfNormalizedLSFInterpolationIndex, uint32(nlsfInterpQ2)) //nolint:gosec // G115
 	if voiced {
 		e.encodePitchLags(int(lagIndex)+peMinLagMS*fsKHz, uint32(contourIndex), bandwidth, nanoseconds20Ms, true) //nolint:gosec
 		e.encodeLTPFilter(uint32(periodicityIndex), toUint32(filterIndices))                                      //nolint:gosec
-		e.encodeLTPScaling(0)                                                                                     // LTP_scale index 0 (15565)
+		e.encodeLTPScaling(uint32(ltpScaleIndex))                                                                 //nolint:gosec // G115
 	}
 	e.rangeEncoder.EncodeSymbolWithICDF(icdfLinearCongruentialGeneratorSeed, seed)
 	e.encodePulses(signalType, quantOffsetType, pulses, frameLength)
@@ -206,6 +239,7 @@ func (e *Encoder) encodeSILKFrame(input []int16, bandwidth Bandwidth) {
 	// Carry state to the next frame.
 	copy(e.xBuf, analysis[frameLength:frameLength+ltpMemLength])
 	e.isPreviousFrameVoiced = voiced
+	e.firstFrameAfterReset = false
 }
 
 // toUint32 converts codebook indices to the type the emitters expect.

@@ -243,7 +243,7 @@ func (e *Encoder) EncodeSILK(pcm []int16, bandwidth Bandwidth, out []byte) (int,
 		return 0, fmt.Errorf("%w: got %d samples, want %d", errInvalidFrameSize, len(pcm), want)
 	}
 
-	payload := e.silkEncoder.Encode(pcm, silk.Bandwidth(bandwidth))
+	payload := e.silkEncoder.Encode(pcm, silk.Bandwidth(bandwidth), e.bitrate)
 	if len(out) < len(payload)+1 {
 		return 0, errOutBufferTooSmall
 	}

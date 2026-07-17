@@ -26,13 +26,25 @@ type Encoder struct {
 	previousLag           int
 	isPreviousFrameVoiced bool
 
+	// firstFrameAfterReset caps the predictor more aggressively on the first
+	// frame after a reset (find_pred_coefs).
+	firstFrameAfterReset bool
+
+	// prevNLSFq holds the previous frame's quantized NLSFs (Q15) for LSF
+	// interpolation.
+	prevNLSFq []int16
+
 	// Analysis state for the frame encoder.
-	vad          vadState
-	nsq          *nsqState
-	frameCounter int
-	sumLogGainQ7 int32     // cumulative LTP gain limit (quant_LTP_gains)
-	xBuf         []float32 // previous frame, as LTP-memory history for pitch analysis
-	ltpCorr      float32   // normalized correlation carried across frames
+	vad               vadState
+	nsq               *nsqState
+	frameCounter      int
+	targetBitrate     int       // target bitrate in bps (drives control_SNR)
+	packetLossPerc    int       // expected packet loss %, drives LTP state scaling
+	sumLogGainQ7      int32     // cumulative LTP gain limit (quant_LTP_gains)
+	xBuf              []float32 // previous frame, as LTP-memory history for pitch analysis
+	ltpCorr           float32   // normalized correlation carried across frames
+	tiltSmth          float32   // smoothed spectral tilt (shape state)
+	harmShapeGainSmth float32   // smoothed harmonic shaping gain (shape state)
 }
 
 // NewEncoder creates a SILK Encoder with its prediction state reset.
@@ -50,5 +62,10 @@ func (e *Encoder) resetPredictionState() {
 	e.previousLogGain = 10
 	e.previousLag = 100
 	e.isPreviousFrameVoiced = false
+	e.firstFrameAfterReset = true
 	e.sumLogGainQ7 = 0
+	e.prevNLSFq = make([]int16, maxLPCOrder)
+	if e.targetBitrate == 0 {
+		e.targetBitrate = 24000
+	}
 }
