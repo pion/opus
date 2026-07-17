@@ -104,7 +104,7 @@ func quantizeNLSF(nlsfQ15 []int16, bandwidth Bandwidth) (int, []int8, []int16) {
 			if k+1 < order {
 				predQ10 = (int32(predTable[predSelect[index1][k]][k]) * prevOut) >> 8 //nolint:gosec // G115
 			}
-			ind := clamp((invQstepQ6*(target-predQ10))>>16, -nlsfQuantMaxAmplitudeExt, nlsfQuantMaxAmplitudeExt-1)
+			ind := clamp(-nlsfQuantMaxAmplitudeExt, (invQstepQ6*(target-predQ10))>>16, nlsfQuantMaxAmplitudeExt-1)
 			out0 := nlsfSecondOperand(ind, qstepQ16) + predQ10
 			out1 := nlsfSecondOperand(ind+1, qstepQ16) + predQ10
 			chosen, chosenOut := ind, out0
