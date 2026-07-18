@@ -9,7 +9,7 @@ import "math"
 // because it is spelled out inline wherever gains are dequantized.
 
 // ror32 rotates a 32-bit value right by rot bits; a negative rot rotates left.
-func ror32(a32 int32, rot int) int32 { //nolint:unused // Used by clzFrac.
+func ror32(a32 int32, rot int) int32 {
 	x := uint32(a32) //nolint:gosec // G115: bit-level rotate, sign is irrelevant.
 	switch {
 	case rot == 0:
@@ -27,7 +27,7 @@ func ror32(a32 int32, rot int) int32 { //nolint:unused // Used by clzFrac.
 
 // clzFrac returns the leading-zero count of in and the 7 bits after the
 // leading one.
-func clzFrac(in int32) (lz, fracQ7 int32) { //nolint:unused // Used by lin2log, sqrtApprox.
+func clzFrac(in int32) (lz, fracQ7 int32) {
 	lz = int32(clz32(in)) //nolint:gosec // G115: leading-zero count is in [0,32].
 	fracQ7 = ror32(in, 24-int(lz)) & 0x7f
 
@@ -35,13 +35,13 @@ func clzFrac(in int32) (lz, fracQ7 int32) { //nolint:unused // Used by lin2log, 
 }
 
 // smlawb returns a + smulwb(b, c).
-func smlawb(a, b, c int32) int32 { //nolint:unused // Used by 8+ files in subsequent sub-PRs.
+func smlawb(a, b, c int32) int32 {
 	return a + smulwb(b, c)
 }
 
 // lin2log approximates 128*log2(inLin) with a piecewise-parabolic fit; it is
 // the near-inverse of the inline log2lin used for gains.
-func lin2log(inLin int32) int32 { //nolint:unused // Used by gains, LTP, VAD in subsequent sub-PRs.
+func lin2log(inLin int32) int32 {
 	lz, fracQ7 := clzFrac(inLin)
 
 	// silk_ADD_LSHIFT32(silk_SMLAWB(frac_Q7, silk_MUL(frac_Q7, 128-frac_Q7), 179), 31-lz, 7)
@@ -49,6 +49,6 @@ func lin2log(inLin int32) int32 { //nolint:unused // Used by gains, LTP, VAD in 
 }
 
 // silkLog2 approximates log2 (silk_log2).
-func silkLog2(x float64) float32 { //nolint:unused // Used by pitch analysis, noise shaping in subsequent sub-PRs.
+func silkLog2(x float64) float32 {
 	return float32(3.32192809488736 * math.Log10(x))
 }
