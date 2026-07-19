@@ -21,6 +21,29 @@ func TestAutocorrelationFLP(t *testing.T) {
 	assert.InDelta(t, 1*3+2*4, results[2], 1e-4)     // lag 2
 }
 
+// TestAutocorrelationFLPClampsCorrelationCount exercises the
+// correlationCount > inputDataSize clamp: without it, the lag-i inner
+// product would slice inputData past its end and panic once i exceeds
+// inputDataSize.
+func TestAutocorrelationFLPClampsCorrelationCount(t *testing.T) {
+	in := []float32{1, 2, 3, 4}
+	results := make([]float32, 10)
+
+	require.NotPanics(t, func() {
+		autocorrelationFLP(results, in, len(in), 10)
+	})
+
+	// Clamped to len(in): only the first 4 lags get computed, same values
+	// as requesting exactly that many up front.
+	assert.InDelta(t, 1+4+9+16, results[0], 1e-4)
+	assert.InDelta(t, 1*2+2*3+3*4, results[1], 1e-4)
+	assert.InDelta(t, 1*3+2*4, results[2], 1e-4)
+	assert.InDelta(t, 1*4, results[3], 1e-4)
+	for i := 4; i < len(results); i++ {
+		assert.Equal(t, float32(0), results[i], "lags beyond inputDataSize should be left untouched")
+	}
+}
+
 func TestBwexpanderFLP(t *testing.T) {
 	ar := []float32{1, 1, 1, 1}
 	bwexpanderFLP(ar, len(ar), 0.5)

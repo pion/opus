@@ -8,7 +8,10 @@ import "math"
 // Floating-point LPC and signal-analysis primitives shared by the pitch and
 // LPC analysis stages (silk/float/*_FLP.c).
 
-const maxLPCOrder = 16 // SILK_MAX_ORDER_LPC
+// maxLPCOrder matches libopus's SILK_MAX_ORDER_LPC (SigProc_FIX.h), which
+// covers hybrid/SWB orders this port doesn't implement yet — this encoder
+// only ever requests order 10 (NB/MB) or 16 (WB).
+const maxLPCOrder = 24
 
 // innerProductFLP accumulates a dot product in double precision.
 func innerProductFLP(a, b []float32, n int) float64 {
