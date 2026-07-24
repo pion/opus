@@ -11,6 +11,45 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestQuantLTPGains feeds quantLTPGains the correlation matrices findLTPFLP
+// actually produces (the same wiring find_pred_coefs_FLP.c uses: find_LTP's
+// output goes straight into quant_LTP_gains), across multiple calls to also
+// exercise the cumulative sumLogGainQ7 state threading across frames.
+func TestQuantLTPGains(t *testing.T) {
+	const (
+		nbSubfr     = 4
+		subfrLength = 80
+		maxLag      = 120
+	)
+	total := maxLag + ltpOrder + nbSubfr*subfrLength + ltpOrder
+	r := make([]float32, total)
+	for i := range r {
+		r[i] = float32(500 * math.Sin(2*math.Pi*float64(i)/41))
+	}
+	rOffset := maxLag + ltpOrder
+	lag := []int{80, 82, 78, 81}
+
+	xx := make([]float32, nbSubfr*ltpMatrixSize)
+	xX := make([]float32, nbSubfr*ltpOrder)
+	findLTPFLP(xx, xX, r, rOffset, lag, subfrLength, nbSubfr)
+
+	enc := NewEncoder()
+	for i := range 3 { // repeat: also checks sumLogGainQ7 keeps accumulating sanely.
+		ltpCoefQ14, cbkIndex, periodicityIndex, predGainDB := enc.quantLTPGains(xx, xX, subfrLength, nbSubfr)
+
+		require.Len(t, ltpCoefQ14, nbSubfr*ltpOrder)
+		require.Len(t, cbkIndex, nbSubfr)
+		require.GreaterOrEqualf(t, periodicityIndex, 0, "call %d", i)
+		require.Lessf(t, periodicityIndex, nLTPCodebooks, "call %d", i)
+		for k, idx := range cbkIndex {
+			assert.GreaterOrEqualf(t, idx, int8(0), "call %d cbkIndex[%d]", i, k)
+		}
+		assert.Falsef(t, math.IsNaN(float64(predGainDB)) || math.IsInf(float64(predGainDB), 0), "call %d predGainDB", i)
+		assert.GreaterOrEqualf(t, enc.sumLogGainQ7, int32(0), "call %d sumLogGainQ7", i)
+		assert.LessOrEqualf(t, enc.sumLogGainQ7, int32(maxSumLogGainDBQ7), "call %d sumLogGainQ7", i)
+	}
+}
+
 // TestLog2Lin checks log2lin against its float inverse, math.Log2, over a
 // representative Q7 range (silk_log2lin approximates 2^(x/128)).
 func TestLog2Lin(t *testing.T) {

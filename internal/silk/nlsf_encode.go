@@ -9,9 +9,25 @@ import (
 )
 
 const (
+	nlsfQuantMaxAmplitude    = 4
 	nlsfQuantMaxAmplitudeExt = 10
 	nlsfLevelAdjQ10          = 102 // round(NLSF_QUANT_LEVEL_ADJ * 1024)
 )
+
+// nlsfToLPCQ12 converts NLSFs to Q12 LPC coefficients, limited and gain
+// checked as the decoder would (silk_NLSF2A + the limiting steps applied when
+// decoding a frame). Used by findLPCNLSF's interpolation search.
+func nlsfToLPCQ12(nlsfQ15 []int16, bandwidth Bandwidth) []int16 {
+	d := NewDecoder()
+	a32Q17 := d.convertNormalizedLSFsToLPCCoefficients(nlsfQ15, bandwidth)
+	d.limitLPCCoefficientsRange(a32Q17)
+	d.limitLPCFilterPredictionGainInto(a32Q17, 0)
+
+	out := make([]int16, len(d.aQ12Int[0]))
+	copy(out, d.aQ12Int[0])
+
+	return out
+}
 
 // nlsfStepSizes returns the Q16 quantization step and its Q6 inverse.
 func nlsfStepSizes(bandwidth Bandwidth) (qstepQ16, invQstepQ6 int32) {
@@ -49,6 +65,18 @@ func nlsfWeightQ9(cb1 []uint, order, k int) int32 {
 // stage-2 index.
 func nlsfSecondOperand(ind, qstepQ16 int32) int32 {
 	return (((ind << 10) - int32(sign(int(ind)))*nlsfLevelAdjQ10) * qstepQ16) >> 16 //nolint:gosec // G115
+}
+
+// encodeNLSF quantizes and range-encodes the input NLSF vector, returning the
+// quantized NLSFs the decoder will reconstruct. It searches every stage-1
+// codebook vector and greedily quantizes the stage-2 residual for each,
+// keeping the lowest weighted distortion.
+func (e *Encoder) encodeNLSF(nlsfQ15 []int16, bandwidth Bandwidth, voiced bool) []int16 {
+	stabilizeNLSF(nlsfQ15, len(nlsfQ15), bandwidth)
+	index1, indices2, quantized := quantizeNLSF(nlsfQ15, bandwidth)
+	e.emitNLSFIndices(index1, indices2, bandwidth, voiced)
+
+	return quantized
 }
 
 // quantizeNLSF searches the two-stage NLSF codebooks (silk_NLSF_encode) and
@@ -124,6 +152,46 @@ func quantizeNLSF(nlsfQ15 []int16, bandwidth Bandwidth) (int, []int8, []int16) {
 	}
 
 	return bestIndex1, bestIndices2, bestNLSF
+}
+
+// emitNLSFIndices range-encodes the NLSF codebook indices.
+func (e *Encoder) emitNLSFIndices(index1 int, indices2 []int8, bandwidth Bandwidth, voiced bool) {
+	cb2Select := codebookNormalizedLSFStageTwoIndexNarrowbandOrMediumband
+	stageOnePDF := icdfNormalizedLSFStageOneIndexNarrowbandOrMediumbandUnvoiced
+	if bandwidth == BandwidthWideband {
+		cb2Select = codebookNormalizedLSFStageTwoIndexWideband
+		stageOnePDF = icdfNormalizedLSFStageOneIndexWidebandUnvoiced
+		if voiced {
+			stageOnePDF = icdfNormalizedLSFStageOneIndexWidebandVoiced
+		}
+	} else if voiced {
+		stageOnePDF = icdfNormalizedLSFStageOneIndexNarrowbandOrMediumbandVoiced
+	}
+
+	e.rangeEncoder.EncodeSymbolWithICDF(stageOnePDF, uint32(index1)) //nolint:gosec // G115
+	cb2 := cb2Select[index1]
+	for k := range indices2 { //nolint:varnamelen // k indexes the coefficient.
+		v := int(indices2[k]) //nolint:varnamelen // v is the stage-2 index value.
+		switch {
+		case v <= -nlsfQuantMaxAmplitude:
+			e.rangeEncoder.EncodeSymbolWithICDF(icdfNormalizedLSFStageTwoIndex[cb2[k]], 0)
+			e.rangeEncoder.EncodeSymbolWithICDF(
+				icdfNormalizedLSFStageTwoIndexExtension,
+				uint32(-nlsfQuantMaxAmplitude-v), //nolint:gosec // G115
+			)
+		case v >= nlsfQuantMaxAmplitude:
+			e.rangeEncoder.EncodeSymbolWithICDF(icdfNormalizedLSFStageTwoIndex[cb2[k]], 2*nlsfQuantMaxAmplitude)
+			e.rangeEncoder.EncodeSymbolWithICDF(
+				icdfNormalizedLSFStageTwoIndexExtension,
+				uint32(v-nlsfQuantMaxAmplitude), //nolint:gosec // G115
+			)
+		default:
+			e.rangeEncoder.EncodeSymbolWithICDF(
+				icdfNormalizedLSFStageTwoIndex[cb2[k]],
+				uint32(v+nlsfQuantMaxAmplitude), //nolint:gosec // G115
+			)
+		}
+	}
 }
 
 // stabilizeNLSF enforces the minimum spacing between consecutive NLSF
