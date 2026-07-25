@@ -10,7 +10,11 @@ import "math"
 // for the periodicity index and per-subframe filter indices that minimize a
 // weighted quantization error plus rate cost.
 
-const nLTPCodebooks = 3
+const (
+	maxSumLogGainDBQ7 = 5333 // round(MAX_SUM_LOG_GAIN_DB/6 * 128), MAX_SUM_LOG_GAIN_DB=250
+	ltpGainSafetyQ7   = 51   // round(0.4 * 128)
+	nLTPCodebooks     = 3
+)
 
 //nolint:gochecknoglobals // LTP codebook effective gains and bit costs (tables_LTP.c).
 var (
@@ -136,8 +140,71 @@ func vqWMatEC(
 	return ind, resNrgQ15, rateDistQ8, gainQ7
 }
 
-// quantLTPGains (silk_quant_LTP_gains) is deferred to the orchestration piece:
-// it's a method on *Encoder (threads sumLogGainQ7 across frames), and that
-// type doesn't exist in this package yet — same reasoning as
-// findPitchLags/encodeNLSF. What's here is the per-subframe codebook search
-// (vqWMatEC) it calls in a loop over the 3 LTP codebooks.
+// quantLTPGains quantizes the LTP taps for all subframes, returning the Q14
+// filter coefficients, per-subframe codebook indices, the periodicity index,
+// and the LTP prediction gain in dB. sumLogGainQ7 carries the cumulative gain
+// limit across frames.
+func (e *Encoder) quantLTPGains(
+	xx, xX []float32, subfrLen, nbSubfr int,
+) (ltpCoefQ14 []int16, cbkIndex []int8, periodicityIndex int, predGainDB float32) {
+	xxQ17 := make([]int32, nbSubfr*ltpMatrixSize)
+	xXQ17 := make([]int32, nbSubfr*ltpOrder)
+	for i := range xxQ17 {
+		xxQ17[i] = int32(math.RoundToEven(float64(xx[i]) * 131072.0))
+	}
+	for i := range xXQ17 {
+		xXQ17[i] = int32(math.RoundToEven(float64(xX[i]) * 131072.0))
+	}
+
+	ltpCoefQ14 = make([]int16, nbSubfr*ltpOrder)
+	cbkIndex = make([]int8, nbSubfr)
+	tempIdx := make([]int8, nbSubfr)
+
+	minRateDist := int32(math.MaxInt32)
+	bestSumLogGain := int32(0)
+	var lastResNrg int32
+	for k := range nLTPCodebooks { //nolint:varnamelen // k indexes the codebook, as in the C reference.
+		cb := ltpCodebook(k)
+		cbGain := ltpGainTable(k)
+		clQ5 := ltpBitsTable(k)
+		size := ltpVQSizes[k]
+
+		resNrg := int32(0)
+		rateDist := int32(0)
+		sumLogGainTmp := e.sumLogGainQ7
+		for j := range nbSubfr {
+			maxGainQ7 := log2lin((maxSumLogGainDBQ7-sumLogGainTmp)+(7<<7)) - ltpGainSafetyQ7
+			ind, resNrgSubfr, rateDistSubfr, gainQ7 := vqWMatEC(
+				xxQ17[j*ltpMatrixSize:], xXQ17[j*ltpOrder:], cb, cbGain, clQ5, subfrLen, maxGainQ7, size)
+			tempIdx[j] = int8(ind) //nolint:gosec // G115
+			resNrg = addPosSat32(resNrg, resNrgSubfr)
+			rateDist = addPosSat32(rateDist, rateDistSubfr)
+			sumLogGainTmp = max(0, sumLogGainTmp+lin2log(ltpGainSafetyQ7+gainQ7)-(7<<7))
+		}
+		if rateDist <= minRateDist {
+			minRateDist = rateDist
+			periodicityIndex = k
+			copy(cbkIndex, tempIdx)
+			bestSumLogGain = sumLogGainTmp
+		}
+		lastResNrg = resNrg
+	}
+
+	cb := ltpCodebook(periodicityIndex)
+	for j := range nbSubfr {
+		for k := range ltpOrder {
+			//nolint:gosec // G115: int8 codebook value, well within int16 range after <<7.
+			ltpCoefQ14[j*ltpOrder+k] = int16(int32(cb[cbkIndex[j]][k]) << 7)
+		}
+	}
+
+	if nbSubfr == 2 {
+		lastResNrg >>= 1
+	} else {
+		lastResNrg >>= 2
+	}
+	e.sumLogGainQ7 = bestSumLogGain
+	predGainDB = float32(smulbb(-3, lin2log(lastResNrg)-(15<<7))) / 128.0
+
+	return ltpCoefQ14, cbkIndex, periodicityIndex, predGainDB
+}

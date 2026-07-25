@@ -15,10 +15,22 @@ const (
 	gainMaxLogQ7    = 3967    // 31 in Q7, the upper clamp used by silk_log2lin()
 )
 
-// encodeSubframeGains (the *Encoder wrapper that also range-encodes the
-// indices via emitGainIndices) is deferred to the orchestration piece — same
-// reasoning as findPitchLags/encodeNLSF/quantLTPGains, since it needs
-// e.haveEncoded and e.rangeEncoder, and that type doesn't exist here yet.
+// encodeSubframeGains quantizes the per-subframe target gains (Q16), emits the
+// indices, and returns the dequantized gains. It is the counterpart of
+// Decoder.decodeSubframeQuantizations and produces bit-identical gains.
+func (e *Encoder) encodeSubframeGains(
+	gainsTargetQ16 []int32,
+	signalType frameSignalType,
+	subframeCount int,
+	isFirstSilkFrameInOpusFrame bool,
+) (gainQ16 []float32) {
+	conditional := !isFirstSilkFrameInOpusFrame && e.haveEncoded
+	indices, gainQ16, _ := quantizeGains(gainsTargetQ16, &e.previousLogGain, subframeCount, conditional)
+	e.emitGainIndices(indices, signalType, conditional)
+	e.haveEncoded = true
+
+	return gainQ16
+}
 
 // quantizeGains is silk_gains_quant: it turns target gains into transmit
 // indices and the dequantized gains, updating the running previousLogGain
@@ -79,5 +91,23 @@ func quantizeGains(
 	return indices, gainQ16, gainQ16Int
 }
 
-// emitGainIndices (the range-coder wiring for quantizeGains's output) is
-// deferred alongside encodeSubframeGains, for the same *Encoder reason.
+// emitGainIndices range-encodes the gain indices produced by quantizeGains.
+func (e *Encoder) emitGainIndices(indices []int8, signalType frameSignalType, conditional bool) {
+	for subframeIndex, index := range indices {
+		if subframeIndex == 0 && !conditional {
+			msb := uint32(index >> 3)  //nolint:gosec // G115: index is in [0,63].
+			lsb := uint32(index & 0x7) //nolint:gosec // G115
+			switch signalType {
+			case frameSignalTypeInactive:
+				e.rangeEncoder.EncodeSymbolWithICDF(icdfIndependentQuantizationGainMSBInactive, msb)
+			case frameSignalTypeVoiced:
+				e.rangeEncoder.EncodeSymbolWithICDF(icdfIndependentQuantizationGainMSBVoiced, msb)
+			case frameSignalTypeUnvoiced:
+				e.rangeEncoder.EncodeSymbolWithICDF(icdfIndependentQuantizationGainMSBUnvoiced, msb)
+			}
+			e.rangeEncoder.EncodeSymbolWithICDF(icdfIndependentQuantizationGainLSB, lsb)
+		} else {
+			e.rangeEncoder.EncodeSymbolWithICDF(icdfDeltaQuantizationGain, uint32(index)) //nolint:gosec // G115
+		}
+	}
+}

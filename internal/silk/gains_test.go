@@ -123,6 +123,102 @@ func TestQuantizeGainsRoundTrip(t *testing.T) {
 	}
 }
 
+// TestEncodeSubframeGainsRoundTrip checks that encoded gains decode back to
+// the same values through the decoder, with the range coder and gain state
+// in sync — the same check nlsf_encode_test.go's TestQuantizeNLSFRoundTrip
+// does for NLSFs, but this one goes through the real range coder since
+// *Encoder exists now.
+func TestEncodeSubframeGainsRoundTrip(t *testing.T) {
+	cases := []struct {
+		name          string
+		signalType    frameSignalType
+		subframeCount int
+		isFirst       bool
+		haveState     bool
+		prevLogGain   int32
+		targetsQ16    []int32
+	}{
+		{
+			name:          "independent_first_voiced",
+			signalType:    frameSignalTypeVoiced,
+			subframeCount: 4,
+			isFirst:       true,
+			haveState:     false,
+			prevLogGain:   10,
+			targetsQ16:    []int32{200000, 500000, 1500000, 800000},
+		},
+		{
+			name:          "independent_first_unvoiced",
+			signalType:    frameSignalTypeUnvoiced,
+			subframeCount: 4,
+			isFirst:       true,
+			haveState:     false,
+			prevLogGain:   10,
+			targetsQ16:    []int32{81920, 120000, 90000, 300000},
+		},
+		{
+			name:          "independent_first_inactive",
+			signalType:    frameSignalTypeInactive,
+			subframeCount: 2,
+			isFirst:       true,
+			haveState:     false,
+			prevLogGain:   10,
+			targetsQ16:    []int32{400000, 250000},
+		},
+		{
+			name:          "conditional_first_delta",
+			signalType:    frameSignalTypeVoiced,
+			subframeCount: 4,
+			isFirst:       false,
+			haveState:     true,
+			prevLogGain:   30,
+			targetsQ16:    []int32{600000, 650000, 500000, 700000},
+		},
+		{
+			name:          "large_upward_jump_double_step",
+			signalType:    frameSignalTypeVoiced,
+			subframeCount: 4,
+			isFirst:       true,
+			haveState:     false,
+			prevLogGain:   10,
+			targetsQ16:    []int32{81920, 1000000000, 1500000000, 90000},
+		},
+		{
+			name:          "monotone_decrease",
+			signalType:    frameSignalTypeUnvoiced,
+			subframeCount: 4,
+			isFirst:       false,
+			haveState:     true,
+			prevLogGain:   45,
+			targetsQ16:    []int32{900000, 400000, 150000, 82000},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			enc := NewEncoder()
+			enc.haveEncoded = tc.haveState
+			enc.previousLogGain = tc.prevLogGain
+			enc.rangeEncoder.Init()
+
+			gains := enc.encodeSubframeGains(tc.targetsQ16, tc.signalType, tc.subframeCount, tc.isFirst)
+			encRange := enc.rangeEncoder.FinalRange()
+			data := enc.rangeEncoder.Done()
+
+			dec := NewDecoder()
+			dec.haveDecoded = tc.haveState
+			dec.previousLogGain = tc.prevLogGain
+			dec.rangeDecoder.Init(data)
+
+			decGains := dec.decodeSubframeQuantizations(tc.signalType, tc.subframeCount, tc.isFirst)
+
+			require.Equal(t, gains, decGains, "reconstructed gains differ")
+			assert.Equal(t, encRange, dec.rangeDecoder.FinalRange(), "range coder desync")
+			assert.Equal(t, enc.previousLogGain, dec.previousLogGain, "previousLogGain desync")
+		})
+	}
+}
+
 // TestLin2LogRoundTripAgainstGainDequant checks that lin2log is a near-inverse
 // of the silk_log2lin() spelled out inline in the gain code, matching the
 // reference tolerance (they are only approximate inverses).

@@ -94,6 +94,64 @@ func reconstructNLSF(index1 int, indices2 []int8, bandwidth Bandwidth) []int16 {
 	return nlsf
 }
 
+// TestEncodeNLSFRoundTrip encodes an NLSF vector through the real range coder
+// and decodes it back, checking the reconstructed vector and range-coder
+// state match — now possible since *Encoder exists, unlike
+// TestQuantizeNLSFRoundTrip above (which predates it and stays as a
+// non-bitstream cross-check of the same math).
+func TestEncodeNLSFRoundTrip(t *testing.T) {
+	cases := []struct {
+		bandwidth Bandwidth
+		order     int
+	}{
+		{BandwidthNarrowband, 10},
+		{BandwidthMediumband, 10},
+		{BandwidthWideband, 16},
+	}
+
+	for _, tc := range cases {
+		for _, voiced := range []bool{false, true} {
+			for seed := range 12 {
+				name := fmt.Sprintf("bw%d_voiced%t_seed%d", tc.bandwidth, voiced, seed)
+				t.Run(name, func(t *testing.T) {
+					input := genNLSF(tc.order, uint32(seed*97+tc.order+boolSeed(voiced))) //nolint:gosec // G115
+
+					enc := NewEncoder()
+					enc.rangeEncoder.Init()
+					quant := enc.encodeNLSF(append([]int16(nil), input...), tc.bandwidth, voiced)
+					encRange := enc.rangeEncoder.FinalRange()
+					data := enc.rangeEncoder.Done()
+
+					dec := NewDecoder()
+					dec.rangeDecoder.Init(data)
+					index1 := dec.normalizeLineSpectralFrequencyStageOne(voiced, tc.bandwidth)
+					dLPC, resQ10 := dec.normalizeLineSpectralFrequencyStageTwo(tc.bandwidth, index1)
+					nlsf := dec.normalizeLineSpectralFrequencyCoefficients(dLPC, tc.bandwidth, resQ10, index1)
+					dec.normalizeLSFStabilization(nlsf, dLPC, tc.bandwidth)
+
+					require.Len(t, nlsf, len(quant))
+					for k := range quant {
+						require.Equalf(t, quant[k], nlsf[k], "coefficient %d", k)
+					}
+					assert.Equal(t, encRange, dec.rangeDecoder.FinalRange(), "range coder desync")
+
+					for k := 1; k < len(quant); k++ {
+						require.Greaterf(t, quant[k], quant[k-1], "not increasing at %d", k)
+					}
+				})
+			}
+		}
+	}
+}
+
+func boolSeed(b bool) int {
+	if b {
+		return 1
+	}
+
+	return 0
+}
+
 // genClusteredNLSF builds a tightly clustered NLSF vector: all coefficients sit
 // close together around a seed-dependent center, so stabilization pushes them to
 // minimum spacing and the stage-2 residuals grow large. These are the vectors
@@ -157,6 +215,29 @@ func TestQuantizeNLSFClusteredStaysInRange(t *testing.T) {
 				reconstructed := reconstructNLSF(index1, indices2, tc.bandwidth)
 				stabilizeNLSF(reconstructed, len(reconstructed), tc.bandwidth)
 				assert.Equal(t, quant, reconstructed)
+
+				// The original form of this regression: the full encode->decode
+				// round trip through the real range coder must stay in sync.
+				for _, voiced := range []bool{false, true} {
+					enc := NewEncoder()
+					enc.rangeEncoder.Init()
+					encQuant := enc.encodeNLSF(append([]int16(nil), input...), tc.bandwidth, voiced)
+					encRange := enc.rangeEncoder.FinalRange()
+					data := enc.rangeEncoder.Done()
+
+					dec := NewDecoder()
+					dec.rangeDecoder.Init(data)
+					decIndex1 := dec.normalizeLineSpectralFrequencyStageOne(voiced, tc.bandwidth)
+					decDLPC, decResQ10 := dec.normalizeLineSpectralFrequencyStageTwo(tc.bandwidth, decIndex1)
+					decNLSF := dec.normalizeLineSpectralFrequencyCoefficients(decDLPC, tc.bandwidth, decResQ10, decIndex1)
+					dec.normalizeLSFStabilization(decNLSF, decDLPC, tc.bandwidth)
+
+					require.Len(t, decNLSF, len(encQuant))
+					for k := range encQuant {
+						require.Equalf(t, encQuant[k], decNLSF[k], "voiced=%v coefficient %d", voiced, k)
+					}
+					assert.Equalf(t, encRange, dec.rangeDecoder.FinalRange(), "voiced=%v range coder desync", voiced)
+				}
 			})
 		}
 	}
