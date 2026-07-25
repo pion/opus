@@ -37,11 +37,21 @@ type Encoder struct {
 	// Analysis state for the frame encoder.
 	vad               vadState
 	nsq               *nsqState
-	targetBitrate     int     // target bitrate in bps (drives control_SNR)
-	sumLogGainQ7      int32   // cumulative LTP gain limit (quant_LTP_gains)
-	ltpCorr           float32 // normalized correlation carried across frames
-	tiltSmth          float32 // smoothed spectral tilt (shape state)
-	harmShapeGainSmth float32 // smoothed harmonic shaping gain (shape state)
+	frameCounter      int
+	targetBitrate     int       // target bitrate in bps (drives control_SNR)
+	packetLossPerc    int       // expected packet loss %, drives LTP state scaling
+	sumLogGainQ7      int32     // cumulative LTP gain limit (quant_LTP_gains)
+	xBuf              []float32 // previous frame, as LTP-memory history for pitch analysis
+	ltpCorr           float32   // normalized correlation carried across frames
+	tiltSmth          float32   // smoothed spectral tilt (shape state)
+	harmShapeGainSmth float32   // smoothed harmonic shaping gain (shape state)
+
+	// useInterpolatedNLSFs mirrors libopus's psEncC->useInterpolatedNLSFs
+	// (silk_setup_complexity, control_codec.c): NLSF interpolation search
+	// only runs at encoder complexity >= 4. Set via SetUseInterpolatedNLSFs;
+	// defaults to false (matching the low-complexity tiers) until the caller
+	// configures it.
+	useInterpolatedNLSFs bool
 }
 
 // NewEncoder creates a SILK Encoder with its prediction state reset.
@@ -50,6 +60,13 @@ func NewEncoder() Encoder {
 	e.resetPredictionState()
 
 	return e
+}
+
+// SetUseInterpolatedNLSFs enables or disables the NLSF interpolation search
+// in findLPCNLSF, mirroring libopus's complexity-tier setting
+// (silk_setup_complexity: enabled for encoder complexity >= 4).
+func (e *Encoder) SetUseInterpolatedNLSFs(enabled bool) {
+	e.useInterpolatedNLSFs = enabled
 }
 
 // resetPredictionState resets the encoder prediction state. The values must

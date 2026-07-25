@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/pion/opus/internal/celt"
+	"github.com/pion/opus/internal/silk"
 )
 
 // Application selects the encoder's tuning profile, mirroring libopus's
@@ -52,9 +53,24 @@ const (
 // is separate (bit 2 of the TOC) and not part of this constant.
 const celtOnlyFullband20msConfig = 31
 
+// SILK-only, 20 ms TOC config numbers per RFC 6716 Table 2, one per bandwidth
+// EncodeSILK supports.
+const (
+	silkOnlyNarrowband20msConfig = 1
+	silkOnlyMediumband20msConfig = 5
+	silkOnlyWideband20msConfig   = 9
+)
+
+// silkComplexityInterpolationThreshold is the encoder complexity at or above
+// which SILK's NLSF interpolation search is enabled, mirroring libopus's
+// silk_setup_complexity (control_codec.c): useInterpolatedNLSFs is 0 below
+// complexity 4, 1 from 4 up.
+const silkComplexityInterpolationThreshold = 4
+
 // Encoder encodes PCM into Opus packets.
 type Encoder struct {
 	celtEncoder    celt.Encoder
+	silkEncoder    silk.Encoder
 	sampleRate     int
 	channels       int
 	bitrate        int
@@ -208,11 +224,12 @@ func WithMaxBandwidth(bw Bandwidth) EncoderOption {
 //
 // Defaults: 48 kHz, mono, 24 kbit/s, complexity 5. Pass options to override
 // any of these. The current implementation supports 48 kHz, 1 or 2 channels,
-// 20 ms CELT-only packets. Transient detection and SILK encoding will land
-// in follow-up PRs.
+// 20 ms CELT-only packets, plus SILK-only encoding via EncodeSILK. Transient
+// detection is a follow-up.
 func NewEncoder(opts ...EncoderOption) (*Encoder, error) {
 	encoder := &Encoder{
 		celtEncoder:    celt.NewEncoder(),
+		silkEncoder:    silk.NewEncoder(),
 		sampleRate:     celtSampleRate,
 		channels:       1,
 		bitrate:        defaultBitrate,
@@ -235,6 +252,7 @@ func NewEncoder(opts ...EncoderOption) (*Encoder, error) {
 	encoder.celtEncoder.SetConstrainedVBR(encoder.constrainedVBR)
 	encoder.celtEncoder.SetLossRate(encoder.lossRate)
 	encoder.celtEncoder.SetComplexity(encoder.complexity)
+	encoder.silkEncoder.SetUseInterpolatedNLSFs(encoder.complexity >= silkComplexityInterpolationThreshold)
 
 	return encoder, nil
 }
@@ -251,6 +269,7 @@ func (e *Encoder) SetComplexity(complexity int) error {
 		return err
 	}
 	e.celtEncoder.SetComplexity(complexity)
+	e.silkEncoder.SetUseInterpolatedNLSFs(complexity >= silkComplexityInterpolationThreshold)
 
 	return nil
 }
@@ -376,6 +395,46 @@ func (e *Encoder) EncodeFloat32(in []float32, out []byte) (int, error) {
 	}
 
 	return 1 + n, nil
+}
+
+// EncodeSILK encodes one 20 ms mono SILK frame into a SILK-only Opus packet.
+// pcm must hold exactly one 20 ms frame of mono s16 samples at the
+// bandwidth's internal rate: 160 (Narrowband/8 kHz), 240 (Mediumband/12 kHz),
+// or 320 (Wideband/16 kHz) samples. This is a separate entry point from
+// Encode/EncodeFloat32 — bitrate-based auto-selection always picks CELT
+// bandwidths (Wideband and up); SILK is for callers who specifically want a
+// SILK-only voice packet (VoIP/narrowband use cases), not an automatic
+// CELT/SILK/hybrid switch. Superwideband and Fullband aren't SILK
+// bandwidths and are rejected. Covers voiced/LTP prediction, noise shaping
+// and NLSF interpolation (see internal/silk); the delayed-decision NSQ,
+// stereo, hybrid mode, and the bitrate-control loop are not yet implemented.
+func (e *Encoder) EncodeSILK(pcm []int16, bandwidth Bandwidth, out []byte) (int, error) {
+	var config int
+	switch bandwidth {
+	case BandwidthNarrowband:
+		config = silkOnlyNarrowband20msConfig
+	case BandwidthMediumband:
+		config = silkOnlyMediumband20msConfig
+	case BandwidthWideband:
+		config = silkOnlyWideband20msConfig
+	default:
+		return 0, fmt.Errorf("%w: %d", errInvalidBandwidth, bandwidth)
+	}
+
+	want := bandwidth.SampleRate() / 50 // 20 ms
+	if len(pcm) != want {
+		return 0, fmt.Errorf("%w: got %d samples, want %d", errInvalidFrameSize, len(pcm), want)
+	}
+
+	payload := e.silkEncoder.Encode(pcm, silk.Bandwidth(bandwidth), e.bitrate)
+	if len(out) < len(payload)+1 {
+		return 0, errOutBufferTooSmall
+	}
+
+	out[0] = byte(config<<3) | byte(frameCodeOneFrame) // mono, one frame
+	n := copy(out[1:], payload)
+
+	return n + 1, nil
 }
 
 func (e *Encoder) tocHeader() tableOfContentsHeader {

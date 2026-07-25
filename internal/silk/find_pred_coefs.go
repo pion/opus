@@ -62,8 +62,9 @@ func interpolateNLSF(xi, x0, x1 []int16, ifactQ2, d int) {
 	}
 }
 
-// findLPCNLSF runs Burg over LPC_in_pre and, for 20 ms frames, searches the
-// NLSF interpolation factor with the lowest first-half residual energy
+// findLPCNLSF runs Burg over LPC_in_pre and, when e.useInterpolatedNLSFs is
+// set and the frame has the full 4 subframes, searches the NLSF
+// interpolation factor with the lowest first-half residual energy
 // (silk_find_LPC_FLP). It returns the interpolation index (4 = no
 // interpolation) and the NLSFs to quantize.
 func (e *Encoder) findLPCNLSF(
@@ -75,7 +76,7 @@ func (e *Encoder) findLPCNLSF(
 	resNrg := burgModifiedFLP(aFull, lpcInPre, minInvGain, blockLen, nbSubfr, order)
 
 	nlsf := make([]int16, order)
-	if !e.firstFrameAfterReset && nbSubfr == maxSubframeCount {
+	if e.useInterpolatedNLSFs && !e.firstFrameAfterReset && nbSubfr == maxSubframeCount {
 		half := maxSubframeCount / 2
 		aTmp := make([]float32, order)
 		resNrg -= burgModifiedFLP(aTmp, lpcInPre[half*blockLen:], minInvGain, blockLen, half, order)
