@@ -6,6 +6,7 @@ package opus
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 
 	"github.com/pion/opus/internal/celt"
 	"github.com/pion/opus/internal/silk"
@@ -67,6 +68,13 @@ const (
 // complexity 4, 1 from 4 up.
 const silkComplexityInterpolationThreshold = 4
 
+// silkDCBlockCutoffHz is the high-pass cutoff EncodeSILK applies to its input
+// before handing it to internal/silk. libopus applies this filter (dc_reject,
+// src/opus_encoder.c:479-507) to the shared PCM ahead of both the SILK and
+// CELT encoders, not inside silk/ itself — so this mirrors celt's
+// dcBlockCutoffHz rather than living in internal/silk.
+const silkDCBlockCutoffHz = 3.0
+
 // Encoder encodes PCM into Opus packets.
 type Encoder struct {
 	celtEncoder    celt.Encoder
@@ -81,6 +89,7 @@ type Encoder struct {
 	lossRate       int
 	bandwidth      Bandwidth
 	maxBandwidth   Bandwidth
+	silkDCBlockMem float32
 }
 
 // EncoderOption configures an Encoder during construction.
@@ -405,9 +414,12 @@ func (e *Encoder) EncodeFloat32(in []float32, out []byte) (int, error) {
 // bandwidths (Wideband and up); SILK is for callers who specifically want a
 // SILK-only voice packet (VoIP/narrowband use cases), not an automatic
 // CELT/SILK/hybrid switch. Superwideband and Fullband aren't SILK
-// bandwidths and are rejected. Covers voiced/LTP prediction, noise shaping
-// and NLSF interpolation (see internal/silk); the delayed-decision NSQ,
-// stereo, hybrid mode, and the bitrate-control loop are not yet implemented.
+// bandwidths and are rejected. Applies a fixed DC-removal high-pass before
+// encoding (libopus's dc_reject applied to the shared PCM path); the
+// pitch-adaptive VoIP cutoff (hp_cutoff) is not implemented. Covers
+// voiced/LTP prediction, noise shaping and NLSF interpolation (see
+// internal/silk); the delayed-decision NSQ, stereo, hybrid mode, and the
+// bitrate-control loop are not yet implemented.
 func (e *Encoder) EncodeSILK(pcm []int16, bandwidth Bandwidth, out []byte) (int, error) {
 	var config int
 	switch bandwidth {
@@ -426,7 +438,8 @@ func (e *Encoder) EncodeSILK(pcm []int16, bandwidth Bandwidth, out []byte) (int,
 		return 0, fmt.Errorf("%w: got %d samples, want %d", errInvalidFrameSize, len(pcm), want)
 	}
 
-	payload := e.silkEncoder.Encode(pcm, silk.Bandwidth(bandwidth), e.bitrate)
+	filtered := applySILKDCBlock(pcm, bandwidth.SampleRate(), &e.silkDCBlockMem)
+	payload := e.silkEncoder.Encode(filtered, silk.Bandwidth(bandwidth), e.bitrate)
 	if len(out) < len(payload)+1 {
 		return 0, errOutBufferTooSmall
 	}
@@ -435,6 +448,30 @@ func (e *Encoder) EncodeSILK(pcm []int16, bandwidth Bandwidth, out []byte) (int,
 	n := copy(out[1:], payload)
 
 	return n + 1, nil
+}
+
+// applySILKDCBlock removes DC bias from pcm with a first-order IIR high-pass
+// at silkDCBlockCutoffHz, returning a new slice (pcm is left untouched). mem
+// must persist across calls for the same stream.
+func applySILKDCBlock(pcm []int16, sampleRate int, mem *float32) []int16 {
+	coef := float32(6.3) * silkDCBlockCutoffHz / float32(sampleRate)
+	coef2 := 1 - coef
+	out := make([]int16, len(pcm))
+	for i, sample := range pcm {
+		x := float32(sample)
+		y := x - *mem
+		*mem = coef*x + coef2**mem
+		switch {
+		case y > 32767:
+			out[i] = 32767
+		case y < -32768:
+			out[i] = -32768
+		default:
+			out[i] = int16(math.Round(float64(y)))
+		}
+	}
+
+	return out
 }
 
 func (e *Encoder) tocHeader() tableOfContentsHeader {

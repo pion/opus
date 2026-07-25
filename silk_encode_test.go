@@ -101,3 +101,65 @@ func TestEncodeSILKOutBufferTooSmall(t *testing.T) {
 	_, err = enc.EncodeSILK(pcm, BandwidthWideband, make([]byte, 1))
 	require.Error(t, err)
 }
+
+// TestSILKDCBlockRemovesConstantOffset mirrors celt's TestDCBlockRemovesConstantOffset:
+// after 1 s of constant input the filter should settle to near zero.
+func TestSILKDCBlockRemovesConstantOffset(t *testing.T) {
+	const sampleRate = 16000
+	pcm := make([]int16, sampleRate)
+	for i := range pcm {
+		pcm[i] = 10000
+	}
+	var mem float32
+	out := applySILKDCBlock(pcm, sampleRate, &mem)
+
+	var sum float64
+	for i := len(out) - 1600; i < len(out); i++ {
+		sum += float64(out[i])
+	}
+	assert.InDelta(t, 0.0, sum/1600, 100.0,
+		"DC filter should attenuate constant offset (mean=%f)", sum/1600)
+}
+
+// TestSILKDCBlockPreservesInput checks the original pcm slice is untouched
+// (applySILKDCBlock returns a new slice, unlike celt's in-place applyDCBlock).
+func TestSILKDCBlockPreservesInput(t *testing.T) {
+	pcm := []int16{5000, 5000, 5000, 5000}
+	original := append([]int16(nil), pcm...)
+	var mem float32
+	applySILKDCBlock(pcm, 16000, &mem)
+	assert.Equal(t, original, pcm)
+}
+
+// TestSILKDCBlockSaturates checks the clamp branches: a step between the
+// int16 extremes while mem sits at the opposite extreme pushes y outside
+// [-32768, 32767], which must saturate instead of wrapping.
+func TestSILKDCBlockSaturates(t *testing.T) {
+	memHigh := float32(-32768)
+	outHigh := applySILKDCBlock([]int16{32767}, 16000, &memHigh)
+	assert.Equal(t, int16(32767), outHigh[0])
+
+	memLow := float32(32767)
+	outLow := applySILKDCBlock([]int16{-32768}, 16000, &memLow)
+	assert.Equal(t, int16(-32768), outLow[0])
+}
+
+// TestSILKDCBlockMultiFrameState checks the filter state persists correctly
+// across calls: two half-frame runs must match one full run.
+func TestSILKDCBlockMultiFrameState(t *testing.T) {
+	const sampleRate = 16000
+	pcm := make([]int16, 320)
+	for i := range pcm {
+		pcm[i] = int16(3000 * math.Sin(2*math.Pi*440*float64(i)/sampleRate))
+	}
+
+	var memFull float32
+	fullOut := applySILKDCBlock(pcm, sampleRate, &memFull)
+
+	var memSplit float32
+	out1 := applySILKDCBlock(pcm[:160], sampleRate, &memSplit)
+	out2 := applySILKDCBlock(pcm[160:], sampleRate, &memSplit)
+	splitOut := append(append([]int16(nil), out1...), out2...)
+
+	assert.Equal(t, fullOut, splitOut)
+}
