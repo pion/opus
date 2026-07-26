@@ -17,13 +17,13 @@ type (
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-3.1
 	tableOfContentsHeader byte
 
-	// Configuration numbers in each range (e.g., 0...3 for NB SILK-
+	// configuration numbers in each range (e.g., 0...3 for NB SILK-
 	// only) correspond to the various choices of frame size, in the same
 	// order.  For example, configuration 0 has a 10 ms frame size and
 	// configuration 3 has a 60 ms frame size.
 	//
 	//  +-----------------------+-----------+-----------+-------------------+
-	//  | Configuration         | Mode      | Bandwidth | Frame Sizes       |
+	//  | configuration         | Mode      | Bandwidth | Frame Sizes       |
 	//  | Number(s)             |           |           |                   |
 	//  +-----------------------+-----------+-----------+-------------------+
 	//  | 0...3                 | SILK-only | NB        | 10, 20, 40, 60 ms |
@@ -46,7 +46,7 @@ type (
 	//  +-----------------------+-----------+-----------+-------------------+
 	//
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-3.1
-	Configuration byte
+	configuration byte
 
 	// As described, the LP (SILK) layer and MDCT (CELT) layer can be
 	// combined in three possible operating modes:
@@ -116,8 +116,8 @@ type (
 	frameCode byte
 )
 
-func (t tableOfContentsHeader) configuration() Configuration {
-	return Configuration(t >> 3)
+func (t tableOfContentsHeader) configuration() configuration {
+	return configuration(t >> 3)
 }
 
 func (t tableOfContentsHeader) isStereo() bool {
@@ -154,9 +154,9 @@ func (c configurationMode) String() string {
 	return "Invalid Configuration Mode"
 }
 
-// See Configuration for mapping of mode to configuration numbers
+// See configuration for mapping of mode to configuration numbers
 // https://datatracker.ietf.org/doc/html/rfc6716#section-3.1
-func (c Configuration) mode() configurationMode {
+func (c configuration) mode() configurationMode {
 	switch {
 	case c <= 11:
 		return configurationModeSilkOnly
@@ -216,9 +216,9 @@ func (f frameDuration) nanoseconds() int {
 	return 0
 }
 
-// See Configuration for mapping of frameDuration to configuration numbers
+// See configuration for mapping of frameDuration to configuration numbers
 // https://datatracker.ietf.org/doc/html/rfc6716#section-3.1
-func (c Configuration) frameDuration() frameDuration {
+func (c configuration) frameDuration() frameDuration {
 	switch c {
 	case 16, 20, 24, 28:
 		return frameDuration2500us
@@ -249,9 +249,9 @@ const (
 	BandwidthFullband      Bandwidth = 5
 )
 
-// See Configuration for mapping of bandwidth to configuration numbers
+// See configuration for mapping of bandwidth to configuration numbers
 // https://datatracker.ietf.org/doc/html/rfc6716#section-3.1
-func (c Configuration) bandwidth() Bandwidth {
+func (c configuration) bandwidth() Bandwidth {
 	switch {
 	case c <= 3:
 		return BandwidthNarrowband
