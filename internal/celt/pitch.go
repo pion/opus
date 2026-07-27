@@ -244,8 +244,11 @@ func absInt(x int) int {
 // applyPrefilter applies the pitch pre-filter before MDCT by calling
 // combFilter with negated gains — the inverse of the decoder's post-filter.
 // Mirrors libopus run_prefilter (celt_encoder.c lines 1543-1558).
+// applyPrefilter whitens src into dst. dst must not alias src: the taps have to
+// read the unfiltered input so the filter stays non-recursive and the decoder's
+// postfilter inverts it exactly (see combFilter).
 func applyPrefilter(
-	buf []float32,
+	dst, src []float32,
 	oldPeriod, period int,
 	n int,
 	oldGain, gain float32,
@@ -258,7 +261,7 @@ func applyPrefilter(
 	period = max(period, combFilterMinPeriod)
 
 	combFilter(
-		buf,
+		dst, src,
 		start,
 		oldPeriod,
 		period,
@@ -288,18 +291,19 @@ func shouldCancelPrefilter(
 		applyDCBlock(pre, sampleRate, &dcMem)
 		applyPreemphasis(pre, pre, &preemphasisMem)
 
-		buf := state.prefilterBuf[ch][:postfilterHistorySampleCount+len(pre)]
-		copy(buf, state.prefilterMem[ch])
-		copy(buf[postfilterHistorySampleCount:], pre)
-		before[ch] = measureEnergy(buf, postfilterHistorySampleCount, len(pre))
+		src := state.prefilterBuf[ch][:postfilterHistorySampleCount+len(pre)]
+		copy(src, state.prefilterMem[ch])
+		copy(src[postfilterHistorySampleCount:], pre)
+		before[ch] = measureEnergy(src, postfilterHistorySampleCount, len(pre))
+		dst := state.prefilterOut[ch][:len(src)]
 		applyPrefilter(
-			buf,
+			dst, src,
 			state.prefilter.oldPeriod, period,
 			len(pre),
 			state.prefilter.oldGain, gain,
 			state.prefilter.oldTapset, tapset,
 		)
-		after[ch] = measureEnergy(buf, postfilterHistorySampleCount, len(pre))
+		after[ch] = measureEnergy(dst, postfilterHistorySampleCount, len(pre))
 	}
 
 	return cancelPitch(len(pcm), gain, before, after)

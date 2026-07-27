@@ -262,8 +262,9 @@ func TestApplyPrefilterModifiesSignal(t *testing.T) {
 	original := make([]float32, frameLen)
 	copy(original, sine)
 
-	applyPrefilter(buf, period, period, frameLen, gain, gain, tapset, tapset)
-	filtered := buf[histLen:]
+	dst := make([]float32, len(buf))
+	applyPrefilter(dst, buf, period, period, frameLen, gain, gain, tapset, tapset)
+	filtered := dst[histLen:]
 
 	// The pre-filter must change the signal.
 	var maxDiff float32
