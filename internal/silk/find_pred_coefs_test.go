@@ -102,10 +102,10 @@ func TestPredCoefsMinInvGain(t *testing.T) {
 }
 
 // TestFindLPCNLSF exercises both the interpolation-search path (4 subframes,
-// not the first frame after reset — matching find_pitch_lags_FLP's caller
-// convention) and the no-interpolation path (2 subframes, always skips the
-// search since it requires MAX_NB_SUBFR), including nlsfToLPCQ12 (only
-// reachable from the interpolation search).
+// useInterpolatedNLSFs set, not the first frame after reset — matching
+// find_pitch_lags_FLP's caller convention) and the no-interpolation path (2
+// subframes, always skips the search since it requires MAX_NB_SUBFR),
+// including nlsfToLPCQ12 (only reachable from the interpolation search).
 func TestFindLPCNLSF(t *testing.T) {
 	const (
 		order       = 16
@@ -119,6 +119,7 @@ func TestFindLPCNLSF(t *testing.T) {
 	}
 
 	enc := NewEncoder()
+	enc.SetUseInterpolatedNLSFs(true)
 	enc.firstFrameAfterReset = false
 	enc.prevNLSFq = genNLSF(order, 42)
 
@@ -140,4 +141,14 @@ func TestFindLPCNLSF(t *testing.T) {
 	interpQ2NB, nlsfNB := enc.findLPCNLSF(lpcInPre[:2*blockLen], 1e-4, BandwidthNarrowband, order, 2, subfrLength)
 	assert.Equal(t, 4, interpQ2NB)
 	require.Len(t, nlsfNB, order)
+
+	// useInterpolatedNLSFs unset (the zero value, matching encoder complexity
+	// < 4): skips the search even with 4 subframes and firstFrameAfterReset
+	// already false.
+	encLowComplexity := NewEncoder()
+	encLowComplexity.firstFrameAfterReset = false
+	encLowComplexity.prevNLSFq = genNLSF(order, 42)
+	interpQ2Low, nlsfLow := encLowComplexity.findLPCNLSF(lpcInPre, 1e-4, BandwidthWideband, order, nbSubfr, subfrLength)
+	assert.Equal(t, 4, interpQ2Low, "interpolation search should be gated off")
+	require.Len(t, nlsfLow, order)
 }
