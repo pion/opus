@@ -29,6 +29,7 @@ type analysisState struct {
 	prefilterMem   [2][]float32
 	prefilter      postFilterState
 	prefilterBuf   [2][]float32
+	prefilterOut   [2][]float32
 }
 
 type analysisResult struct {
@@ -61,6 +62,10 @@ func newAnalysisState() analysisState {
 			make([]float32, postfilterHistorySampleCount),
 		},
 		prefilterBuf: [2][]float32{
+			make([]float32, postfilterHistorySampleCount+maxFrame),
+			make([]float32, postfilterHistorySampleCount+maxFrame),
+		},
+		prefilterOut: [2][]float32{
 			make([]float32, postfilterHistorySampleCount+maxFrame),
 			make([]float32, postfilterHistorySampleCount+maxFrame),
 		},
@@ -112,18 +117,21 @@ func analyzeFrame(
 		// Apply pitch pre-filter (whitening) before MDCT, mirroring
 		// libopus run_prefilter. Reuses combFilter with negated gains.
 		if prefilterEnabled {
-			buf := state.prefilterBuf[ch][:postfilterHistorySampleCount+len(pre)]
-			copy(buf, state.prefilterMem[ch])
-			copy(buf[postfilterHistorySampleCount:], pre)
+			src := state.prefilterBuf[ch][:postfilterHistorySampleCount+len(pre)]
+			copy(src, state.prefilterMem[ch])
+			copy(src[postfilterHistorySampleCount:], pre)
+			dst := state.prefilterOut[ch][:len(src)]
 			applyPrefilter(
-				buf,
+				dst, src,
 				state.prefilter.oldPeriod, prefilterPeriod,
 				len(pre),
 				state.prefilter.oldGain, prefilterGain,
 				state.prefilter.oldTapset, prefilterTapset,
 			)
-			copy(pre, buf[postfilterHistorySampleCount:])
-			copy(state.prefilterMem[ch], buf[len(pre):len(pre)+postfilterHistorySampleCount])
+			// Carry the unfiltered tail, since the taps read the input signal
+			// (libopus keeps prefilter_mem from pre, not from the output).
+			copy(state.prefilterMem[ch], src[len(pre):len(pre)+postfilterHistorySampleCount])
+			copy(pre, dst[postfilterHistorySampleCount:])
 		}
 
 		if useShortBlocks {

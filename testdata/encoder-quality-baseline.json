@@ -3,19 +3,19 @@
   "bitrate": 96000,
   "signals": {
     "burst": {
-      "tier1SnrDb": -2.5
+      "tier1SnrDb": 4.7
     },
     "chirp": {
-      "tier1SnrDb": 3.5
+      "tier1SnrDb": 9.5
     },
     "harmonics": {
-      "tier1SnrDb": -0.6
+      "tier1SnrDb": 15.1
     },
     "onset": {
-      "tier1SnrDb": -2.4
+      "tier1SnrDb": 4.6
     },
     "shaped_noise": {
-      "tier1SnrDb": 0.6
+      "tier1SnrDb": 0.7
     }
   }
 }

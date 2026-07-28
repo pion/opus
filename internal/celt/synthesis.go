@@ -293,7 +293,7 @@ func (d *Decoder) applyPostfilter(info *frameSideInfo, time []float32, channel i
 	period := max(d.postfilter.period, combFilterMinPeriod)
 	oldPeriod := max(d.postfilter.oldPeriod, combFilterMinPeriod)
 	combFilter(
-		buf,
+		buf, buf,
 		postfilterHistorySampleCount,
 		oldPeriod,
 		period,
@@ -306,7 +306,7 @@ func (d *Decoder) applyPostfilter(info *frameSideInfo, time []float32, channel i
 	if info.lm != 0 && len(time) > shortBlockSampleCount {
 		current := currentPostfilter(info)
 		combFilter(
-			buf,
+			buf, buf,
 			postfilterHistorySampleCount+shortBlockSampleCount,
 			period,
 			max(current.period, combFilterMinPeriod),
@@ -350,7 +350,16 @@ func currentPostfilter(info *frameSideInfo) postFilterState {
 
 // combFilter applies the RFC 6716 Section 4.3.7.1 pitch post-filter taps,
 // cross-fading from the previous filter state over the overlap window.
-func combFilter(buf []float32, start int, period0 int, period1 int, n int, gain0 float32, gain1 float32, tapset0 int, tapset1 int) {
+// combFilter writes the pitch comb filter of src into dst starting at start.
+//
+// dst and src may alias, and the decoder passes the same buffer for both: the
+// taps then read samples this call already wrote, which makes the postfilter
+// recursive (1/(1-g*z^-T)). The encoder's prefilter must pass a separate src so
+// its taps read the untouched input instead, giving the non-recursive
+// (1-g*z^-T) that the postfilter inverts. libopus draws the same distinction by
+// calling comb_filter(in, pre, ...) in the encoder and comb_filter(out, out,
+// ...) in the decoder (celt_encoder.c, celt_decoder.c).
+func combFilter(dst, src []float32, start int, period0 int, period1 int, n int, gain0 float32, gain1 float32, tapset0 int, tapset1 int) {
 	gains := [3][3]float32{
 		{0.3066406250, 0.2170410156, 0.1296386719},
 		{0.4638671875, 0.2680664062, 0},
@@ -363,21 +372,21 @@ func combFilter(buf []float32, start int, period0 int, period1 int, n int, gain0
 	g11 := gain1 * gains[tapset1][1]
 	g12 := gain1 * gains[tapset1][2]
 	overlap := min(shortBlockSampleCount, n)
-	output := buf[start : start+n]
-	previous0 := buf[start-period0 : start-period0+overlap]
-	previous0Minus1 := buf[start-period0-1 : start-period0-1+overlap]
-	previous0Plus1 := buf[start-period0+1 : start-period0+1+overlap]
-	previous0Minus2 := buf[start-period0-2 : start-period0-2+overlap]
-	previous0Plus2 := buf[start-period0+2 : start-period0+2+overlap]
-	previous1 := buf[start-period1 : start-period1+n]
-	previous1Minus1 := buf[start-period1-1 : start-period1-1+n]
-	previous1Plus1 := buf[start-period1+1 : start-period1+1+n]
-	previous1Minus2 := buf[start-period1-2 : start-period1-2+n]
-	previous1Plus2 := buf[start-period1+2 : start-period1+2+n]
+	output := dst[start : start+n]
+	previous0 := src[start-period0 : start-period0+overlap]
+	previous0Minus1 := src[start-period0-1 : start-period0-1+overlap]
+	previous0Plus1 := src[start-period0+1 : start-period0+1+overlap]
+	previous0Minus2 := src[start-period0-2 : start-period0-2+overlap]
+	previous0Plus2 := src[start-period0+2 : start-period0+2+overlap]
+	previous1 := src[start-period1 : start-period1+n]
+	previous1Minus1 := src[start-period1-1 : start-period1-1+n]
+	previous1Plus1 := src[start-period1+1 : start-period1+1+n]
+	previous1Minus2 := src[start-period1-2 : start-period1-2+n]
+	previous1Plus2 := src[start-period1+2 : start-period1+2+n]
 	for i := 0; i < overlap; i++ {
 		window := celtWindow(i)
 		fade := window * window
-		output[i] = output[i] +
+		output[i] = src[start+i] +
 			(1-fade)*g00*previous0[i] +
 			(1-fade)*g01*previous0Minus1[i] +
 			(1-fade)*g01*previous0Plus1[i] +
@@ -390,7 +399,7 @@ func combFilter(buf []float32, start int, period0 int, period1 int, n int, gain0
 			fade*g12*previous1Plus2[i]
 	}
 	for i := overlap; i < n; i++ {
-		output[i] = output[i] +
+		output[i] = src[start+i] +
 			g10*previous1[i] +
 			g11*previous1Minus1[i] +
 			g11*previous1Plus1[i] +
