@@ -406,6 +406,24 @@ func (e *Encoder) FlushInto(dst []byte) int {
 	return n
 }
 
+// FlushIntoPadded finalizes the frame into dst and zero-fills the result out to
+// size bytes when the coded data is shorter.
+//
+// CELT derives its bit allocation from the frame size the encoder was asked
+// for, and the decoder re-derives it from the size of the packet it receives.
+// Emitting a shorter packet makes the two sides compute different allocations,
+// so they disagree on how many raw bits each band's fine energy occupies and
+// the decoder reads that region at the wrong offsets. libopus avoids this by
+// initializing the range coder with the target size up front and clearing the
+// unused middle in ec_enc_done (celt/entenc.c).
+func (e *Encoder) FlushIntoPadded(dst []byte, size int) int {
+	remainingBits := e.flush()
+	n := max(e.outputSize(remainingBits), size)
+	e.writeOutput(dst, n, remainingBits)
+
+	return n
+}
+
 func (e *Encoder) flush() int {
 	remainingBits := e.flushRangeCoder()
 	if e.rem >= 0 || e.extBytes > 0 {
@@ -424,24 +442,20 @@ func (e *Encoder) outputSize(remainingBits int) int {
 	return len(e.buf) + len(e.tail) + boolToInt(e.shouldWritePartialToNewByte(freeBits))
 }
 
-func (e *Encoder) writeOutput(dst []byte, n, remainingBits int) {
-	freeBits := uint(0)
-	if remainingBits < 0 {
-		freeBits = uint(-remainingBits) //nolint:gosec // G115
-	}
-
+func (e *Encoder) writeOutput(dst []byte, n, _ int) {
+	// Layout mirrors ec_enc_done (celt/entenc.c): range-coded bytes at the
+	// front, raw bits growing backwards from the end, and the space between
+	// them cleared. Any leftover raw bits go in the byte just before the raw
+	// region, which is the last range-coded byte when the two regions meet.
 	copy(dst, e.buf)
+	clear(dst[len(e.buf) : n-len(e.tail)])
 	for index, value := range e.tail {
 		dst[n-1-index] = value
 	}
 
 	if e.nendBits > 0 {
 		partial := byte(e.endWindow & uint64(bitMask(e.nendBits))) //nolint:gosec // G115: masked to at most 8 bits.
-		if e.shouldWritePartialToNewByte(freeBits) {
-			dst[len(e.buf)] = partial
-		} else {
-			dst[len(e.buf)-1] |= partial
-		}
+		dst[n-len(e.tail)-1] |= partial
 	}
 }
 
