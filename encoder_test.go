@@ -660,7 +660,11 @@ func TestVBRPacketRoundTripMultiFrame(t *testing.T) {
 		out := make([]float32, encoderTestFrameSampleCount)
 		_, _, err = dec.DecodeFloat32(packet[:n], out)
 		require.NoError(t, err)
-		assert.Greater(t, vectorEnergyFloat32(out), 1e-6)
+		// i%3 == 0 feeds digital silence, which must not be required to decode
+		// into energy. Only the frames that actually carry signal are checked.
+		if i%3 != 0 {
+			assert.Greaterf(t, vectorEnergyFloat32(out), 1e-6, "frame %d", i)
+		}
 	}
 }
 

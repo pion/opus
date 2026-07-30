@@ -358,3 +358,23 @@ func assertFuzzOperation(t *testing.T, decoder *Decoder, op fuzzOperation) {
 		assert.Equal(t, op.rawValue, decoder.DecodeRawBits(op.rawBits))
 	}
 }
+
+// TestEncodeLaplaceClampsToDecodableValue checks that when a value exceeds
+// what the tail of the Laplace distribution can represent, EncodeLaplace
+// returns the clamped value instead of the input — that is what the decoder
+// will actually recover, and callers must use it for any state they derive
+// from the encoded symbol (e.g. CELT's coarse energy prediction).
+func TestEncodeLaplaceClampsToDecodableValue(t *testing.T) {
+	const fs0, decay = 100, 1000
+
+	encoder := &Encoder{}
+	encoder.Init()
+	encoded := encoder.EncodeLaplace(fs0, decay, 500)
+	assert.NotEqual(t, 500, encoded, "500 should fall in the clamped tail")
+
+	packet := encoder.Done()
+	decoder := &Decoder{}
+	decoder.Init(packet)
+	assert.Equal(t, encoded, decoder.DecodeLaplace(fs0, decay),
+		"the decoder must recover exactly the value EncodeLaplace returned, not the original input")
+}

@@ -691,13 +691,14 @@ func (e *Encoder) encodeCoarseEnergyDelta(info *frameSideInfo, probModel []uint8
 	switch {
 	case bitsLeft >= 15:
 		probIndex := 2 * min(band, maxBands-1)
-		e.rangeEncoder.EncodeLaplace(
+
+		// The Laplace coder clamps values its tail cannot represent, so the
+		// energy state has to follow what the decoder will actually see.
+		return e.rangeEncoder.EncodeLaplace(
 			uint32(probModel[probIndex])<<7,
 			uint32(probModel[probIndex+1])<<6,
 			delta,
 		)
-
-		return delta
 	case bitsLeft >= 2:
 		if delta < -1 {
 			delta = -1
