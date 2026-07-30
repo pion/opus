@@ -65,10 +65,8 @@ func forwardMDCT(time []float32) []float32 {
 	deshuffled := make([]float32, n2)
 
 	for i := 0; i < overlap/2; i++ {
-		windowValue := celtWindow(i)
-		// Apply analysis window: multiply (not divide) to mirror the synthesis
-		// windowing in inverseMDCT for TDAC.
-		deshuffled[overlap/2-1-i] = -time[i] * windowValue
+		j := overlap/2 - 1 - i
+		deshuffled[j] = -celtWindow(i)*time[i] + celtWindow(overlap/2+j)*time[overlap/2+j]
 	}
 
 	for i := overlap / 2; i < n4; i++ {
@@ -80,8 +78,8 @@ func forwardMDCT(time []float32) []float32 {
 	}
 
 	for i := 0; i < overlap/2; i++ {
-		windowValue := celtWindow(i)
-		deshuffled[n2-overlap/2+i] = time[n2+overlap-1-i] * windowValue
+		deshuffled[n2-overlap/2+i] = celtWindow(i)*time[n2+overlap-1-i] +
+			celtWindow(overlap-1-i)*time[n2+i]
 	}
 
 	postRotated := make([]float32, n2)
@@ -170,8 +168,8 @@ func forwardMDCTWithScratch(
 	freq := scratch.freq[channel]
 
 	for i := 0; i < overlap/2; i++ {
-		windowValue := celtWindow(i)
-		deshuffled[overlap/2-1-i] = -time[i] * windowValue
+		j := overlap/2 - 1 - i
+		deshuffled[j] = -celtWindow(i)*time[i] + celtWindow(overlap/2+j)*time[overlap/2+j]
 	}
 
 	for i := overlap / 2; i < n4; i++ {
@@ -183,8 +181,8 @@ func forwardMDCTWithScratch(
 	}
 
 	for i := 0; i < overlap/2; i++ {
-		windowValue := celtWindow(i)
-		deshuffled[n2-overlap/2+i] = time[n2+overlap-1-i] * windowValue
+		deshuffled[n2-overlap/2+i] = celtWindow(i)*time[n2+overlap-1-i] +
+			celtWindow(overlap-1-i)*time[n2+i]
 	}
 
 	for i := range n4 {
