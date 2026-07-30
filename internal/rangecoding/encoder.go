@@ -258,9 +258,14 @@ func (e *Encoder) EncodeUniform(total, symbol uint32) {
 // (the geometric decay rate of adjacent-magnitude frequencies, Q15).
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.3.2.1
-func (e *Encoder) EncodeLaplace(fs0, decay uint32, value int) {
-	low, high := laplaceInterval(fs0, decay, value)
+// EncodeLaplace encodes a Laplace-distributed value and returns the value the
+// decoder will recover, which differs from the input when the tail of the
+// distribution cannot represent it (see laplaceInterval).
+func (e *Encoder) EncodeLaplace(fs0, decay uint32, value int) int {
+	low, high, encoded := laplaceInterval(fs0, decay, value)
 	e.EncodeCumulative(low, high, laplaceTotal)
+
+	return encoded
 }
 
 // EncodeRawBits appends n bits of value to the raw-bits region at the end of
@@ -555,37 +560,52 @@ func bitMask(n uint) uint32 {
 // values of equal magnitude share a frequency but occupy disjoint halves of the
 // cumulative axis: the positive half comes first, the negative half follows
 // immediately.  laplaceFirstDecayFrequency() computes the per-step decay.
-func laplaceInterval(fs0 uint32, decay uint32, value int) (uint32, uint32) {
+// laplaceInterval returns the coding interval for value plus the magnitude the
+// interval actually represents. The tail of the distribution only has room for
+// a bounded number of steps, so a large value gets clamped to the last one that
+// fits (ec_laplace_encode, celt/laplace.c). The clamped value is what the
+// decoder will recover, so callers must propagate it into any state they derive
+// from the encoded symbol rather than assuming their input was coded verbatim.
+func laplaceInterval(fs0 uint32, decay uint32, value int) (low, high uint32, encoded int) {
 	if value == 0 {
-		return 0, min(fs0, uint32(laplaceTotal))
+		return 0, min(fs0, uint32(laplaceTotal)), 0
 	}
 
-	magnitude := value
-	if magnitude < 0 {
-		magnitude = -magnitude
-	}
-
-	low := fs0
-	frequency := laplaceFirstDecayFrequency(fs0, decay) + laplaceMinProbability
-	currentMagnitude := 1
-	for currentMagnitude < magnitude && frequency > laplaceMinProbability {
-		low += 2 * frequency
-		frequency = ((2*frequency - 2*laplaceMinProbability) * decay) >> 15
-		frequency += laplaceMinProbability
-		currentMagnitude++
-	}
-	if currentMagnitude < magnitude {
-		deltaCount := uint32(magnitude - currentMagnitude) //nolint:gosec // G115
-		low += 2 * deltaCount * laplaceMinProbability
-		frequency = laplaceMinProbability
-	}
+	// sign is 0 for positive values and -1 for negative ones, mirroring the
+	// reference's branch-free sign handling.
+	sign := 0
 	if value < 0 {
-		return min(low, uint32(laplaceTotal)), min(low+frequency, uint32(laplaceTotal))
+		sign = -1
+	}
+	magnitude := (value + sign) ^ sign
+
+	fl := int(fs0)
+	fs := int(laplaceFirstDecayFrequency(fs0, decay))
+	step := 1
+	for ; fs > 0 && step < magnitude; step++ {
+		fs *= 2
+		fl += fs + 2*laplaceMinProbability
+		fs = (fs * int(decay)) >> 15
 	}
 
-	low += frequency
+	if fs == 0 {
+		// Past the decaying part every step costs the minimum probability, so
+		// only so many of them fit before the interval is exhausted.
+		maxSteps := (laplaceTotal - fl + laplaceMinProbability - 1) >> laplaceLogMinProbability
+		maxSteps = (maxSteps - sign) >> 1
+		extra := min(magnitude-step, maxSteps-1)
+		fl += (2*extra + 1 + sign) * laplaceMinProbability
+		fs = min(laplaceMinProbability, laplaceTotal-fl)
+		encoded = (step + extra + sign) ^ sign
+	} else {
+		fs += laplaceMinProbability
+		if sign == 0 {
+			fl += fs
+		}
+		encoded = value
+	}
 
-	return min(low, uint32(laplaceTotal)), min(low+frequency, uint32(laplaceTotal))
+	return uint32(fl), uint32(fl + fs), encoded //nolint:gosec // G115: bounded by laplaceTotal.
 }
 
 // boolToInt converts a bool to 0 or 1.
