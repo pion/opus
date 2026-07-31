@@ -47,7 +47,11 @@ type Encoder struct {
 	prevSpreadAvg      float32
 	prevSpreadDecision int
 	prevIntensityBand  int
-	prevLogBandAmp     [2][maxBands]float32
+	// lastCodedBands feeds the band-skip hysteresis in computeAllocation
+	// (st->lastCodedBands in libopus celt_encoder.c). Zero means "no previous
+	// frame", which the update below seeds directly instead of clamping.
+	lastCodedBands int
+	prevLogBandAmp [2][maxBands]float32
 
 	// Application mode plumbing — set by root encoder via setter methods.
 	vbr            bool
@@ -114,6 +118,7 @@ func (e *Encoder) Reset() {
 	e.prevSpreadAvg = 0
 	e.prevSpreadDecision = defaultSpreadDecision
 	e.prevIntensityBand = 0
+	e.lastCodedBands = 0
 	e.analysis.prefilter = postFilterState{}
 
 	e.vbrReservoir = 0
@@ -796,8 +801,20 @@ func (e *Encoder) computeAllocationMono(
 		&e.rangeEncoder,
 		targetIntensity,
 		targetDualStereo,
+		e.lastCodedBands,
+		// Without the tonality analysis pipeline libopus falls back to end-1,
+		// which makes the band<=signalBandwidth half of the skip test always
+		// true and leaves the decision to the depth threshold alone.
+		info.endBand-1,
 	)
 	state.balance = balance
+	// Track the band count for the next frame's hysteresis, moving one step at
+	// a time once seeded (libopus celt_encoder.c).
+	if e.lastCodedBands != 0 {
+		e.lastCodedBands = min(e.lastCodedBands+1, max(e.lastCodedBands-1, state.codedBands))
+	} else {
+		e.lastCodedBands = state.codedBands
+	}
 
 	return state
 }
