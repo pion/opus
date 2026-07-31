@@ -565,7 +565,7 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 	e.updatePrefilterState(&info, prefilterEnabled, pitchPeriod, prefilterGain, prefilterQq, prefilterTapset)
 
 	if e.rangeEncoder.Tell() > info.totalBits {
-		return e.rangeEncoder.FlushInto(dst), nil
+		return e.rangeEncoder.FlushIntoPadded(dst, frameBytes), nil
 	}
 
 	e.encodeSilenceFlag()
@@ -667,7 +667,11 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 
 	e.rng = e.rangeEncoder.FinalRange()
 
-	return e.rangeEncoder.FlushInto(dst), nil
+	// Pad to the size the allocation was derived from (info.totalBits), so the
+	// decoder re-derives the same allocation from the packet it receives. Under
+	// VBR that size is the per-frame target rather than frameBytes, which is
+	// what keeps packet sizes varying.
+	return e.rangeEncoder.FlushIntoPadded(dst, effectiveBytes), nil
 }
 
 func smallEnergySymbol(delta int) uint32 {
