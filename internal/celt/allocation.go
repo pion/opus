@@ -66,6 +66,10 @@ func (d *Decoder) computeAllocation(info *frameSideInfo, bits int) allocationSta
 		nil,
 		0,
 		0,
+		// The decoder reads the skip bits the encoder wrote, so it needs
+		// neither the hysteresis state nor the signal bandwidth.
+		0,
+		0,
 	)
 	state.balance = balance
 
@@ -90,6 +94,8 @@ func computeAllocation(
 	rangeEncoder *rangecoding.Encoder,
 	targetIntensity int,
 	targetDualStereo int,
+	prevCodedBands int,
+	signalBandwidth int,
 ) int {
 	if total < 0 {
 		total = 0
@@ -218,6 +224,8 @@ func computeAllocation(
 		rangeEncoder,
 		targetIntensity,
 		targetDualStereo,
+		prevCodedBands,
+		signalBandwidth,
 	)
 }
 
@@ -247,6 +255,8 @@ func interpolateBitsToPulses(
 	rangeEncoder *rangecoding.Encoder,
 	targetIntensity int,
 	targetDualStereo int,
+	prevCodedBands int,
+	signalBandwidth int,
 ) int {
 	allocationFloor := channelCount << bitResolution
 	stereo := boolIndex(channelCount > 1)
@@ -318,11 +328,32 @@ func interpolateBitsToPulses(
 			if rangeDecoder != nil {
 				skipBit = rangeDecoder.DecodeSymbolLogP(1) != 0
 			} else {
-				// Encoder keeps every band that fits its threshold; emit 1 so
-				// the decoder stops the skip walk here and codedBands stays
-				// at end.
-				skipBit = true
-				rangeEncoder.EncodeSymbolLogP(1, 1)
+				// This decision is the only part of the allocation that is not
+				// mandated by the bitstream: the encoder is free to skip bands
+				// as long as it signals them (libopus celt/rate.c). Skipping a
+				// band whose budget is too thin to code meaningfully frees its
+				// bits for the bands below, which fold into it instead.
+				//
+				// Index mapping against the reference: this loop already
+				// decremented codedBands, so band is the reference's j and
+				// codedBands+1 is its codedBands.
+				depthThreshold := 0
+				if codedBands+1 > 17 {
+					// Hysteresis on the previous frame's band count keeps bands
+					// from oscillating in and out of the stream.
+					depthThreshold = 9
+					if band < prevCodedBands {
+						depthThreshold = 7
+					}
+				}
+				keep := codedBands+1 <= start+2 ||
+					(bandBits > (depthThreshold*bandWidth<<lm<<bitResolution)>>4 && band <= signalBandwidth)
+				skipBit = keep
+				if keep {
+					rangeEncoder.EncodeSymbolLogP(1, 1)
+				} else {
+					rangeEncoder.EncodeSymbolLogP(1, 0)
+				}
 			}
 			if skipBit {
 				codedBands++
