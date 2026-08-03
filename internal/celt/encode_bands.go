@@ -267,7 +267,6 @@ func quantBandMono(
 		}
 		qalloc := int(state.rangeEncoder.TellFrac()) - tell
 		bandBits -= qalloc
-		originalFill := fill
 		delta := 0
 		imid := 0
 		iside := 0
@@ -343,7 +342,7 @@ func quantBandMono(
 				nextLevel,
 				gain*side,
 				lowbandScratch,
-				originalFill>>blocks,
+				fill>>blocks,
 				state,
 				yScratch, absXScratch, signScratch, cwrsScratch,
 			) << collapseShift
@@ -363,7 +362,7 @@ func quantBandMono(
 				nextLevel,
 				gain*side,
 				lowbandScratch,
-				originalFill>>blocks,
+				fill>>blocks,
 				state,
 				yScratch, absXScratch, signScratch, cwrsScratch,
 			) << collapseShift
@@ -584,16 +583,17 @@ func quantBandStereo(
 	qalloc := int(state.rangeEncoder.TellFrac()) - tell
 	bandBits -= qalloc
 
-	originalFill := fill
 	delta := 0
 	imid := 0
 	iside := 0
 	switch itheta {
 	case 0:
 		imid = 32767
+		fill &= (1 << blocks) - 1
 		delta = -16384
 	case 16384:
 		iside = 32767
+		fill &= ((1 << blocks) - 1) << blocks
 		delta = 16384
 	default:
 		imid = bitexactCos(itheta)
@@ -619,7 +619,7 @@ func quantBandStereo(
 		}
 		collapseMask |= quantBandMono(
 			band, y, n, sideBits, spread, blocks, tfChange,
-			nil, remainingBits, lm, nil, 0, gain*side, nil, originalFill>>blocks, state,
+			nil, remainingBits, lm, nil, 0, gain*side, nil, fill>>blocks, state,
 			yScratch[1], absXScratch[1], signScratch[1], cwrsScratch,
 		)
 		if n != 2 {
@@ -636,7 +636,7 @@ func quantBandStereo(
 
 	collapseMask := quantBandMono(
 		band, y, n, sideBits, spread, blocks, tfChange,
-		nil, remainingBits, lm, nil, 0, gain*side, nil, originalFill>>blocks, state,
+		nil, remainingBits, lm, nil, 0, gain*side, nil, fill>>blocks, state,
 		yScratch[1], absXScratch[1], signScratch[1], cwrsScratch,
 	)
 	rebalance = sideBits - (rebalance - *remainingBits)

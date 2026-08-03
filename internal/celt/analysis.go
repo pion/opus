@@ -13,23 +13,34 @@ const preemphasisCoefficient = 0.85000610
 // matching libopus dc_reject (src/opus_encoder.c:479-507).
 const dcBlockCutoffHz = 3.0
 
-// transientRatioThreshold is the minimum ratio between the energy of the
-// second half of the frame and the first half that the detector reports as
-// a transient. It was calibrated empirically against the synthetic fixtures
-// in analysis_test.go.
-const transientRatioThreshold = 1.5
-
 type analysisState struct {
-	prevPCM        [2][]float32
-	preemphasisMem [2]float32
-	dcBlockMem     [2]float32
-	preScratch     [2][]float32
-	mdctInput      [2][]float32
-	transientMDCT  [2][]float32
-	prefilterMem   [2][]float32
-	prefilter      postFilterState
-	prefilterBuf   [2][]float32
-	prefilterOut   [2][]float32
+	prevPCM           [2][]float32
+	preemphasisMem    [2]float32
+	dcBlockMem        [2]float32
+	preScratch        [2][]float32
+	mdctInput         [2][]float32
+	transientMDCT     [2][]float32
+	prefilterMem      [2][]float32
+	prefilter         postFilterState
+	prefilterBuf      [2][]float32
+	prefilterOut      [2][]float32
+	transientProbe    [2][]float32
+	transientEnvelope [2][]float32
+	// transientHistory holds the last shortBlockSampleCount samples of the
+	// DC-blocked + pre-emphasized (but not pitch-whitened) signal, updated by
+	// detectTransient every frame. prevPCM can't serve this role: it's
+	// captured after the pitch pre-filter runs, so it goes whitened whenever
+	// the pre-filter is active, and libopus's own history source for this
+	// (prefilter_mem) is specifically the unwhitened tail.
+	transientHistory [2][]float32
+	// transientDCMem/transientPreMem are the probe's own filter memories,
+	// separate from dcBlockMem/preemphasisMem. detectTransient runs before
+	// analyzeFrame each frame, so borrowing the real memories would only
+	// stay correct if analyzeFrame always ran right after with the same
+	// samples — true in the real encoder, but a landmine for anything that
+	// calls detectTransient on its own (tests included).
+	transientDCMem  [2]float32
+	transientPreMem [2]float32
 }
 
 type analysisResult struct {
@@ -68,6 +79,18 @@ func newAnalysisState() analysisState {
 		prefilterOut: [2][]float32{
 			make([]float32, postfilterHistorySampleCount+maxFrame),
 			make([]float32, postfilterHistorySampleCount+maxFrame),
+		},
+		transientProbe: [2][]float32{
+			make([]float32, shortBlockSampleCount+maxFrame),
+			make([]float32, shortBlockSampleCount+maxFrame),
+		},
+		transientEnvelope: [2][]float32{
+			make([]float32, shortBlockSampleCount+maxFrame),
+			make([]float32, shortBlockSampleCount+maxFrame),
+		},
+		transientHistory: [2][]float32{
+			make([]float32, shortBlockSampleCount),
+			make([]float32, shortBlockSampleCount),
 		},
 	}
 
@@ -189,64 +212,131 @@ func analyzeTransientChannel(
 	}
 }
 
-// detectTransient reports whether any channel of the input PCM contains a
-// transient using a half-frame energy ratio.
-//
-// A mid-frame impulse concentrates energy in the second half of the frame;
-// a steady sine distributes it roughly evenly. A channel is transient when
-// the ratio exceeds transientRatioThreshold; the frame is transient if any
-// channel is. The threshold was chosen against the synthetic fixtures in
-// analysis_test.go (steady sine: 0.92, stereo sine: 1.01, impulse: >>1).
-//
-// The libopus detector (celt_encoder.c: transient_analysis) uses a
-// sub-frame STFT with 6.7 dB/ms forward masking and is more accurate on
-// gradual ramps — known limitation of this simpler approach.
-func detectTransient(pcm [][]float32, _ *analysisState) bool {
-	return debugDetectTransient(pcm) > transientRatioThreshold
+const (
+	// transientForwardDecay/transientBackwardDecay set the post-echo (6.7
+	// dB/ms) and pre-echo (13.9 dB/ms) masking decay of the envelope
+	// follower in transientMaskMetric, matching libopus's non-hybrid
+	// transient_analysis (celt_encoder.c).
+	transientForwardDecay  = 0.0625
+	transientBackwardDecay = 0.875
+	// transientMaskThreshold is libopus's mask_metric>200 cutoff.
+	transientMaskThreshold = 200
+)
+
+// transientInverseTable is libopus's inv_table: 6*64/x, trained on real data
+// to minimize the average error when turning a per-sample masking ratio into
+// a harmonic-mean-friendly weight (celt_encoder.c).
+var transientInverseTable = [128]int{ //nolint:gochecknoglobals
+	255, 255, 156, 110, 86, 70, 59, 51, 45, 40, 37, 33, 31, 28, 26, 25,
+	23, 22, 21, 20, 19, 18, 17, 16, 16, 15, 15, 14, 13, 13, 12, 12,
+	12, 12, 11, 11, 11, 10, 10, 10, 9, 9, 9, 9, 9, 9, 8, 8,
+	8, 8, 8, 7, 7, 7, 7, 7, 7, 6, 6, 6, 6, 6, 6, 6,
+	6, 6, 6, 6, 6, 6, 6, 6, 6, 5, 5, 5, 5, 5, 5, 5,
+	5, 5, 5, 5, 5, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+	4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 3, 3,
+	3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 2,
 }
 
-// debugDetectTransient returns the maximum half-frame energy ratio across
-// channels. Test-only helper used to calibrate transientRatioThreshold
-// against the synthetic fixtures.
-func debugDetectTransient(pcm [][]float32) float64 {
-	if len(pcm) == 0 || len(pcm[0]) < 4 {
+// detectTransient reports whether the frame needs short MDCT blocks, mirroring
+// libopus's transient_analysis (celt_encoder.c, float build). It runs its own
+// DC-block + pre-emphasis pass over dedicated state (transientDCMem/PreMem/
+// History), independent of dcBlockMem/preemphasisMem/prevPCM, so it works the
+// same whether or not analyzeFrame follows it.
+//
+// tone_freq/toneishness (the low-frequency-tone guard) and allow_weak_transients
+// (hybrid low-bitrate mode) aren't ported — pion has no tonality analysis or
+// hybrid mode yet, matching how signalBandwidth defaults to end-1 elsewhere.
+func detectTransient(pcm [][]float32, state *analysisState) bool {
+	return transientFrameMetric(pcm, state) > transientMaskThreshold
+}
+
+func transientFrameMetric(pcm [][]float32, state *analysisState) int {
+	if len(pcm) == 0 {
 		return 0
 	}
 
-	frameSize := len(pcm[0])
-	half := frameSize / 2
-
-	var maxRatio float64
+	maskMetric := 0
 	for ch := range pcm {
-		// Skip the first and last shortBlockSampleCount samples: those are
-		// the MDCT overlap regions shared with the neighboring frames and
-		// don't belong to this frame's "clean" content.
-		start := shortBlockSampleCount
-		if start >= half {
-			continue
-		}
-		end := frameSize - shortBlockSampleCount
-		if end <= start {
-			continue
+		if len(pcm[ch]) == 0 {
+			return 0
 		}
 
-		var e1, e2 float64
-		for i := start; i < half; i++ {
-			x := float64(pcm[ch][i]) //nolint:gosec // bounds checked: i < half <= frameSize = len(pcm[ch])
-			e1 += x * x
-		}
-		for i := half; i < end; i++ {
-			x := float64(pcm[ch][i]) //nolint:gosec // bounds checked: i < end <= frameSize = len(pcm[ch])
-			e2 += x * x
-		}
+		n := shortBlockSampleCount + len(pcm[ch])
+		probe := state.transientProbe[ch][:n]
+		copy(probe, state.transientHistory[ch])
 
-		ratio := e2 / math.Max(e1, 1e-30)
-		if ratio > maxRatio {
-			maxRatio = ratio
+		tail := probe[shortBlockSampleCount:]
+		copy(tail, pcm[ch])
+		applyDCBlock(tail, sampleRate, &state.transientDCMem[ch])
+		applyPreemphasis(tail, tail, &state.transientPreMem[ch])
+		copy(state.transientHistory[ch], tail[len(tail)-shortBlockSampleCount:])
+
+		if m := transientMaskMetric(probe, state.transientEnvelope[ch][:n]); m > maskMetric {
+			maskMetric = m
 		}
 	}
 
-	return maxRatio
+	return maskMetric
+}
+
+// transientMaskMetric returns libopus's post/pre-echo masking metric for one
+// channel: the ratio of the frame's energy over the harmonic mean of a
+// masking envelope built from a 2nd-order high-passed version of the signal.
+// scratch must be at least len(signal) long; it's used as scratch and left
+// with unspecified contents on return.
+func transientMaskMetric(signal, scratch []float32) int {
+	n := len(signal)
+	tmp := scratch[:n]
+
+	var mem0, mem1 float32
+	for i, x := range signal {
+		y := mem0 + x
+		prevMem0 := mem0
+		mem0 = mem0 - x + 0.5*mem1
+		mem1 = x - prevMem0
+		tmp[i] = y
+	}
+	// The first few samples are unreliable since the filter memory hasn't
+	// propagated yet.
+	clear(tmp[:min(12, n)])
+
+	len2 := n / 2
+	if len2 < 18 {
+		return 0
+	}
+
+	var mean float32
+	mem0 = 0
+	for i := range len2 {
+		x2 := tmp[2*i]*tmp[2*i] + tmp[2*i+1]*tmp[2*i+1]
+		mean += x2
+		mem0 = x2 + (1-transientForwardDecay)*mem0
+		tmp[i] = transientForwardDecay * mem0
+	}
+
+	mem0 = 0
+	var maxE float32
+	for i := len2 - 1; i >= 0; i-- {
+		mem0 = tmp[i] + transientBackwardDecay*mem0
+		tmp[i] = (1 - transientBackwardDecay) * mem0
+		maxE = max(maxE, tmp[i])
+	}
+
+	// Frame energy is the geometric mean of the average envelope and half the
+	// peak — a compromise with the older, simpler detector this replaces.
+	frameEnergy := float32(math.Sqrt(float64(mean * maxE * 0.5 * float32(len2))))
+	norm := float32(len2) / (1e-15 + frameEnergy)
+
+	unmask := 0
+	for i := 12; i < len2-5; i += 4 {
+		id := int(math.Floor(float64(64 * norm * (tmp[i] + 1e-15))))
+		id = min(max(id, 0), 127)
+		unmask += transientInverseTable[id]
+	}
+
+	// Compensate for the 1/4th sampling above and the factor of 6 baked into
+	// the inverse table.
+	return 64 * unmask * 4 / (6 * (len2 - 17))
 }
 
 func applyPreemphasis(in []float32, out []float32, mem *float32) {
