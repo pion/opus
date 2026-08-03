@@ -111,9 +111,15 @@ func TestEncodeFloat32StereoRoundTrip(t *testing.T) {
 	decoder, err := NewDecoderWithOutput(48000, 2)
 	require.NoError(t, err)
 
-	pcm := testEncoderStereoSineFloat32()
 	packet := make([]byte, 256)
 
+	// Warm up the encoder on a phase-continuous steady tone first so the
+	// measured frame isn't the cold-start onset, which the transient detector
+	// correctly flags as transient and which this test isn't meant to exercise.
+	_, err = encoder.EncodeFloat32(testEncoderStereoSineFloat32At(0), packet)
+	require.NoError(t, err)
+
+	pcm := testEncoderStereoSineFloat32At(encoderTestFrameSampleCount)
 	n, err := encoder.EncodeFloat32(pcm, packet)
 	require.NoError(t, err)
 	require.Positive(t, n)
@@ -791,10 +797,18 @@ func testEncoderSineFloat32() []float32 {
 }
 
 func testEncoderStereoSineFloat32() []float32 {
+	return testEncoderStereoSineFloat32At(0)
+}
+
+// testEncoderStereoSineFloat32At generates a frame of the same dual-tone
+// stereo signal starting at sampleOffset, so consecutive frames stay
+// phase-continuous instead of restarting the tone from zero each time.
+func testEncoderStereoSineFloat32At(sampleOffset int) []float32 {
 	pcm := make([]float32, encoderTestFrameSampleCount*2)
 	for i := range encoderTestFrameSampleCount {
-		left := float32(math.Sin(2 * math.Pi * 440 * float64(i) / 48000))
-		right := float32(math.Sin(2 * math.Pi * 660 * float64(i) / 48000))
+		sample := sampleOffset + i
+		left := float32(math.Sin(2 * math.Pi * 440 * float64(sample) / 48000))
+		right := float32(math.Sin(2 * math.Pi * 660 * float64(sample) / 48000))
 		pcm[i*2] = left
 		pcm[i*2+1] = right
 	}
