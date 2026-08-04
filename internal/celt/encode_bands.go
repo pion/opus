@@ -262,7 +262,7 @@ func quantBandMono(
 		itheta := 0
 		if qn != 1 {
 			thetaSym = quantizeMonoSplitTheta(x, y, qn)
-			encodeBandThetaMono(thetaSym, qn, blocks, state.rangeEncoder)
+			encodeBandThetaMono(thetaSym, qn, originalBlocks, state.rangeEncoder)
 			itheta = thetaSym * 16384 / qn
 		}
 		qalloc := int(state.rangeEncoder.TellFrac()) - tell
