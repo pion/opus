@@ -217,6 +217,7 @@ func quantBandMono(
 			lowband = lowbandScratch[:n]
 		}
 		for k := range recombine {
+			haar1(x, n>>k, 1<<k)
 			if lowband != nil {
 				haar1(lowband, n>>k, 1<<k)
 			}
@@ -225,6 +226,7 @@ func quantBandMono(
 		blocks >>= recombine
 		nPerBlock <<= recombine
 		for (nPerBlock&1) == 0 && tfChange < 0 {
+			haar1(x, nPerBlock, blocks)
 			if lowband != nil {
 				haar1(lowband, nPerBlock, blocks)
 			}
@@ -236,15 +238,25 @@ func quantBandMono(
 		}
 		originalBlocks = blocks
 	}
-	if level == 0 && originalBlocks > 1 && lowband != nil {
-		tmpState := bandDecodeState{tmpScratch: state.floatScratch(len(lowband))}
+	if level == 0 && originalBlocks > 1 {
+		tmpState := bandDecodeState{tmpScratch: state.floatScratch(n)}
 		deinterleaveHadamard(
-			lowband,
+			x,
 			nPerBlock>>recombine,
 			originalBlocks<<recombine,
 			longBlocks,
 			&tmpState,
 		)
+		if lowband != nil {
+			lowbandState := bandDecodeState{tmpScratch: state.floatScratch(len(lowband))}
+			deinterleaveHadamard(
+				lowband,
+				nPerBlock>>recombine,
+				originalBlocks<<recombine,
+				longBlocks,
+				&lowbandState,
+			)
+		}
 	}
 	if lm != -1 && shouldSplitBand(band, lm, bandBits) && n > 2 {
 		n >>= 1
