@@ -467,6 +467,8 @@ func quantizeMonoSplitTheta(x []float32, y []float32, qn int) int {
 		return 0
 	}
 
+	// The mono split calls libopus stereo_itheta with stereo=0
+	// (celt/bands.c:1213), which uses the two halves' own energies.
 	var ex, ey float64
 	for i := range x {
 		ex += float64(x[i] * x[i])
@@ -571,6 +573,10 @@ func quantBandStereo(
 	if qn != 1 {
 		thetaSym = quantizeStereoBandTheta(x, y, qn)
 		encodeBandTheta(thetaSym, qn, n, true, blocks, state.rangeEncoder)
+		// The two halves are quantized as mid/side from here on; stereoMerge
+		// at the end of this function undoes it (libopus compute_theta,
+		// celt/bands.c:866-871).
+		stereoSplit(x, y, n)
 		itheta = thetaSym * 16384 / qn
 	} else if bandBits > 2<<bitResolution && *remainingBits > 2<<bitResolution {
 		inner := float32(0)
@@ -686,15 +692,32 @@ func encodeBandThetaStereoLarge(symbol int, qn int, rangeEncoder *rangecoding.En
 	rangeEncoder.EncodeCumulative(low, high, total)
 }
 
+// stereoSplit rotates a left/right band pair into mid/side, mirroring
+// libopus stereo_split (celt/bands.c).
+func stereoSplit(x []float32, y []float32, n int) {
+	const invSqrt2 = 0.70710678
+	for i := range n {
+		left := invSqrt2 * x[i]
+		right := invSqrt2 * y[i]
+		x[i] = left + right
+		y[i] = right - left
+	}
+}
+
 func quantizeStereoBandTheta(x []float32, y []float32, qn int) int {
 	if qn <= 1 {
 		return 0
 	}
 
+	// libopus stereo_itheta measures the angle between mid and side, not
+	// between left and right: theta encodes inter-channel correlation, and
+	// L/R energies would measure stereo balance instead.
 	var ex, ey float64
 	for i := range x {
-		ex += float64(x[i] * x[i])
-		ey += float64(y[i] * y[i])
+		mid := float64(x[i]) + float64(y[i])
+		side := float64(x[i]) - float64(y[i])
+		ex += mid * mid
+		ey += side * side
 	}
 	if ex+ey <= 1e-30 {
 		return 0
