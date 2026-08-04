@@ -463,6 +463,54 @@ func TestEncodeFrameTransientNoRegressionNonTransient(t *testing.T) {
 	assert.LessOrEqual(t, len(data2), frameBytes)
 }
 
+func TestAntiCollapseConsecutiveTransientHysteresis(t *testing.T) {
+	// libopus only keeps anti-collapse on for the first two transient frames
+	// in a row (celt_encoder.c st->consec_transient), then leaves it off until
+	// a non-transient frame resets the run. Verify the counter follows that
+	// pattern and that the decoder stays in sync regardless of the bit value.
+	encoder := NewEncoder()
+	decoder := NewDecoder()
+
+	frameSampleCount := shortBlockSampleCount << maxLM
+	frameBytes := 60
+
+	impulse := make([]float32, frameSampleCount)
+	impulse[frameSampleCount/2] = 1.0
+
+	for frame, wantConsecTransient := range []int{1, 2, 3, 4} {
+		data := encodeFrame(t, &encoder, [][]float32{impulse}, frameBytes)
+		require.NotEmpty(t, data, "frame %d", frame)
+		assert.Equal(t, wantConsecTransient, encoder.consecTransient, "consecTransient after frame %d", frame)
+
+		out := make([]float32, frameSampleCount)
+		require.NoError(t, decoder.Decode(data, out, false, 1, frameSampleCount, 0, maxBands), "frame %d", frame)
+		assert.Equal(t, encoder.FinalRange(), decoder.FinalRange(), "range coder out of sync at frame %d", frame)
+	}
+
+	// A phase-continuous steady tone: the first frame is itself an onset (a
+	// real amplitude step from the impulse frames' near-silent tail), so it
+	// stays transient too — the run only breaks once the tone has settled.
+	steadyTone := func(sampleOffset int) []float32 {
+		steady := make([]float32, frameSampleCount)
+		for i := range steady {
+			steady[i] = float32(math.Sin(2 * math.Pi * 440 * float64(sampleOffset+i) / sampleRate))
+		}
+
+		return steady
+	}
+
+	data := encodeFrame(t, &encoder, [][]float32{steadyTone(0)}, frameBytes)
+	require.NotEmpty(t, data)
+
+	data = encodeFrame(t, &encoder, [][]float32{steadyTone(frameSampleCount)}, frameBytes)
+	require.NotEmpty(t, data)
+	assert.Equal(t, 0, encoder.consecTransient, "a settled non-transient frame must reset the run")
+
+	out := make([]float32, frameSampleCount)
+	require.NoError(t, decoder.Decode(data, out, false, 1, frameSampleCount, 0, maxBands))
+	assert.Equal(t, encoder.FinalRange(), decoder.FinalRange(), "range coder out of sync after reset frame")
+}
+
 func assertStereoFinalRangeMatch(t *testing.T, frameBytes int) {
 	t.Helper()
 
