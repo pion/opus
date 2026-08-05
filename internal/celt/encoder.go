@@ -52,6 +52,10 @@ type Encoder struct {
 	// frame", which the update below seeds directly instead of clamping.
 	lastCodedBands int
 	prevLogBandAmp [2][maxBands]float32
+	// consecTransient counts consecutive transient frames (st->consec_transient
+	// in libopus celt_encoder.c) — anti-collapse only fires for the first two
+	// in a row.
+	consecTransient int
 
 	// Application mode plumbing — set by root encoder via setter methods.
 	vbr            bool
@@ -119,6 +123,7 @@ func (e *Encoder) Reset() {
 	e.prevSpreadDecision = defaultSpreadDecision
 	e.prevIntensityBand = 0
 	e.lastCodedBands = 0
+	e.consecTransient = 0
 	e.analysis.prefilter = postFilterState{}
 
 	e.vbrReservoir = 0
@@ -665,9 +670,16 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 
 	if info.antiCollapseRsv > 0 {
 		// RFC 6716 §4.3.5 puts one raw tail bit here right after the band
-		// residuals; the decoder reads it before finalizeFineEnergy. I always
-		// write 0 — the noise injection it controls is left for a later pass.
-		e.rangeEncoder.EncodeRawBits(1, 0)
+		// residuals; the decoder reads it before finalizeFineEnergy. libopus
+		// only keeps anti-collapse on for the first two transient frames in a
+		// row (celt_encoder.c consec_transient), not every transient frame.
+		antiCollapseOn := e.consecTransient < 2
+		e.rangeEncoder.EncodeRawBits(1, uint32(boolIndex(antiCollapseOn)))
+	}
+	if info.transient {
+		e.consecTransient++
+	} else {
+		e.consecTransient = 0
 	}
 
 	bitsLeft := int(info.totalBits) - int(e.rangeEncoder.Tell())
