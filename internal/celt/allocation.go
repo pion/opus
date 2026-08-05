@@ -34,6 +34,9 @@ type allocationState struct {
 type dynallocResult struct {
 	offsets      [maxBands]int
 	spreadWeight [maxBands]int
+	// importance weights each band in tfAnalysis's Viterbi cost, so bands
+	// that stand out from their neighbors dominate the resolution choice.
+	importance   [maxBands]int
 	maxDepth     float32
 	totBoostBits int
 }
@@ -908,9 +911,15 @@ func dynallocAnalysis(
 	}
 
 	if effectiveBytes < 30+5*lm {
+		var flat [maxBands]int
+		for band := range flat {
+			flat[band] = 13
+		}
+
 		return dynallocResult{
 			offsets:      offsets,
 			spreadWeight: spreadWeight,
+			importance:   flat,
 			maxDepth:     maxDepth,
 			totBoostBits: 0,
 		}
@@ -1025,6 +1034,19 @@ func dynallocAnalysis(
 		}
 	}
 
+	// importance mirrors libopus dynalloc_analysis: bands whose energy sits
+	// well above their masking follower matter more when tfAnalysis weighs
+	// its Viterbi cost. celt_exp2_db is celt_exp2 in the float build, so this
+	// stays in log2 units like the rest of pion's energies.
+	var importance [maxBands]int
+	for band := range importance {
+		importance[band] = 13
+	}
+	for band := startBand; band < endBand; band++ {
+		importance[band] = int(math.Floor(0.5 +
+			13*math.Pow(2, float64(minFloat32(combined[band], 4)))))
+	}
+
 	// Halve non-transient frames (CBR path); boost low bands, reduce high.
 	if !isTransient {
 		for band := startBand; band < endBand; band++ {
@@ -1098,6 +1120,7 @@ func dynallocAnalysis(
 	return dynallocResult{
 		offsets:      offsets,
 		spreadWeight: spreadWeight,
+		importance:   importance,
 		maxDepth:     maxDepth,
 		totBoostBits: totBoostBits,
 	}

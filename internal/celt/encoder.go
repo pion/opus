@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
-//nolint:gosec // G115/G602: integer conversions are bounded by CELT frame and band sizes.
+//nolint:gocognit,gosec // G115/G602: bounded by CELT frame/band sizes; EncodeFrame mirrors the reference flow.
 package celt
 
 import (
@@ -252,10 +252,18 @@ func (e *Encoder) encodeTimeFrequencyChanges(info *frameSideInfo) {
 		budget--
 	}
 
+	// tf_change is delta-coded against the previous band, so only transitions
+	// cost bits (libopus tf_encode).
+	curr := 0
+	tfChanged := 0
 	for band := info.startBand; band < info.endBand; band++ {
 		if tell+uint(logP) <= budget {
-			e.rangeEncoder.EncodeSymbolLogP(uint(logP), 0)
+			e.rangeEncoder.EncodeSymbolLogP(uint(logP), uint32(info.tfChange[band]^curr))
 			tell = e.rangeEncoder.Tell()
+			curr = info.tfChange[band]
+			tfChanged |= curr
+		} else {
+			info.tfChange[band] = curr
 		}
 
 		if info.transient {
@@ -266,17 +274,21 @@ func (e *Encoder) encodeTimeFrequencyChanges(info *frameSideInfo) {
 	}
 
 	table := tfSelectTable[info.lm]
-	if tfSelectReserved &&
-		table[4*boolIndex(info.transient)] !=
-			table[4*boolIndex(info.transient)+2] {
-		e.rangeEncoder.EncodeSymbolLogP(1, 0)
+	base := 4 * boolIndex(info.transient)
+	// Only worth signaling tf_select when the two tables differ for the
+	// transitions this frame actually used.
+	if tfSelectReserved && table[base+tfChanged] != table[base+2+tfChanged] {
+		e.rangeEncoder.EncodeSymbolLogP(1, uint32(info.tfSelect))
+	} else {
+		info.tfSelect = 0
 	}
+
 	// decodeTimeFrequencyChanges remaps the raw tf_change bits through Tables
 	// 60-63 (RFC 6716 §4.3.1) before handing info to quantAllBands. I have to
 	// do the same here; without it the encoder passes tfChange=0 while the
 	// decoder sees tfChange=3 on transient frames, desynchronising the range coder.
 	for band := info.startBand; band < info.endBand; band++ {
-		info.tfChange[band] = int(table[4*boolIndex(info.transient)+info.tfChange[band]])
+		info.tfChange[band] = int(table[base+2*info.tfSelect+info.tfChange[band]])
 	}
 }
 
@@ -600,10 +612,9 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 	}
 	e.encodeCoarseEnergy(&info, targetLogE)
 
-	e.encodeTimeFrequencyChanges(&info)
-	// Compute dynalloc offsets and spread_weight BEFORE the spread decision,
-	// because spread_weight feeds spreadingDecision (libopus computes
-	// dynalloc_analysis before spreading_decision).
+	// Compute dynalloc offsets, spread_weight and importance BEFORE the spread
+	// and tf decisions: spread_weight feeds spreadingDecision and importance
+	// feeds tfAnalysis (libopus runs dynalloc_analysis first).
 	effectiveBytes := frameBytes
 	dr := dynallocAnalysis(
 		analysis.logBandAmp, e.prevLogBandAmp,
@@ -612,6 +623,26 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 	)
 	offsets := dr.offsets
 	spreadWeight := dr.spreadWeight
+
+	// libopus disables variable tf resolution for very small frames; its
+	// fallback is tf_res = isTransient for every band, not zero.
+	if effectiveBytes >= 15*info.channelCount && e.complexity >= 2 {
+		normalized := normaliseBandsForEncoding(
+			&info, analysis.mdct[0], analysis.logBandAmp[0], e.normalisedBands[0][:0])
+		lambda := max(80, 20480/effectiveBytes+2)
+		// tfEstimate comes out of libopus's transient_analysis, which pion's
+		// detectTransient does not return; 0 is the value libopus starts from.
+		info.tfSelect = tfAnalysis(
+			normalized, info.lm, info.startBand, info.endBand, info.transient,
+			lambda, 0, 0, len(analysis.mdct[0]), &dr.importance, &info.tfChange,
+		)
+	} else {
+		for band := info.startBand; band < info.endBand; band++ {
+			info.tfChange[band] = boolIndex(info.transient)
+		}
+		info.tfSelect = 0
+	}
+	e.encodeTimeFrequencyChanges(&info)
 
 	// libopus only runs the full spreading_decision() estimator when
 	// complexity>=3 and the frame has long blocks and enough of a byte
