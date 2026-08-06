@@ -18,6 +18,10 @@ type bandEncodeState struct {
 	norm           []float32
 	lowbandScratch []float32
 	collapseMasks  []byte
+	// bandEnergy holds the linear per-band amplitude of both channels, which
+	// intensityStereo weighs its downmix by. libopus hands quant_all_bands the
+	// unquantized bandE from compute_band_energies, so this mirrors that.
+	bandEnergy [2][maxBands]float32
 }
 
 func (s *bandEncodeState) floatScratch(n int) []float32 {
@@ -585,11 +589,16 @@ func quantBandStereo(
 	if qn != 1 {
 		thetaSym = quantizeStereoBandTheta(x, y, qn)
 		encodeBandTheta(thetaSym, qn, n, true, blocks, state.rangeEncoder)
-		// The two halves are quantized as mid/side from here on; stereoMerge
-		// at the end of this function undoes it (libopus compute_theta,
-		// celt/bands.c:866-871).
-		stereoSplit(x, y, n)
 		itheta = thetaSym * 16384 / qn
+		// libopus compute_theta (celt/bands.c:866-871): a zero angle means the
+		// side carries nothing, so the band collapses to an energy-weighted
+		// downmix instead of being rotated. Otherwise the two halves are coded
+		// as mid/side, which stereoMerge undoes at the end of this function.
+		if itheta == 0 {
+			intensityStereo(x, y, n, state.bandEnergy[0][band], state.bandEnergy[1][band])
+		} else {
+			stereoSplit(x, y, n)
+		}
 	} else if bandBits > 2<<bitResolution && *remainingBits > 2<<bitResolution {
 		inner := float32(0)
 		for i := range n {
@@ -702,6 +711,19 @@ func encodeBandThetaStereoLarge(symbol int, qn int, rangeEncoder *rangecoding.En
 		high = low + 1
 	}
 	rangeEncoder.EncodeCumulative(low, high, total)
+}
+
+// intensityStereo collapses a band to an energy-weighted mono downmix, which
+// is what libopus does when theta lands on zero: all the energy is in the mid,
+// so the side is not worth coding (celt/bands.c intensity_stereo).
+func intensityStereo(x []float32, y []float32, n int, left, right float32) {
+	norm := float32(1e-15) + float32(math.Sqrt(float64(1e-15+left*left+right*right)))
+	a1 := left / norm
+	a2 := right / norm
+	for i := range n {
+		x[i] = a1*x[i] + a2*y[i]
+		// The side is not encoded, so there is nothing to write back to y.
+	}
 }
 
 // stereoSplit rotates a left/right band pair into mid/side, mirroring
