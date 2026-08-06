@@ -296,12 +296,14 @@ func shouldCancelPrefilter(
 		copy(src[postfilterHistorySampleCount:], pre)
 		before[ch] = measureEnergy(src, postfilterHistorySampleCount, len(pre))
 		dst := state.prefilterOut[ch][:len(src)]
+		// Must mirror what analyzeFrame will actually apply, crossfade
+		// endpoints included, or the decision is about a different filter.
 		applyPrefilter(
 			dst, src,
-			state.prefilter.oldPeriod, period,
+			state.prefilter.period, period,
 			len(pre),
-			state.prefilter.oldGain, gain,
-			state.prefilter.oldTapset, tapset,
+			state.prefilter.gain, gain,
+			state.prefilter.tapset, tapset,
 		)
 		after[ch] = measureEnergy(dst, postfilterHistorySampleCount, len(pre))
 	}

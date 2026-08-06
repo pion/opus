@@ -139,23 +139,28 @@ func analyzeFrame(
 
 		// Apply pitch pre-filter (whitening) before MDCT, mirroring
 		// libopus run_prefilter. Reuses combFilter with negated gains.
+		src := state.prefilterBuf[ch][:postfilterHistorySampleCount+len(pre)]
+		copy(src, state.prefilterMem[ch])
+		copy(src[postfilterHistorySampleCount:], pre)
 		if prefilterEnabled {
-			src := state.prefilterBuf[ch][:postfilterHistorySampleCount+len(pre)]
-			copy(src, state.prefilterMem[ch])
-			copy(src[postfilterHistorySampleCount:], pre)
 			dst := state.prefilterOut[ch][:len(src)]
+			// The crossfade starts from the previous frame's filter, which is
+			// still in prefilter.period/gain/tapset here — updatePrefilterState
+			// only rotates them in after the frame is encoded.
 			applyPrefilter(
 				dst, src,
-				state.prefilter.oldPeriod, prefilterPeriod,
+				state.prefilter.period, prefilterPeriod,
 				len(pre),
-				state.prefilter.oldGain, prefilterGain,
-				state.prefilter.oldTapset, prefilterTapset,
+				state.prefilter.gain, prefilterGain,
+				state.prefilter.tapset, prefilterTapset,
 			)
-			// Carry the unfiltered tail, since the taps read the input signal
-			// (libopus keeps prefilter_mem from pre, not from the output).
-			copy(state.prefilterMem[ch], src[len(pre):len(pre)+postfilterHistorySampleCount])
 			copy(pre, dst[postfilterHistorySampleCount:])
 		}
+		// The history advances every frame, filtered or not (libopus updates
+		// prefilter_mem outside the pf_on branch); otherwise the comb filter
+		// picks up stale samples whenever it switches back on. It carries the
+		// unfiltered signal, since the taps read the input, not the output.
+		copy(state.prefilterMem[ch], src[len(pre):len(pre)+postfilterHistorySampleCount])
 
 		if useShortBlocks {
 			analyzeTransientChannel(
