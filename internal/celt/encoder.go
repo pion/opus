@@ -389,10 +389,6 @@ func (e *Encoder) updatePrefilterState(
 	info *frameSideInfo, enabled bool,
 	period int, gain float32, qq int, tapset int,
 ) {
-	e.analysis.prefilter.oldPeriod = e.analysis.prefilter.period
-	e.analysis.prefilter.oldGain = e.analysis.prefilter.gain
-	e.analysis.prefilter.oldTapset = e.analysis.prefilter.tapset
-
 	if enabled {
 		e.analysis.prefilter.period = period
 		e.analysis.prefilter.gain = gain

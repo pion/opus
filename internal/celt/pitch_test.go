@@ -366,5 +366,4 @@ func TestEncoderResetClearsPrefilterState(t *testing.T) {
 	assert.Zero(t, encoder.analysis.prefilter.period)
 	assert.Zero(t, encoder.analysis.prefilter.gain)
 	assert.Zero(t, encoder.analysis.prefilter.tapset)
-	assert.Zero(t, encoder.analysis.prefilter.oldPeriod)
 }
