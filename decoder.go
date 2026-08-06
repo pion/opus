@@ -47,6 +47,7 @@ type Decoder struct {
 	silkRedundancyFades    []silkRedundancyFade
 	silkCeltAdditions      []silkCeltAddition
 	floatBuffer            []float32
+	softClipMem            softClipMemory
 	plcBuffer              []float32
 	plcOutputBuffer        []float32
 	sampleRate             int
@@ -112,6 +113,7 @@ func (d *Decoder) Init(sampleRate, channels int) error {
 	d.silkResampler = [2]silkresample.Resampler{}
 	d.silkResamplerBandwidth = 0
 	d.silkResamplerChannels = 0
+	d.softClipMem = softClipMemory{}
 	d.hybridSilkResampler = [2]silkresample.Resampler{}
 	d.hybridSilkChannels = 0
 	d.clearSilkRedundancyTransitions()
@@ -1538,6 +1540,11 @@ func (d *Decoder) Decode(in, out []byte) (bandwidth Bandwidth, isStereo bool, er
 	if err != nil {
 		return
 	}
+
+	// libopus soft-clips on the integer path only (OPTIONAL_CLIP in
+	// src/opus_decoder.c), so an overshoot lands as a bent peak rather than a
+	// hard-clipped one; DecodeFloat32 leaves that choice to the caller.
+	softClip(d.floatBuffer[:sampleCount*d.channels], d.channels, &d.softClipMem)
 
 	err = bitdepth.ConvertFloat32LittleEndianToSigned16LittleEndian(
 		d.floatBuffer[:sampleCount*d.channels],
