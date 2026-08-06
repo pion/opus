@@ -5,6 +5,7 @@
 package celt
 
 import (
+	"math"
 	"math/bits"
 
 	"github.com/pion/opus/internal/rangecoding"
@@ -688,6 +689,12 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 		norm:           e.bandNorm[:0],
 		lowbandScratch: e.bandLowScratch[:0],
 		collapseMasks:  e.bandCollapseMasks[:0],
+	}
+	for ch := range info.channelCount {
+		for band := info.startBand; band < info.endBand; band++ {
+			bandState.bandEnergy[ch][band] = float32(math.Pow(2,
+				float64(analysis.logBandAmp[ch][band]+energyMeans[band])))
+		}
 	}
 	shape0 := normaliseBandsForEncoding(&info, analysis.mdct[0], analysis.logBandAmp[0], e.normalisedBands[0][:0])
 	if info.channelCount == 2 {
