@@ -180,33 +180,37 @@ func TestEncodePostFilterSkipsWhenStartBandNotZero(t *testing.T) {
 
 func TestPrefilterDecisionLowBitrate(t *testing.T) {
 	// frameBytes <= 12*channels → disabled.
-	enabled, _, _ := prefilterDecision(240, 0.9, 240, 0, 10, 1, false, 256, 1)
+	enabled, _, _ := prefilterDecision(240, 0.9, 240, 0, 10, 1, 0, 256, 1)
 	assert.False(t, enabled, "should be disabled at low bitrate")
 }
 
 func TestPrefilterDecisionWeakGain(t *testing.T) {
 	// gain < threshold (0.2) → disabled.
-	enabled, _, _ := prefilterDecision(240, 0.1, 240, 0, 100, 1, false, 800, 1)
+	enabled, _, _ := prefilterDecision(240, 0.1, 240, 0, 100, 1, 0, 800, 1)
 	assert.False(t, enabled, "should be disabled with weak gain")
 }
 
 func TestPrefilterDecisionStrongGain(t *testing.T) {
 	// Strong gain, stable pitch, enough bits → enabled.
-	enabled, qq, quantized := prefilterDecision(240, 0.8, 240, 0, 100, 1, false, 800, 1)
+	enabled, qq, quantized := prefilterDecision(240, 0.8, 240, 0, 100, 1, 0, 800, 1)
 	assert.True(t, enabled)
 	assert.Greater(t, qq, 0)
 	assert.Greater(t, quantized, float32(0))
 }
 
 func TestPrefilterDecisionTransientPitchChange(t *testing.T) {
-	// Transient with large pitch change → disabled.
-	enabled, _, _ := prefilterDecision(100, 0.9, 500, 0, 100, 1, true, 800, 1)
-	assert.False(t, enabled, "should be disabled on transient with pitch jump")
+	// Strong transient (tfEstimate > 0.98) with large pitch change → disabled.
+	enabled, _, _ := prefilterDecision(100, 0.9, 500, 0, 100, 1, 0.99, 800, 1)
+	assert.False(t, enabled, "should be disabled on strong transient with pitch jump")
+
+	// The same pitch jump on a milder transient only raises the gain threshold.
+	enabled, _, _ = prefilterDecision(100, 0.9, 500, 0, 100, 1, 0.5, 800, 1)
+	assert.True(t, enabled, "a mild transient should not kill the prefilter outright")
 }
 
 func TestPrefilterDecisionBitBudgetGate(t *testing.T) {
 	// tell+16 > totalBits → disabled.
-	enabled, _, _ := prefilterDecision(240, 0.9, 240, 0, 100, 1, false, 10, 1)
+	enabled, _, _ := prefilterDecision(240, 0.9, 240, 0, 100, 1, 0, 10, 1)
 	assert.False(t, enabled, "should be disabled when not enough bits for header")
 }
 

@@ -185,7 +185,7 @@ func tapsetFromSpread(spread int) int {
 //nolint:cyclop // Mirrors libopus threshold chain with multiple conditions.
 func prefilterDecision(
 	period int, gain float32, prevPeriod int, prevGain float32,
-	frameBytes, channels int, transient bool,
+	frameBytes, channels int, tfEstimate float32,
 	totalBits, tell uint,
 ) (enabled bool, qq int, quantizedGain float32) {
 	// Bitrate gate: need enough bytes for the ~15-bit post-filter header.
@@ -197,15 +197,16 @@ func prefilterDecision(
 		return false, 0, 0
 	}
 
-	// Strong transient without pitch continuity → disable.
-	if transient && absInt(period-prevPeriod)*10 > period {
-		return false, 0, 0
-	}
-
 	// Gain threshold: base 0.2, adjusted for continuity and bitrate.
 	threshold := float32(0.2)
 	if absInt(period-prevPeriod)*10 > period {
 		threshold += 0.2
+		// Only a very strong transient kills the prefilter outright; the
+		// threshold bump above already handles the merely-discontinuous
+		// case (celt_encoder.c:1503-1508).
+		if tfEstimate > 0.98 {
+			return false, 0, 0
+		}
 	}
 	if frameBytes < 25 {
 		threshold += 0.1

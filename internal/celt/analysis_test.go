@@ -158,7 +158,7 @@ func TestDetectTransientSteadySine(t *testing.T) {
 	}
 	warmTransientState(&state, gen)
 
-	metric := transientFrameMetric(gen(4), &state)
+	metric, _ := transientFrameMetric(gen(4), &state)
 	t.Logf("steady 440 Hz sine metric=%d", metric)
 	assert.LessOrEqual(t, metric, transientMaskThreshold,
 		"a steady tone should not be detected as transient once history settles (metric=%d)", metric)
@@ -182,7 +182,7 @@ func TestDetectTransientWhiteNoiseNotFlagged(t *testing.T) {
 	}
 	warmTransientState(&state, gen)
 
-	metric := transientFrameMetric(gen(4), &state)
+	metric, _ := transientFrameMetric(gen(4), &state)
 	t.Logf("white noise metric=%d", metric)
 	assert.LessOrEqual(t, metric, transientMaskThreshold,
 		"stationary broadband noise should not be detected as transient (metric=%d)", metric)
@@ -203,7 +203,7 @@ func TestDetectTransientSpikeAfterSteadySignal(t *testing.T) {
 
 	spike := gen(4)
 	spike[0][480] += 1.0
-	metric := transientFrameMetric(spike, &state)
+	metric, _ := transientFrameMetric(spike, &state)
 	t.Logf("spike-after-steady metric=%d", metric)
 	assert.Greater(t, metric, transientMaskThreshold,
 		"a sharp mid-frame spike after steady content should be detected as transient (metric=%d)", metric)
@@ -224,7 +224,7 @@ func TestDetectTransientStereoSpikeOnOneChannel(t *testing.T) {
 
 	frame := gen(4)
 	frame[0][480] += 1.0 // right channel stays silent
-	metric := transientFrameMetric(frame, &state)
+	metric, _ := transientFrameMetric(frame, &state)
 	assert.Greater(t, metric, transientMaskThreshold,
 		"a spike on either stereo channel should be detected, even with the other channel silent (metric=%d)", metric)
 }
@@ -239,26 +239,28 @@ func TestDetectTransientColdStart(t *testing.T) {
 	for i := range pcm {
 		pcm[i] = float32(0.5 * math.Sin(2*math.Pi*440*float64(i)/sampleRate))
 	}
-	assert.True(t, detectTransient([][]float32{pcm}, &state),
+	isTransient, _, _ := detectTransient([][]float32{pcm}, &state)
+	assert.True(t, isTransient,
 		"a signal starting from zero history is a legitimate transient")
 }
 
 func TestDetectTransientEmpty(t *testing.T) {
 	state := newAnalysisState()
-	assert.False(t, detectTransient(nil, &state),
-		"empty PCM should be a defensive false")
-	assert.False(t, detectTransient([][]float32{}, &state),
-		"empty channels should be a defensive false")
+	nilTransient, _, _ := detectTransient(nil, &state)
+	assert.False(t, nilTransient, "empty PCM should be a defensive false")
+	emptyTransient, _, _ := detectTransient([][]float32{}, &state)
+	assert.False(t, emptyTransient, "empty channels should be a defensive false")
 	pcm := make([]float32, 0)
-	assert.False(t, detectTransient([][]float32{pcm}, &state),
-		"zero-length frame should be a defensive false")
+	zeroTransient, _, _ := detectTransient([][]float32{pcm}, &state)
+	assert.False(t, zeroTransient, "zero-length frame should be a defensive false")
 }
 
 func TestDetectTransientFrameSize2_5ms(t *testing.T) {
 	pcm := make([]float32, 120)
 	pcm[60] = 1.0
 	state := newAnalysisState()
-	_ = detectTransient([][]float32{pcm}, &state)
+	_, _, tfChan := detectTransient([][]float32{pcm}, &state)
+	assert.Zero(t, tfChan, "mono only has one channel to pick from")
 }
 
 func TestDCBlockRemovesConstantOffset(t *testing.T) {

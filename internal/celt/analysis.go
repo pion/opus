@@ -251,19 +251,28 @@ var transientInverseTable = [128]int{ //nolint:gochecknoglobals
 // tone_freq/toneishness (the low-frequency-tone guard) and allow_weak_transients
 // (hybrid low-bitrate mode) aren't ported — pion has no tonality analysis or
 // hybrid mode yet, matching how signalBandwidth defaults to end-1 elsewhere.
-func detectTransient(pcm [][]float32, state *analysisState) bool {
-	return transientFrameMetric(pcm, state) > transientMaskThreshold
+// Besides the yes/no answer, transient_analysis produces two values later
+// stages consume: tfEstimate, a continuous "how transient is this" metric
+// derived from the same mask_metric, and tfChan, the channel that drove the
+// decision — the one tf_analysis then measures.
+func detectTransient(pcm [][]float32, state *analysisState) (bool, float32, int) {
+	maskMetric, tfChan := transientFrameMetric(pcm, state)
+	tfMax := max32(0, sqrtf(27*float32(maskMetric))-42)
+	tfEstimate := sqrtf(max32(0, 0.0069*min32(163, tfMax)-0.139))
+
+	return maskMetric > transientMaskThreshold, tfEstimate, tfChan
 }
 
-func transientFrameMetric(pcm [][]float32, state *analysisState) int {
+func transientFrameMetric(pcm [][]float32, state *analysisState) (metric, chosenChannel int) {
 	if len(pcm) == 0 {
-		return 0
+		return 0, 0
 	}
 
 	maskMetric := 0
+	tfChan := 0
 	for ch := range pcm {
 		if len(pcm[ch]) == 0 {
-			return 0
+			return 0, 0
 		}
 
 		n := shortBlockSampleCount + len(pcm[ch])
@@ -278,10 +287,11 @@ func transientFrameMetric(pcm [][]float32, state *analysisState) int {
 
 		if m := transientMaskMetric(probe, state.transientEnvelope[ch][:n]); m > maskMetric {
 			maskMetric = m
+			tfChan = ch
 		}
 	}
 
-	return maskMetric
+	return maskMetric, tfChan
 }
 
 // transientMaskMetric returns libopus's post/pre-echo masking metric for one
