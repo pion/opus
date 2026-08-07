@@ -361,7 +361,7 @@ func (e *Encoder) encodeAllocationTrim(
 	}
 }
 
-func (e *Encoder) choosePrefilter(pcm [][]float32, frameBytes int, transient bool) (bool, int, int, float32, int) {
+func (e *Encoder) choosePrefilter(pcm [][]float32, frameBytes int, tfEstimate float32) (bool, int, int, float32, int) {
 	// Run pitch detection on raw PCM — period is stable across pre-emphasis.
 	pitchPeriod, pitchGain := detectPitch(pcm[0])
 	pitchPeriod, pitchGain = removeDoubling(
@@ -372,7 +372,7 @@ func (e *Encoder) choosePrefilter(pcm [][]float32, frameBytes int, transient boo
 	enabled, qq, quantizedGain := prefilterDecision(
 		pitchPeriod, pitchGain,
 		e.analysis.prefilter.period, e.analysis.prefilter.gain,
-		frameBytes, len(pcm), transient,
+		frameBytes, len(pcm), tfEstimate,
 		uint(frameBytes)*8, e.rangeEncoder.Tell(),
 	)
 
@@ -575,9 +575,9 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 
 	e.rangeEncoder.Init()
 
-	transient := detectTransient(pcm, &e.analysis)
+	transient, tfEstimate, tfChan := detectTransient(pcm, &e.analysis)
 	prefilterEnabled, pitchPeriod, prefilterQq, prefilterGain, prefilterTapset := e.choosePrefilter(
-		pcm, frameBytes, transient,
+		pcm, frameBytes, tfEstimate,
 	)
 
 	analysis, err := analyzeFrame(
@@ -624,14 +624,16 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 	// libopus disables variable tf resolution for very small frames; its
 	// fallback is tf_res = isTransient for every band, not zero.
 	if effectiveBytes >= 15*info.channelCount && e.complexity >= 2 {
+		// libopus measures tf resolution on the channel that drove the
+		// transient decision, so normalise that one rather than always
+		// channel 0. Handing tfAnalysis that channel directly keeps its
+		// own tf_chan index at 0.
 		normalized := normaliseBandsForEncoding(
-			&info, analysis.mdct[0], analysis.logBandAmp[0], e.normalisedBands[0][:0])
+			&info, analysis.mdct[tfChan], analysis.logBandAmp[tfChan], e.normalisedBands[tfChan][:0])
 		lambda := max(80, 20480/effectiveBytes+2)
-		// tfEstimate comes out of libopus's transient_analysis, which pion's
-		// detectTransient does not return; 0 is the value libopus starts from.
 		info.tfSelect = tfAnalysis(
 			normalized, info.lm, info.startBand, info.endBand, info.transient,
-			lambda, 0, 0, len(analysis.mdct[0]), &dr.importance, &info.tfChange,
+			lambda, tfEstimate, 0, len(analysis.mdct[tfChan]), &dr.importance, &info.tfChange,
 		)
 	} else {
 		for band := info.startBand; band < info.endBand; band++ {
