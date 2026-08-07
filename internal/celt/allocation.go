@@ -683,10 +683,12 @@ func chooseAllocationTrim(
 		trim = 4.0 + float32(1.0/16.0)*frac
 	}
 
-	// --- Stereo correlation: average |cosine similarity| over first 8 bands.
-	// libopus uses inner product of normalised bands; we use cosine similarity
-	// of raw MDCT (scale-invariant, same result). Correlated channels →
-	// logXC < 0 → trim decreases → more bits to lows.
+	// --- Stereo correlation over the first 8 bands. libopus uses inner
+	// products of normalised bands; cosine similarity of raw MDCT is the same
+	// thing and scale-invariant. Correlated channels → logXC < 0 → trim
+	// decreases → more bits to lows. The per-band cosines are summed signed
+	// and only the average is taken absolute (celt_encoder.c:790), so bands
+	// that are out of phase cancel instead of piling on.
 	if channelCount == 2 {
 		scale := 1 << lm
 		var corrSum float32
@@ -700,10 +702,10 @@ func chooseAllocationTrim(
 				r2 += mdct[1][i] * mdct[1][i]
 			}
 			if l2 > 1e-30 && r2 > 1e-30 {
-				corrSum += abs32(dot) / sqrtf(l2*r2)
+				corrSum += dot / sqrtf(l2*r2)
 			}
 		}
-		avgCorr := corrSum / 8.0
+		avgCorr := abs32(corrSum / 8.0)
 		if avgCorr > 1.0 {
 			avgCorr = 1.0
 		}
@@ -714,22 +716,18 @@ func chooseAllocationTrim(
 	// --- Spectral tilt: weighted sum of bandLogE.
 	// (2+2*i-end) is negative for low bands, positive for high.
 	// Positive diff (high-freq heavy) → trim decreases → more bits to highs.
-	// pion's logBandAmp is 0.5*log2(energy)-energyMeans (relative to the
-	// per-band mean); libopus's bandLogE is log2(energy) in absolute dB. The
-	// *2 cancels the 0.5 factor; *6.02 converts log2 to dB to match libopus's
-	// Q7 domain. libopus adds a +16 dB offset (QCONST32(1.f, DB_SHIFT-5)) to
-	// center the clamp around typical absolute bandLogE values; pion's
-	// mean-relative domain is already centered at 0, so the offset is dropped.
-	const dbPerLog2 = 6.0206 // 20/log2(10)
+	// logBandAmp is log2(amplitude)-energyMeans, the same quantity libopus
+	// calls bandLogE (amp2Log2 takes the log of the amplitude, not the
+	// energy), so it goes in unscaled: the Q-domain shifts around this in
+	// celt_encoder.c:817 are all no-ops in the float build.
 	var diff float32
 	for ch := range channelCount {
-		for i := range endBand {
-			diff += logBandAmp[ch][i] * 2.0 * dbPerLog2 * float32(2+2*i-endBand)
+		for i := range endBand - 1 {
+			diff += logBandAmp[ch][i] * float32(2+2*i-endBand)
 		}
 	}
 	diff /= float32(channelCount * (endBand - 1))
-	tiltContrib := diff * 4.0 / 6.0
-	tiltContrib = max32(-2.0, min32(2.0, tiltContrib))
+	tiltContrib := max32(-2.0, min32(2.0, (diff+1.0)/6.0))
 	trim -= tiltContrib
 
 	// Round and clamp to [0, 10].
