@@ -337,7 +337,7 @@ func TestCopyChannels(t *testing.T) {
 func TestDecodePLCModes(t *testing.T) {
 	for _, test := range []struct {
 		name          string
-		configuration Configuration
+		configuration configuration
 		frameSamples  int
 	}{
 		{name: "SILK", configuration: 8, frameSamples: 480},
@@ -358,7 +358,7 @@ func TestDecodePLCModes(t *testing.T) {
 func TestDecodeSilkFrameDurations(t *testing.T) {
 	for _, test := range []struct {
 		name          string
-		configuration Configuration
+		configuration configuration
 		sampleCount   int
 	}{
 		{name: "10ms", configuration: 8, sampleCount: 160},
@@ -376,29 +376,29 @@ func TestDecodeSilkFrameDurations(t *testing.T) {
 }
 
 func TestSilkFrameSampleCount(t *testing.T) {
-	assert.Equal(t, 80, Configuration(0).silkFrameSampleCount())
-	assert.Equal(t, 120, Configuration(4).silkFrameSampleCount())
-	assert.Equal(t, 160, Configuration(8).silkFrameSampleCount())
-	assert.Equal(t, 0, Configuration(12).silkFrameSampleCount())
-	assert.Equal(t, 0, Configuration(16).silkFrameSampleCount())
+	assert.Equal(t, 80, configuration(0).silkFrameSampleCount())
+	assert.Equal(t, 120, configuration(4).silkFrameSampleCount())
+	assert.Equal(t, 160, configuration(8).silkFrameSampleCount())
+	assert.Equal(t, 0, configuration(12).silkFrameSampleCount())
+	assert.Equal(t, 0, configuration(16).silkFrameSampleCount())
 }
 
 func TestCeltFrameSampleCount(t *testing.T) {
-	assert.Equal(t, 120, Configuration(16).celtFrameSampleCount())
-	assert.Equal(t, 240, Configuration(17).celtFrameSampleCount())
-	assert.Equal(t, 480, Configuration(18).celtFrameSampleCount())
-	assert.Equal(t, 960, Configuration(19).celtFrameSampleCount())
-	assert.Equal(t, 960, Configuration(31).celtFrameSampleCount())
-	assert.Equal(t, 0, Configuration(0).celtFrameSampleCount())
-	assert.Equal(t, 0, Configuration(12).celtFrameSampleCount())
+	assert.Equal(t, 120, configuration(16).celtFrameSampleCount())
+	assert.Equal(t, 240, configuration(17).celtFrameSampleCount())
+	assert.Equal(t, 480, configuration(18).celtFrameSampleCount())
+	assert.Equal(t, 960, configuration(19).celtFrameSampleCount())
+	assert.Equal(t, 960, configuration(31).celtFrameSampleCount())
+	assert.Equal(t, 0, configuration(0).celtFrameSampleCount())
+	assert.Equal(t, 0, configuration(12).celtFrameSampleCount())
 }
 
 func TestDecodedSampleRate(t *testing.T) {
-	assert.Equal(t, 8000, Configuration(0).decodedSampleRate())
-	assert.Equal(t, 16000, Configuration(8).decodedSampleRate())
-	assert.Equal(t, celtSampleRate, Configuration(16).decodedSampleRate())
-	assert.Equal(t, celtSampleRate, Configuration(31).decodedSampleRate())
-	assert.Equal(t, celtSampleRate, Configuration(12).decodedSampleRate())
+	assert.Equal(t, 8000, configuration(0).decodedSampleRate())
+	assert.Equal(t, 16000, configuration(8).decodedSampleRate())
+	assert.Equal(t, celtSampleRate, configuration(16).decodedSampleRate())
+	assert.Equal(t, celtSampleRate, configuration(31).decodedSampleRate())
+	assert.Equal(t, celtSampleRate, configuration(12).decodedSampleRate())
 }
 
 func TestDecodeCeltOnly(t *testing.T) {
@@ -568,7 +568,7 @@ func TestDecodeSilkFramesAddsHybridTransitionAudio(t *testing.T) {
 	decoder.previousMode = configurationModeHybrid
 
 	bandwidth, _, isStereo, sampleCount, decodedChannelCount, err := decoder.decodeSilkFrames(
-		Configuration(8),
+		configuration(8),
 		tableOfContentsHeader(byte(8<<3)|byte(frameCodeOneFrame)),
 		[][]byte{nil},
 		nil,
