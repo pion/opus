@@ -599,13 +599,29 @@ func quantBandStereo(
 		} else {
 			stereoSplit(x, y, n)
 		}
-	} else if bandBits > 2<<bitResolution && *remainingBits > 2<<bitResolution {
+	} else {
+		// Bands at or above the intensity threshold get qn=1 and always
+		// collapse to the downmix, whether or not the phase bit fits
+		// (libopus compute_theta, celt/bands.c:874-899). The side is negated
+		// first when the channels are anti-correlated, so they add instead
+		// of canceling. inner < 0 is the same test as libopus' itheta>8192:
+		// both say the side carries more energy than the mid.
 		inner := float32(0)
 		for i := range n {
 			inner += x[i] * y[i]
 		}
 		invert = inner < 0
-		state.rangeEncoder.EncodeSymbolLogP(2, uint32(boolIndex(invert)))
+		if invert {
+			for i := range n {
+				y[i] = -y[i]
+			}
+		}
+		intensityStereo(x, y, n, state.bandEnergy[0][band], state.bandEnergy[1][band])
+		if bandBits > 2<<bitResolution && *remainingBits > 2<<bitResolution {
+			state.rangeEncoder.EncodeSymbolLogP(2, uint32(boolIndex(invert)))
+		} else {
+			invert = false
+		}
 	}
 	qalloc := int(state.rangeEncoder.TellFrac()) - tell
 	bandBits -= qalloc
