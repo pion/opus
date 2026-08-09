@@ -70,9 +70,14 @@ func tfAnalysis(
 			}
 		}
 
+		// libopus sweeps LM + !isTransient - narrow levels: a narrow band has
+		// one resolution fewer to try, transient frame or not.
 		levels := lm
-		if !transient && !narrow {
+		if !transient {
 			levels++
+		}
+		if narrow {
+			levels--
 		}
 		for k := range levels {
 			b := k + 1
