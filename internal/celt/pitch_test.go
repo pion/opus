@@ -214,13 +214,6 @@ func TestPrefilterDecisionBitBudgetGate(t *testing.T) {
 	assert.False(t, enabled, "should be disabled when not enough bits for header")
 }
 
-func TestTapsetFromSpread(t *testing.T) {
-	assert.Equal(t, 2, tapsetFromSpread(spreadAggressive))
-	assert.Equal(t, 1, tapsetFromSpread(spreadNormal))
-	assert.Equal(t, 0, tapsetFromSpread(spreadNone))
-	assert.Equal(t, 0, tapsetFromSpread(spreadLight))
-}
-
 func TestCancelPitchMono(t *testing.T) {
 	before := [2]float64{100}
 

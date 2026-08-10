@@ -161,22 +161,6 @@ func quantizePitchGain(gain float32) (qq int, quantized float32) {
 	return qq, quantized
 }
 
-// tapsetFromSpread maps the spread decision to a pre-filter tapset.
-// AGGRESSIVE (tonal) → tapset 2 (strongest), NORMAL → 1, NONE → 0 (lightest).
-// This is a simplified version of libopus spreading_decision's hf_sum logic
-// (celt/bands.c) — the full HF tonality measure with ±4 hysteresis is left
-// for a future PR.
-func tapsetFromSpread(spread int) int {
-	switch spread {
-	case spreadAggressive:
-		return 2
-	case spreadNormal:
-		return 1
-	default:
-		return 0
-	}
-}
-
 // prefilterDecision implements the gain-threshold logic from libopus
 // run_prefilter (celt_encoder.c lines 1499-1540). Returns enabled=false when
 // the pre-filter would hurt more than help (low gain, low bitrate, strong

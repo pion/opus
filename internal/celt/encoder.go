@@ -45,7 +45,9 @@ type Encoder struct {
 	cwrsScratch       []uint32
 	normalisedBands   [2][]float32
 
-	prevSpreadAvg      float32
+	spreadAverage      int
+	hfAverage          int
+	tapsetDecision     int
 	prevSpreadDecision int
 	prevIntensityBand  int
 	// lastCodedBands feeds the band-skip hysteresis in computeAllocation
@@ -120,7 +122,9 @@ func (e *Encoder) Reset() {
 	}
 	e.cwrsScratch = make([]uint32, 0, cwrsMaxPulseCount+2)
 
-	e.prevSpreadAvg = 0
+	e.spreadAverage = 0
+	e.hfAverage = 0
+	e.tapsetDecision = 0
 	e.prevSpreadDecision = defaultSpreadDecision
 	e.prevIntensityBand = 0
 	e.lastCodedBands = 0
@@ -361,6 +365,42 @@ func (e *Encoder) encodeAllocationTrim(
 	}
 }
 
+// chooseSpread runs the spreading_decision estimator, or falls back to a flat
+// level. libopus only runs the estimator at complexity>=3 with long blocks and
+// enough of a byte budget (celt_encoder.c ~line 2317); below that it uses
+// SPREAD_NORMAL, or SPREAD_NONE at complexity 0 specifically.
+func (e *Encoder) chooseSpread(
+	info *frameSideInfo, normalized [2][]float32, spreadWeight [maxBands]int,
+	effectiveBytes int, prefilterEnabled bool,
+) int {
+	if info.transient || e.complexity < 3 || effectiveBytes < 10*info.channelCount {
+		if e.complexity == 0 {
+			return spreadNone
+		}
+
+		return spreadNormal
+	}
+
+	return spreadingDecision(
+		normalized, info.lm, info.startBand, info.endBand, info.channelCount,
+		&e.spreadAverage, &e.hfAverage, &e.tapsetDecision,
+		e.prevSpreadDecision, prefilterEnabled && !info.transient,
+		spreadWeight,
+	)
+}
+
+// normaliseChannels divides every band by its amplitude so each one carries
+// unit norm, which is the domain the analysis stages downstream expect.
+func (e *Encoder) normaliseChannels(info *frameSideInfo, analysis *analysisResult) [2][]float32 {
+	var out [2][]float32
+	for ch := range info.channelCount {
+		out[ch] = normaliseBandsForEncoding(
+			info, analysis.mdct[ch], analysis.logBandAmp[ch], e.normalisedBands[ch][:0])
+	}
+
+	return out
+}
+
 func (e *Encoder) choosePrefilter(pcm [][]float32, frameBytes int, tfEstimate float32) (bool, int, int, float32, int) {
 	// Run pitch detection on raw PCM — period is stable across pre-emphasis.
 	pitchPeriod, pitchGain := detectPitch(pcm[0])
@@ -376,7 +416,7 @@ func (e *Encoder) choosePrefilter(pcm [][]float32, frameBytes int, tfEstimate fl
 		uint(frameBytes)*8, e.rangeEncoder.Tell(),
 	)
 
-	tapset := tapsetFromSpread(e.prevSpreadDecision)
+	tapset := e.tapsetDecision
 	if enabled && shouldCancelPrefilter(pcm, e.mode.SampleRate(), &e.analysis, pitchPeriod, quantizedGain, tapset) {
 		return false, pitchPeriod, 0, 0, tapset
 	}
@@ -621,18 +661,19 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 	offsets := dr.offsets
 	spreadWeight := dr.spreadWeight
 
+	// tf_analysis and spreading_decision both read the normalised bands, so
+	// build them once here (libopus normalise_bands, celt_encoder.c:2241).
 	// libopus disables variable tf resolution for very small frames; its
 	// fallback is tf_res = isTransient for every band, not zero.
+	normalized := e.normaliseChannels(&info, &analysis)
+
 	if effectiveBytes >= 15*info.channelCount && e.complexity >= 2 {
-		// libopus measures tf resolution on the channel that drove the
-		// transient decision, so normalise that one rather than always
-		// channel 0. Handing tfAnalysis that channel directly keeps its
-		// own tf_chan index at 0.
-		normalized := normaliseBandsForEncoding(
-			&info, analysis.mdct[tfChan], analysis.logBandAmp[tfChan], e.normalisedBands[tfChan][:0])
 		lambda := max(80, 20480/effectiveBytes+2)
+		// libopus measures tf resolution on the channel that drove the
+		// transient decision, not always channel 0. Handing tfAnalysis that
+		// channel directly keeps its own tf_chan index at 0.
 		info.tfSelect = tfAnalysis(
-			normalized, info.lm, info.startBand, info.endBand, info.transient,
+			normalized[tfChan], info.lm, info.startBand, info.endBand, info.transient,
 			lambda, tfEstimate, 0, len(analysis.mdct[tfChan]), &dr.importance, &info.tfChange,
 		)
 	} else {
@@ -643,22 +684,7 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 	}
 	e.encodeTimeFrequencyChanges(&info)
 
-	// libopus only runs the full spreading_decision() estimator when
-	// complexity>=3 and the frame has long blocks and enough of a byte
-	// budget (celt_encoder.c ~line 2317); otherwise it uses a flat
-	// SPREAD_NORMAL, or SPREAD_NONE at complexity==0 specifically.
-	if info.transient || e.complexity < 3 || effectiveBytes < 10*info.channelCount {
-		if e.complexity == 0 {
-			info.spread = spreadNone
-		} else {
-			info.spread = spreadNormal
-		}
-	} else {
-		info.spread = spreadingDecision(
-			analysis.mdct[0], info.lm, info.startBand, info.endBand,
-			&e.prevSpreadAvg, e.prevSpreadDecision, spreadWeight,
-		)
-	}
+	info.spread = e.chooseSpread(&info, normalized, spreadWeight, effectiveBytes, prefilterEnabled)
 	e.prevSpreadDecision = info.spread
 	e.encodeSpread(&info)
 	totalBitsEighth := e.encodeDynamicAllocation(&info, offsets)
@@ -694,9 +720,9 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 				float64(analysis.logBandAmp[ch][band]+energyMeans[band])))
 		}
 	}
-	shape0 := normaliseBandsForEncoding(&info, analysis.mdct[0], analysis.logBandAmp[0], e.normalisedBands[0][:0])
+	shape0 := normalized[0]
 	if info.channelCount == 2 {
-		shape1 := normaliseBandsForEncoding(&info, analysis.mdct[1], analysis.logBandAmp[1], e.normalisedBands[1][:0])
+		shape1 := normalized[1]
 		_ = quantAllBandsStereo(&info, shape0, shape1, totalBits, &bandState,
 			e.pvqY, e.pvqAbsX, e.pvqSign, e.cwrsScratch)
 	} else {

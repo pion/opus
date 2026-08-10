@@ -11,89 +11,117 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSpreadingDecisionTonalSignal(t *testing.T) {
-	// A spectrum with one dominant bin per band should read as tonal (high metric)
-	// and produce at least NORMAL spreading after warmup.
-	lm := maxLM
+// normalisedBands builds a [2][]float32 whoseeach band has unit norm, using per
+// bin values from gen.
+func normalisedBands(lm int, gen func(band, i, n int) float32) [2][]float32 {
 	scale := 1 << lm
-	mdct := make([]float32, scale*int(bandEdges[maxBands]))
-
+	buf := make([]float32, scale*int(bandEdges[maxBands]))
 	for band := range maxBands {
 		lo := scale * int(bandEdges[band])
-		hi := scale * int(bandEdges[band+1])
-		if hi > lo {
-			// put all energy in the first bin of each band
-			mdct[lo] = 1.0
+		n := scale * int(bandEdges[band+1]-bandEdges[band])
+		var norm float64
+		for i := range n {
+			v := gen(band, i, n)
+			buf[lo+i] = v
+			norm += float64(v) * float64(v)
+		}
+		if norm > 0 {
+			inv := float32(1 / math.Sqrt(norm))
+			for i := range n {
+				buf[lo+i] *= inv
+			}
 		}
 	}
 
-	var prevAvg float32
-	prev := defaultSpreadDecision
-	var decision int
-	for range 8 {
-		decision = spreadingDecision(mdct, lm, 0, maxBands, &prevAvg, prev, uniformSpreadWeight())
-		prev = decision
+	return [2][]float32{buf, buf}
+}
+
+func runSpreading(bands [2][]float32, lm, frames int) int {
+	avg, hf, tapset := 0, 0, 0
+	decision := defaultSpreadDecision
+	for range frames {
+		decision = spreadingDecision(bands, lm, 0, maxBands, 1, &avg, &hf, &tapset,
+			decision, true, uniformSpreadWeight())
 	}
-	assert.GreaterOrEqual(t, decision, spreadNormal,
-		"spike-per-band spectrum should reach at least NORMAL after warmup (got %d)", decision)
+
+	return decision
+}
+
+func TestSpreadingDecisionTonalSignal(t *testing.T) {
+	// One dominant bin per band: almost every bin falls below all three CDF
+	// thresholds, so the metric saturates and no spreading is applied.
+	bands := normalisedBands(maxLM, func(_, i, _ int) float32 {
+		if i == 0 {
+			return 1.0
+		}
+
+		return 0
+	})
+	assert.Equal(t, spreadNone, runSpreading(bands, maxLM, 8),
+		"a spike per band is tonal and should end up at SPREAD_NONE")
 }
 
 func TestSpreadingDecisionNoiseSignal(t *testing.T) {
-	// A flat spectrum (uniform energy per bin) is noise-like and should settle
-	// at NONE or LIGHT after warmup.
-	lm := maxLM
-	scale := 1 << lm
-	mdct := make([]float32, scale*int(bandEdges[maxBands]))
-	for i := range mdct {
-		mdct[i] = 0.01
-	}
-
-	var prevAvg float32
-	prev := defaultSpreadDecision
-	var decision int
-	for range 8 {
-		decision = spreadingDecision(mdct, lm, 0, maxBands, &prevAvg, prev, uniformSpreadWeight())
-		prev = decision
-	}
-	assert.LessOrEqual(t, decision, spreadLight,
-		"uniform-energy spectrum should settle at NONE or LIGHT after warmup (got %d)", decision)
+	// Flat band: every bin sits at 1/sqrt(N), so x²·N is 1 and clears every
+	// threshold. That is the noisiest reading and asks for full spreading.
+	bands := normalisedBands(maxLM, func(_, _, _ int) float32 { return 1 })
+	assert.Equal(t, spreadAggressive, runSpreading(bands, maxLM, 8),
+		"a flat band is noise-like and should end up at SPREAD_AGGRESSIVE")
 }
 
 func TestSpreadingDecisionRecursiveAvg(t *testing.T) {
-	// Two independent runs of N frames should produce the same avg value as a
-	// single run of 2N frames because the recursive average is stateless
-	// between calls.
-	lm := maxLM
-	scale := 1 << lm
-	mdct := make([]float32, scale*int(bandEdges[maxBands]))
-	for i := range mdct {
-		mdct[i] = 0.1 * float32(i%7+1)
-	}
+	// Half the bands tonal, half flat, so the metric lands mid-range and the
+	// recursive average needs several frames to converge.
+	bands := normalisedBands(maxLM, func(band, i, _ int) float32 {
+		if band%2 == 0 {
+			if i == 0 {
+				return 1.0
+			}
 
-	var avgA float32
-	prevA := defaultSpreadDecision
-	for range 4 {
-		prevA = spreadingDecision(mdct, lm, 0, maxBands, &avgA, prevA, uniformSpreadWeight())
-	}
+			return 0
+		}
 
-	var avgB float32
-	prevB := defaultSpreadDecision
+		return 1
+	})
+
+	avgA, hfA, tapA := 0, 0, 0
+	spreadingDecision(bands, maxLM, 0, maxBands, 1, &avgA, &hfA, &tapA,
+		defaultSpreadDecision, true, uniformSpreadWeight())
+
+	avgB, hfB, tapB := 0, 0, 0
+	prev := defaultSpreadDecision
 	for range 8 {
-		prevB = spreadingDecision(mdct, lm, 0, maxBands, &avgB, prevB, uniformSpreadWeight())
+		prev = spreadingDecision(bands, maxLM, 0, maxBands, 1, &avgB, &hfB, &tapB, prev, true, uniformSpreadWeight())
 	}
 
-	// After more frames the avg should converge further; after 8 frames it
-	// must not be identical to after 4.
-	assert.NotEqual(t, avgA, avgB, "recursive average should differ after different frame counts")
+	assert.NotEqual(t, avgA, avgB, "the recursive average should keep converging past the first frame")
 }
 
-func TestSpreadingDecisionSilentFrame(t *testing.T) {
-	lm := maxLM
-	mdct := make([]float32, (1<<lm)*int(bandEdges[maxBands]))
-	var prevAvg float32
-	// All zero input: should return prevDecision unchanged.
-	got := spreadingDecision(mdct, lm, 0, maxBands, &prevAvg, spreadNormal, uniformSpreadWeight())
-	assert.Equal(t, spreadNormal, got, "silent frame should return prevDecision")
+func TestSpreadingDecisionNarrowLastBand(t *testing.T) {
+	// libopus bails out to SPREAD_NONE when the last band is too narrow to
+	// carry usable statistics (celt/bands.c:484).
+	bands := normalisedBands(0, func(_, _, _ int) float32 { return 1 })
+	avg, hf, tapset := 0, 0, 0
+	got := spreadingDecision(bands, 0, 0, 2, 1, &avg, &hf, &tapset,
+		spreadNormal, true, uniformSpreadWeight())
+	assert.Equal(t, spreadNone, got, "a narrow last band should short-circuit to SPREAD_NONE")
+}
+
+func TestSpreadingDecisionUpdatesTapset(t *testing.T) {
+	// The high-band CDF drives tapset_decision, which the pre-filter reads.
+	bands := normalisedBands(maxLM, func(_, i, _ int) float32 {
+		if i == 0 {
+			return 1.0
+		}
+
+		return 0
+	})
+	avg, hf, tapset := 0, 0, 0
+	for range 8 {
+		spreadingDecision(bands, maxLM, 0, maxBands, 1, &avg, &hf, &tapset,
+			defaultSpreadDecision, true, uniformSpreadWeight())
+	}
+	assert.Equal(t, 2, tapset, "a tonal high band should push tapset to 2")
 }
 
 func TestAnalyzeFrameAdaptiveSpread(t *testing.T) {

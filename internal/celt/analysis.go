@@ -396,58 +396,127 @@ func computeBandLogAmp(freq []float32, lm int, startBand int, endBand int) [maxB
 // energy gives a value near 0 (noise-like). This is the floating-point
 // equivalent of the per-band CDF step inside libopus spreading_decision
 // (celt_encoder.c). spreadWeight comes from dynallocAnalysis masking model.
+// bandSpreadMetric returns libopus's per-band tonality score (0-3) and the
+// high-band CDF contribution. It is a rough CDF of |x|²·N against three
+// thresholds: on a unit-norm band the average bin sits at 1/N, so x²·N near 1
+// means flat (noisy) and a long tail below the thresholds means tonal.
+func bandSpreadMetric(x []float32, band int) (score, hf int) {
+	n := len(x)
+	var tcount [3]int
+	for _, v := range x {
+		x2n := v * v * float32(n)
+		if x2n < 0.25 {
+			tcount[0]++
+		}
+		if x2n < 0.0625 {
+			tcount[1]++
+		}
+		if x2n < 0.015625 {
+			tcount[2]++
+		}
+	}
+
+	// Only the last four bands (8 kHz and up) feed the tapset.
+	if band > maxBands-4 {
+		hf = 32 * (tcount[1] + tcount[0]) / n
+	}
+	score = boolIndex(2*tcount[2] >= n) + boolIndex(2*tcount[1] >= n) + boolIndex(2*tcount[0] >= n)
+
+	return score, hf
+}
+
+// updateTapset folds the high-band CDF into the running average and picks the
+// pre-filter tapset, mirroring libopus spreading_decision (celt/bands.c:518).
+func updateTapset(hfSum, channelCount, endBand int, hfAverage, tapsetDecision *int) {
+	if hfSum != 0 {
+		hfSum /= channelCount * (4 - maxBands + endBand)
+	}
+	*hfAverage = (*hfAverage + hfSum) >> 1
+	hfSum = *hfAverage
+	switch *tapsetDecision {
+	case 2:
+		hfSum += 4
+	case 0:
+		hfSum -= 4
+	}
+	switch {
+	case hfSum > 22:
+		*tapsetDecision = 2
+	case hfSum > 18:
+		*tapsetDecision = 1
+	default:
+		*tapsetDecision = 0
+	}
+}
+
+// sweepSpreadMetric accumulates the weighted per-band tonality scores over
+// every coded band of every channel. Bands too narrow to give a usable CDF are
+// skipped, matching libopus.
+func sweepSpreadMetric(
+	channels [][]float32, scale, startBand, endBand int, spreadWeight [maxBands]int,
+) (sum, nbBands, hfSum int) {
+	for _, bands := range channels {
+		for band := startBand; band < endBand; band++ {
+			lo := scale * int(bandEdges[band])
+			n := scale * int(bandEdges[band+1]-bandEdges[band])
+			if n <= 8 || lo+n > len(bands) {
+				continue
+			}
+			score, hf := bandSpreadMetric(bands[lo:lo+n], band)
+			hfSum += hf
+			sum += score * spreadWeight[band]
+			nbBands += spreadWeight[band]
+		}
+	}
+
+	return sum, nbBands, hfSum
+}
+
+// spreadingDecision picks the spectral spreading level applied by expRotation,
+// mirroring libopus spreading_decision (celt/bands.c:470). It also updates the
+// pre-filter tapset, which the reference derives from the same statistics.
+//
+// Note the direction: a tonal spectrum (energy concentrated in few bins) needs
+// no spreading, while a flat, noise-like one asks for the most.
 func spreadingDecision(
-	mdct []float32, lm, startBand, endBand int,
-	prevAvg *float32, prevDecision int,
+	normalized [2][]float32,
+	lm, startBand, endBand, channelCount int,
+	average, hfAverage, tapsetDecision *int,
+	lastDecision int,
+	updateHF bool,
 	spreadWeight [maxBands]int,
 ) int {
 	scale := 1 << lm
-	var sum float32
-	nBands := 0
-
-	for band := startBand; band < endBand; band++ {
-		lo := scale * int(bandEdges[band])
-		hi := scale * int(bandEdges[band+1])
-		n := hi - lo
-		if n < 2 {
-			continue
-		}
-
-		weight := spreadWeight[band]
-		if weight == 0 {
-			continue
-		}
-
-		var energy, maxE float32
-		for i := lo; i < hi; i++ {
-			e := mdct[i] * mdct[i]
-			energy += e
-			if e > maxE {
-				maxE = e
-			}
-		}
-
-		mean := energy / float32(n)
-		if mean < 1e-30 || maxE < 1e-30 {
-			continue
-		}
-
-		// 0 when all bins are equal (noise), near 1 when one bin dominates (tonal).
-		tonality := 1 - mean/maxE
-		sum += tonality * float32(weight)
-		nBands += weight
+	// A last band this narrow carries no usable statistics.
+	if scale*int(bandEdges[endBand]-bandEdges[endBand-1]) <= 8 {
+		return spreadNone
 	}
 
-	if nBands == 0 {
-		return prevDecision
+	sum, nbBands, hfSum := sweepSpreadMetric(normalized[:channelCount], scale, startBand, endBand, spreadWeight)
+
+	if updateHF {
+		updateTapset(hfSum, channelCount, endBand, hfAverage, tapsetDecision)
+	}
+	if nbBands == 0 {
+		return lastDecision
 	}
 
-	avg := sum / float32(nBands)
-	// Recursive inter-frame average damps single-frame spikes.
-	avg = 0.5 * (avg + *prevAvg)
-	*prevAvg = avg
+	sum = (sum << 8) / nbBands
+	// Recursive averaging, then hysteresis around the previous decision.
+	sum = (sum + *average) >> 1
+	*average = sum
+	sum = (3*sum + (((3 - lastDecision) << 7) + 64) + 2) >> 2
 
-	return hysteresisDecision(avg, prevDecision, [3]float32{0.15, 0.40, 0.65})
+	switch {
+	case sum < 80:
+		return spreadAggressive
+	case sum < 256:
+		return spreadNormal
+	case sum < 384:
+		return spreadLight
+	default:
+		return spreadNone
+	}
 }
 
 // applyDCBlock applies a first-order IIR high-pass at dcBlockCutoffHz to
