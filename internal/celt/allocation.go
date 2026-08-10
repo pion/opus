@@ -825,8 +825,9 @@ func medianOf5(vals [5]float32) float32 {
 // dynallocAnalysis computes per-band boost offsets and spread weights.
 // Mirrors libopus celt_encoder.c:dynalloc_analysis.
 //
-// pion's logBandAmp = 0.5*log2(energy)-energyMeans; libopus bandLogE =
-// log2(energy). We convert internally so the follower thresholds match.
+// logBandAmp is libopus's bandLogE as-is: amp2Log2 takes the log of the band
+// amplitude, not the energy, and subtracts the same eMeans table. The noise
+// floor and follower thresholds below live in that domain.
 func dynallocAnalysis(
 	logBandAmp [2][maxBands]float32,
 	prevLogBandAmp [2][maxBands]float32,
@@ -839,19 +840,13 @@ func dynallocAnalysis(
 
 	var noiseFloor [maxBands]float32
 	for band := range endBand {
-		logN := float32(logN400[band]) / 8.0 // log2(band width)
-		noiseFloor[band] = 0.0625*logN +
+		noiseFloor[band] = 0.0625*float32(logN400[band]) +
 			0.5 + float32(9-lsbDepth) -
 			energyMeans[band] +
 			0.0062*float32((band+5)*(band+5))
 	}
 
-	var bandLogE [2][maxBands]float32
-	for ch := range channelCount {
-		for band := range endBand {
-			bandLogE[ch][band] = 2.0 * (logBandAmp[ch][band] + energyMeans[band])
-		}
-	}
+	bandLogE := logBandAmp
 
 	maxDepth := float32(-31.9)
 	for ch := range channelCount {
@@ -923,20 +918,23 @@ func dynallocAnalysis(
 		}
 	}
 
-	// follower tracks the previous frame's spectrum (bandLogE2 in libopus).
+	// bandLogE3 is libopus's bandLogE2, which below complexity 8 is just a
+	// copy of the current frame's bandLogE (celt_encoder.c:2211). logBandAmp
+	// already is that quantity — amp2Log2 takes the log of the amplitude —
+	// so it goes in as-is, mean-subtracted like the rest of the energies.
 	var follower [2][maxBands]float32
 	for ch := range channelCount {
 		var bandLogE3 [maxBands]float32
 		for band := range endBand {
-			bandLogE3[band] = 2.0 * (prevLogBandAmp[ch][band] + energyMeans[band])
+			bandLogE3[band] = bandLogE[ch][band]
 		}
 
-		// For LM==0, first 8 bands have 1 bin → unreliable. Take max with
-		// current bandLogE so at least 2 "bins" of context are used.
+		// For LM==0, first 8 bands have 1 bin → unreliable. Take max with the
+		// previous frame so at least 2 "bins" of context are used.
 		if lm == 0 {
 			for band := 0; band < endBand && band < 8; band++ {
-				if bandLogE[ch][band] > bandLogE3[band] {
-					bandLogE3[band] = bandLogE[ch][band]
+				if prevLogBandAmp[ch][band] > bandLogE3[band] {
+					bandLogE3[band] = prevLogBandAmp[ch][band]
 				}
 			}
 		}
@@ -954,7 +952,7 @@ func dynallocAnalysis(
 				follow[band] = prev
 			}
 		}
-		for band := last - 1; band > 0; band-- {
+		for band := last - 1; band >= 0; band-- {
 			next := follow[band+1] + 2.0
 			if next < follow[band] {
 				follow[band] = next
@@ -1069,48 +1067,39 @@ func dynallocAnalysis(
 		combined[0] += extra
 	}
 
-	// Cap at 4.0 log2 (≈ 24 dB) then divide by 8 to match libopus boost scale.
+	// The two SHR32s libopus applies here (celt_encoder.c:1240,1243) are the
+	// fixed-point Q-domain conversion — both no-ops in the float build — so the
+	// follower feeds the boost quanta unscaled.
 	totBoostBits := 0
-	boostCap := 2 * effectiveBytes / 3 * 8 * 8 // 2/3 of budget in 1/8-bit units
 	for band := startBand; band < endBand; band++ {
 		if combined[band] > 4.0 {
 			combined[band] = 4.0
 		}
-		scaled := combined[band] / 8.0
 		width := channelCount * (int(bandEdges[band+1] - bandEdges[band])) << lm
 
 		var boost int
 		var boostBits int
 		switch {
 		case width < 6:
-			boost = int(scaled)
+			boost = int(combined[band])
 			boostBits = boost * width << bitResolution
 		case width > 48:
-			boost = int(scaled * 8)
+			boost = int(combined[band] * 8)
 			boostBits = (boost * width << bitResolution) / 8
 		default:
-			boost = int(scaled * float32(width) / 6.0)
+			boost = int(combined[band] * float32(width) / 6.0)
 			boostBits = boost * 6 << bitResolution
 		}
 
-		if totBoostBits+boostBits > boostCap {
-			// Clamp to remaining budget.
-			remaining := max(0, boostCap-totBoostBits)
-			// convert remaining bits back to boost quanta
-			switch {
-			case width < 6:
-				boost = remaining >> bitResolution / max(1, width)
-			case width > 48:
-				boost = remaining << 3 / max(1, width) >> bitResolution
-			default:
-				boost = remaining >> bitResolution / 6
-			}
-			if boost < 0 {
-				boost = 0
-			}
-			boostBits = remaining
-		}
+		// CBR keeps dynalloc under 2/3 of the frame. libopus hands the leftover
+		// budget to this band as the offset and stops boosting entirely.
+		if (totBoostBits+boostBits)>>bitResolution>>3 > 2*effectiveBytes/3 {
+			capBits := (2 * effectiveBytes / 3) << bitResolution << 3
+			offsets[band] = capBits - totBoostBits
+			totBoostBits = capBits
 
+			break
+		}
 		offsets[band] = boost
 		totBoostBits += boostBits
 	}
