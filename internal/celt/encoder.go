@@ -451,7 +451,7 @@ func (e *Encoder) updatePrefilterState(
 // computeIntensityAndDualStereo returns the intensity band and dual stereo flag
 // for the current frame. Intensity band includes ±1 hysteresis to avoid oscillation.
 func (e *Encoder) computeIntensityAndDualStereo(
-	info *frameSideInfo, mdct [2][]float32,
+	info *frameSideInfo, normalized [2][]float32,
 ) (targetIntensity, targetDualStereo int) {
 	if info.channelCount != 2 {
 		return 0, 0
@@ -474,7 +474,7 @@ func (e *Encoder) computeIntensityAndDualStereo(
 	e.prevIntensityBand = raw
 
 	targetIntensity = raw
-	if chooseDualStereo(mdct[0], mdct[1], info.lm) {
+	if chooseDualStereo(normalized, info.lm) {
 		targetDualStereo = 1
 	}
 
@@ -702,7 +702,7 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 		info.antiCollapseRsv = 1 << bitResolution
 	}
 	shapeBits -= info.antiCollapseRsv
-	targetIntensity, targetDualStereo := e.computeIntensityAndDualStereo(&info, analysis.mdct)
+	targetIntensity, targetDualStereo := e.computeIntensityAndDualStereo(&info, normalized)
 	info.allocation = e.computeAllocationMono(&info, shapeBits, targetIntensity, targetDualStereo)
 	e.encodeFineEnergy(&info, info.allocation.fineQuant, targetLogE)
 
