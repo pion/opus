@@ -77,8 +77,10 @@ func TestReconstructionWithoutQuantization(t *testing.T) {
 		pcm := [][]float32{source[frame*frameLength : (frame+1)*frameLength]}
 		// No transient and no pre-filter: one long MDCT per frame, and no
 		// post-filter needed on the way back.
+		var srcs [2][]float32
+		srcs[0] = preemphasisChannel(mode, pcm[0], 0, &state)
 		res, _, err := analyzeFrame(
-			mode, pcm, 0, maxBands, &state, &mdctScratch, &fftScratch, false, false, 0, 0, 0,
+			mode, pcm, srcs, 0, maxBands, &state, &mdctScratch, &fftScratch, false, false, 0, 0, 0,
 			[2][maxBands]float32{}, false)
 		require.NoErrorf(t, err, "frame %d", frame)
 

@@ -9,6 +9,7 @@ import (
 	"math/bits"
 
 	"github.com/pion/opus/internal/rangecoding"
+	"github.com/pion/opus/internal/slicetools"
 )
 
 // Encoder encodes PCM audio into CELT-only Opus frames.
@@ -43,7 +44,9 @@ type Encoder struct {
 	pvqAbsX           [2][]float32
 	pvqSign           [2][]float32
 	cwrsScratch       []uint32
-	normalisedBands   [2][]float32
+	normalizedBands   [2][]float32
+	pitchBuf          []float32
+	pitchChannels     [2][]float32
 
 	spreadAverage      int
 	hfAverage          int
@@ -106,7 +109,7 @@ func (e *Encoder) Reset() {
 
 	// Pre-allocate every buffer that quantAllBands* and algQuant touch so
 	// EncodeFrame stays at zero allocs per frame.
-	// normalisedBands/bandNorm need maxFrameSampleCount per channel — the full
+	// normalizedBands/bandNorm need maxFrameSampleCount per channel — the full
 	// MDCT spectrum (960 bins), not just the coded band range (800 bins).
 	// pvq buffers are sized for the widest band at lm=3: maxBandSize*8 bins.
 	// cwrsScratch needs k+2 slots; cwrsMaxPulseCount+2 covers all normal cases.
@@ -118,9 +121,10 @@ func (e *Encoder) Reset() {
 		e.pvqY[ch] = make([]int, 0, maxBandSize<<maxLM)
 		e.pvqAbsX[ch] = make([]float32, 0, maxBandSize<<maxLM)
 		e.pvqSign[ch] = make([]float32, 0, maxBandSize<<maxLM)
-		e.normalisedBands[ch] = make([]float32, 0, maxFrameSampleCount)
+		e.normalizedBands[ch] = make([]float32, 0, maxFrameSampleCount)
 	}
 	e.cwrsScratch = make([]uint32, 0, cwrsMaxPulseCount+2)
+	e.pitchBuf = make([]float32, 0, (combFilterMaxPeriod+maxFrameSampleCount)>>1)
 
 	e.spreadAverage = 0
 	e.hfAverage = 0
@@ -395,33 +399,66 @@ func (e *Encoder) normaliseChannels(info *frameSideInfo, analysis *analysisResul
 	var out [2][]float32
 	for ch := range info.channelCount {
 		out[ch] = normaliseBandsForEncoding(
-			info, analysis.mdct[ch], analysis.logBandAmp[ch], e.normalisedBands[ch][:0])
+			info, analysis.mdct[ch], analysis.logBandAmp[ch], e.normalizedBands[ch][:0])
 	}
 
 	return out
 }
 
-func (e *Encoder) choosePrefilter(pcm [][]float32, frameBytes int, tfEstimate float32) (bool, int, int, float32, int) {
-	// Run pitch detection on raw PCM — period is stable across pre-emphasis.
-	pitchPeriod, pitchGain := detectPitch(pcm[0])
-	pitchPeriod, pitchGain = removeDoubling(
-		pcm[0], pitchPeriod, pitchGain,
-		e.analysis.prefilter.period, e.analysis.prefilter.gain,
+// choosePrefilter runs the pitch search and decides whether the pre-filter is
+// worth enabling. srcs hold the pre-emphasized signal with combFilterMaxPeriod
+// samples of history in front, which is the layout libopus' run_prefilter uses.
+func (e *Encoder) choosePrefilter(
+	srcs [][]float32, frameSampleCount, frameBytes int, tfEstimate float32,
+) (bool, int, int, float32, int) {
+	// The history pion keeps is two samples longer than the reference's, so
+	// line the window up with libopus' `pre`.
+	const pad = postfilterHistorySampleCount - combFilterMaxPeriod
+	pitchInput := e.pitchChannels[:len(srcs)]
+	for ch, src := range srcs {
+		pitchInput[ch] = src[pad:]
+	}
+
+	pitchLen := (combFilterMaxPeriod + frameSampleCount) >> 1
+	buf := slicetools.Resize(&e.pitchBuf, pitchLen)
+	pitchDownsample(pitchInput, buf, pitchLen, 2)
+
+	// The top 1.5 octave of the range is skipped: short-term correlation there
+	// produces too many false positives.
+	pitchPeriod := pitchSearch(
+		buf[combFilterMaxPeriod>>1:], buf,
+		frameSampleCount, combFilterMaxPeriod-3*combFilterMinPeriod,
 	)
+	pitchPeriod = combFilterMaxPeriod - pitchPeriod
+
+	pitchGain := removeDoubling(
+		buf, combFilterMaxPeriod, combFilterMinPeriod, frameSampleCount,
+		&pitchPeriod, e.analysis.prefilter.period, e.analysis.prefilter.gain,
+	)
+	pitchPeriod = min(pitchPeriod, combFilterMaxPeriod-2)
+
+	// The reference trims the raw correlation before thresholding, and backs
+	// the filter off further when packet loss is expected: the post-filter is
+	// recursive, so a lost frame keeps ringing (celt_encoder.c:1498).
+	pitchGain *= 0.7
+	if e.lossRate > 2 {
+		pitchGain *= 0.5
+	}
+	if e.lossRate > 4 {
+		pitchGain *= 0.5
+	}
+	if e.lossRate > 8 {
+		pitchGain = 0
+	}
 
 	enabled, qq, quantizedGain := prefilterDecision(
 		pitchPeriod, pitchGain,
 		e.analysis.prefilter.period, e.analysis.prefilter.gain,
-		frameBytes, len(pcm), tfEstimate,
+		frameBytes, len(srcs), tfEstimate,
 		uint(frameBytes)*8, e.rangeEncoder.Tell(),
 	)
 
-	tapset := e.tapsetDecision
-	if enabled && shouldCancelPrefilter(pcm, e.mode.SampleRate(), &e.analysis, pitchPeriod, quantizedGain, tapset) {
-		return false, pitchPeriod, 0, 0, tapset
-	}
-
-	return enabled, pitchPeriod, qq, quantizedGain, tapset
+	return enabled, pitchPeriod, qq, quantizedGain, e.tapsetDecision
 }
 
 // updatePrefilterState saves or resets the prefilter state for the next frame.
@@ -616,14 +653,23 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 	e.rangeEncoder.Init()
 
 	transient, tfEstimate, tfChan := detectTransient(pcm, &e.analysis)
+
+	// libopus runs the pitch search on the pre-emphasized signal with its
+	// comb-filter history in front (celt_encoder.c:run_prefilter), so the
+	// pre-emphasis happens before the prefilter decision, not inside the MDCT
+	// analysis.
+	var srcs [2][]float32
+	for ch := range pcm {
+		srcs[ch] = preemphasisChannel(e.mode, pcm[ch], ch, &e.analysis)
+	}
 	prefilterEnabled, pitchPeriod, prefilterQq, prefilterGain, prefilterTapset := e.choosePrefilter(
-		pcm, frameBytes, tfEstimate,
+		srcs[:len(pcm)], len(pcm[0]), frameBytes, tfEstimate,
 	)
 
 	// libopus gates the last-chance transient check on complexity>=5
 	// (celt_encoder.c:2216).
 	analysis, patched, err := analyzeFrame(
-		e.mode, pcm, startBand, endBand, &e.analysis, &e.mdctScratch, &e.fftScratch,
+		e.mode, pcm, srcs, startBand, endBand, &e.analysis, &e.mdctScratch, &e.fftScratch,
 		transient,
 		prefilterEnabled, pitchPeriod, prefilterGain, prefilterTapset,
 		e.previousLogE, e.complexity >= 5,
@@ -670,7 +716,7 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 	offsets := dr.offsets
 	spreadWeight := dr.spreadWeight
 
-	// tf_analysis and spreading_decision both read the normalised bands, so
+	// tf_analysis and spreading_decision both read the normalized bands, so
 	// build them once here (libopus normalise_bands, celt_encoder.c:2241).
 	// libopus disables variable tf resolution for very small frames; its
 	// fallback is tf_res = isTransient for every band, not zero.

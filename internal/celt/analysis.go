@@ -143,23 +143,29 @@ func patchTransientDecision(
 	return meanDiff > 1.0
 }
 
-// preprocessChannel applies the DC blocker, pre-emphasis and pitch pre-filter,
-// leaving the result in state.preScratch. It advances the filter memories, so
-// it runs exactly once per frame even when the MDCT is redone afterwards.
-func preprocessChannel(
-	mode *Mode, pcm []float32, ch int, state *analysisState,
-	prefilterEnabled bool, prefilterPeriod int, prefilterGain float32, prefilterTapset int,
-) []float32 {
+// preemphasisChannel applies the DC blocker and pre-emphasis into
+// state.preScratch, then lays out prefilterMem + the new samples in
+// state.prefilterBuf. That buffer is what both the pitch search and the comb
+// filter read, mirroring libopus' single `pre` array.
+func preemphasisChannel(mode *Mode, pcm []float32, ch int, state *analysisState) []float32 {
 	pre := state.preScratch[ch][:len(pcm)]
 	copy(pre, pcm)
 	applyDCBlock(pre, mode.SampleRate(), &state.dcBlockMem[ch])
 	applyPreemphasis(pre, pre, &state.preemphasisMem[ch])
 
-	// Apply pitch pre-filter (whitening) before MDCT, mirroring
-	// libopus run_prefilter. Reuses combFilter with negated gains.
 	src := state.prefilterBuf[ch][:postfilterHistorySampleCount+len(pre)]
 	copy(src, state.prefilterMem[ch])
 	copy(src[postfilterHistorySampleCount:], pre)
+
+	return src
+}
+
+// applyPrefilterChannel whitens the pre-emphasized signal in place and advances
+// the comb filter history. It runs exactly once per frame.
+func applyPrefilterChannel(
+	ch int, state *analysisState, src, pre []float32,
+	prefilterEnabled bool, prefilterPeriod int, prefilterGain float32, prefilterTapset int,
+) {
 	if prefilterEnabled {
 		dst := state.prefilterOut[ch][:len(src)]
 		// The crossfade starts from the previous frame's filter, which is
@@ -179,8 +185,6 @@ func preprocessChannel(
 	// picks up stale samples whenever it switches back on. It carries the
 	// unfiltered signal, since the taps read the input, not the output.
 	copy(state.prefilterMem[ch], src[len(pre):len(pre)+postfilterHistorySampleCount])
-
-	return pre
 }
 
 // transformChannels runs the MDCT and per-band log amplitude for every channel
@@ -237,7 +241,7 @@ func applyTransientPatch(
 }
 
 func analyzeFrame(
-	mode *Mode, pcm [][]float32, startBand, endBand int,
+	mode *Mode, pcm [][]float32, srcs [2][]float32, startBand, endBand int,
 	state *analysisState, mdctScratch *forwardMDCTScratch, fftScratch *[]complex32,
 	transient bool,
 	prefilterEnabled bool, prefilterPeriod int, prefilterGain float32, prefilterTapset int,
@@ -266,7 +270,7 @@ func analyzeFrame(
 	}
 
 	for ch := range pcm {
-		preprocessChannel(mode, pcm[ch], ch, state,
+		applyPrefilterChannel(ch, state, srcs[ch], state.preScratch[ch][:len(pcm[ch])],
 			prefilterEnabled, prefilterPeriod, prefilterGain, prefilterTapset)
 	}
 	if err = transformChannels(&res, len(pcm), useShortBlocks,
