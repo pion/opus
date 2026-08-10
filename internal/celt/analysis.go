@@ -44,9 +44,10 @@ type analysisState struct {
 }
 
 type analysisResult struct {
-	info       frameSideInfo
-	mdct       [2][]float32
-	logBandAmp [2][maxBands]float32
+	frameSampleCount int
+	info             frameSideInfo
+	mdct             [2][]float32
+	logBandAmp       [2][maxBands]float32
 }
 
 func newAnalysisState() analysisState {
@@ -103,19 +104,153 @@ func newAnalysisState() analysisState {
 // When transient is true and lm > 0, I run (1<<lm) short MDCTs of 2.5 ms each
 // and interleave their spectra so inverseTransformChannel can split them back —
 // RFC 6716 §4.3.7 defines the interleaved layout for transient frames.
+// patchTransientDecision is libopus's last-chance transient check
+// (celt_encoder.c:473): it compares the current band energies against an
+// aggressively spread version of the previous frame's, and reports a transient
+// when the mean rise clears 1.0 in log2 units (6 dB). The spreading keeps an
+// isolated quiet band from triggering it.
+func patchTransientDecision(
+	newE, oldE [2][maxBands]float32, startBand, endBand, channelCount int,
+) bool {
+	var spreadOld [maxBands]float32
+	if channelCount == 1 {
+		spreadOld[startBand] = oldE[0][startBand]
+		for band := startBand + 1; band < endBand; band++ {
+			spreadOld[band] = max32(spreadOld[band-1]-1.0, oldE[0][band])
+		}
+	} else {
+		spreadOld[startBand] = max32(oldE[0][startBand], oldE[1][startBand])
+		for band := startBand + 1; band < endBand; band++ {
+			spreadOld[band] = max32(spreadOld[band-1]-1.0, max32(oldE[0][band], oldE[1][band]))
+		}
+	}
+	for band := endBand - 2; band >= startBand; band-- {
+		spreadOld[band] = max32(spreadOld[band], spreadOld[band+1]-1.0)
+	}
+
+	from := max(2, startBand)
+	if endBand-1 <= from {
+		return false
+	}
+	var meanDiff float32
+	for _, bands := range newE[:channelCount] {
+		for band := from; band < endBand-1; band++ {
+			meanDiff += max32(0, max32(0, bands[band])-max32(0, spreadOld[band]))
+		}
+	}
+	meanDiff /= float32(channelCount * (endBand - 1 - from))
+
+	return meanDiff > 1.0
+}
+
+// preprocessChannel applies the DC blocker, pre-emphasis and pitch pre-filter,
+// leaving the result in state.preScratch. It advances the filter memories, so
+// it runs exactly once per frame even when the MDCT is redone afterwards.
+func preprocessChannel(
+	mode *Mode, pcm []float32, ch int, state *analysisState,
+	prefilterEnabled bool, prefilterPeriod int, prefilterGain float32, prefilterTapset int,
+) []float32 {
+	pre := state.preScratch[ch][:len(pcm)]
+	copy(pre, pcm)
+	applyDCBlock(pre, mode.SampleRate(), &state.dcBlockMem[ch])
+	applyPreemphasis(pre, pre, &state.preemphasisMem[ch])
+
+	// Apply pitch pre-filter (whitening) before MDCT, mirroring
+	// libopus run_prefilter. Reuses combFilter with negated gains.
+	src := state.prefilterBuf[ch][:postfilterHistorySampleCount+len(pre)]
+	copy(src, state.prefilterMem[ch])
+	copy(src[postfilterHistorySampleCount:], pre)
+	if prefilterEnabled {
+		dst := state.prefilterOut[ch][:len(src)]
+		// The crossfade starts from the previous frame's filter, which is
+		// still in prefilter.period/gain/tapset here — updatePrefilterState
+		// only rotates them in after the frame is encoded.
+		applyPrefilter(
+			dst, src,
+			state.prefilter.period, prefilterPeriod,
+			len(pre),
+			state.prefilter.gain, prefilterGain,
+			state.prefilter.tapset, prefilterTapset,
+		)
+		copy(pre, dst[postfilterHistorySampleCount:])
+	}
+	// The history advances every frame, filtered or not (libopus updates
+	// prefilter_mem outside the pf_on branch); otherwise the comb filter
+	// picks up stale samples whenever it switches back on. It carries the
+	// unfiltered signal, since the taps read the input, not the output.
+	copy(state.prefilterMem[ch], src[len(pre):len(pre)+postfilterHistorySampleCount])
+
+	return pre
+}
+
+// transformChannels runs the MDCT and per-band log amplitude for every channel
+// from the already pre-processed signal. It reads state.prevPCM as the overlap
+// and does not modify it, so it can be re-run with a different block size.
+func transformChannels(
+	res *analysisResult, channelCount int, useShortBlocks bool,
+	state *analysisState, mdctScratch *forwardMDCTScratch, fftScratch *[]complex32,
+	lm, startBand, endBand int,
+) error {
+	for ch := range channelCount {
+		pre := state.preScratch[ch][:res.frameSampleCount]
+		if useShortBlocks {
+			analyzeTransientChannel(
+				pre, state.prevPCM[ch], ch,
+				state.transientMDCT[ch], state.mdctInput[ch],
+				mdctScratch, fftScratch, lm,
+			)
+			res.mdct[ch] = state.transientMDCT[ch][:len(pre)]
+		} else {
+			mdctInput := state.mdctInput[ch][:shortBlockSampleCount+len(pre)]
+			copy(mdctInput, state.prevPCM[ch])
+			copy(mdctInput[shortBlockSampleCount:], pre)
+
+			res.mdct[ch] = forwardMDCTWithScratch(mdctInput, ch, mdctScratch, fftScratch)
+			if res.mdct[ch] == nil {
+				return errInvalidFrameSize
+			}
+		}
+		res.logBandAmp[ch] = computeBandLogAmp(res.mdct[ch], lm, startBand, endBand)
+	}
+
+	return nil
+}
+
+// applyTransientPatch re-runs the MDCT with short blocks when the last-chance
+// check fires. prevPCM is still the previous frame's tail at this point, which
+// is what the short-block overlap needs (celt_encoder.c:2214).
+func applyTransientPatch(
+	res *analysisResult, pcm [][]float32, state *analysisState,
+	mdctScratch *forwardMDCTScratch, fftScratch *[]complex32,
+	lm, startBand, endBand int, oldLogBandAmp [2][maxBands]float32, allow bool,
+) (bool, error) {
+	if !allow || lm <= 0 ||
+		!patchTransientDecision(res.logBandAmp, oldLogBandAmp, startBand, endBand, len(pcm)) {
+		return false, nil
+	}
+
+	res.info.transient = true
+	res.info.shortBlockCount = 1 << lm
+
+	return true, transformChannels(res, len(pcm), true,
+		state, mdctScratch, fftScratch, lm, startBand, endBand)
+}
+
 func analyzeFrame(
 	mode *Mode, pcm [][]float32, startBand, endBand int,
 	state *analysisState, mdctScratch *forwardMDCTScratch, fftScratch *[]complex32,
 	transient bool,
 	prefilterEnabled bool, prefilterPeriod int, prefilterGain float32, prefilterTapset int,
-) (analysisResult, error) {
+	oldLogBandAmp [2][maxBands]float32, allowPatch bool,
+) (analysisResult, bool, error) {
 	lm, err := mode.LMForFrameSampleCount(len(pcm[0]))
 	if err != nil {
-		return analysisResult{}, err
+		return analysisResult{}, false, err
 	}
 
 	useShortBlocks := transient && lm > 0
 	res := analysisResult{
+		frameSampleCount: len(pcm[0]),
 		info: frameSideInfo{
 			lm:             lm,
 			startBand:      startBand,
@@ -131,60 +266,26 @@ func analyzeFrame(
 	}
 
 	for ch := range pcm {
-		// Work on a scratch copy so the caller's PCM is never modified.
+		preprocessChannel(mode, pcm[ch], ch, state,
+			prefilterEnabled, prefilterPeriod, prefilterGain, prefilterTapset)
+	}
+	if err = transformChannels(&res, len(pcm), useShortBlocks,
+		state, mdctScratch, fftScratch, lm, startBand, endBand); err != nil {
+		return analysisResult{}, false, err
+	}
+
+	patched, err := applyTransientPatch(&res, pcm, state, mdctScratch, fftScratch,
+		lm, startBand, endBand, oldLogBandAmp, allowPatch && !useShortBlocks)
+	if err != nil {
+		return analysisResult{}, false, err
+	}
+
+	for ch := range pcm {
 		pre := state.preScratch[ch][:len(pcm[ch])]
-		copy(pre, pcm[ch])
-		applyDCBlock(pre, mode.SampleRate(), &state.dcBlockMem[ch])
-		applyPreemphasis(pre, pre, &state.preemphasisMem[ch])
-
-		// Apply pitch pre-filter (whitening) before MDCT, mirroring
-		// libopus run_prefilter. Reuses combFilter with negated gains.
-		src := state.prefilterBuf[ch][:postfilterHistorySampleCount+len(pre)]
-		copy(src, state.prefilterMem[ch])
-		copy(src[postfilterHistorySampleCount:], pre)
-		if prefilterEnabled {
-			dst := state.prefilterOut[ch][:len(src)]
-			// The crossfade starts from the previous frame's filter, which is
-			// still in prefilter.period/gain/tapset here — updatePrefilterState
-			// only rotates them in after the frame is encoded.
-			applyPrefilter(
-				dst, src,
-				state.prefilter.period, prefilterPeriod,
-				len(pre),
-				state.prefilter.gain, prefilterGain,
-				state.prefilter.tapset, prefilterTapset,
-			)
-			copy(pre, dst[postfilterHistorySampleCount:])
-		}
-		// The history advances every frame, filtered or not (libopus updates
-		// prefilter_mem outside the pf_on branch); otherwise the comb filter
-		// picks up stale samples whenever it switches back on. It carries the
-		// unfiltered signal, since the taps read the input, not the output.
-		copy(state.prefilterMem[ch], src[len(pre):len(pre)+postfilterHistorySampleCount])
-
-		if useShortBlocks {
-			analyzeTransientChannel(
-				pre, state.prevPCM[ch], ch,
-				state.transientMDCT[ch], state.mdctInput[ch],
-				mdctScratch, fftScratch, lm,
-			)
-			res.mdct[ch] = state.transientMDCT[ch][:len(pre)]
-		} else {
-			mdctInput := state.mdctInput[ch][:shortBlockSampleCount+len(pre)]
-			copy(mdctInput, state.prevPCM[ch])
-			copy(mdctInput[shortBlockSampleCount:], pre)
-
-			res.mdct[ch] = forwardMDCTWithScratch(mdctInput, ch, mdctScratch, fftScratch)
-			if res.mdct[ch] == nil {
-				return analysisResult{}, errInvalidFrameSize
-			}
-		}
-
-		res.logBandAmp[ch] = computeBandLogAmp(res.mdct[ch], lm, startBand, endBand)
 		copy(state.prevPCM[ch], pre[len(pre)-shortBlockSampleCount:])
 	}
 
-	return res, nil
+	return res, patched, nil
 }
 
 // analyzeTransientChannel runs (1<<lm) short MDCTs over successive 2.5 ms
