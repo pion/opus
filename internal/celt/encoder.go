@@ -620,13 +620,22 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 		pcm, frameBytes, tfEstimate,
 	)
 
-	analysis, err := analyzeFrame(
+	// libopus gates the last-chance transient check on complexity>=5
+	// (celt_encoder.c:2216).
+	analysis, patched, err := analyzeFrame(
 		e.mode, pcm, startBand, endBand, &e.analysis, &e.mdctScratch, &e.fftScratch,
 		transient,
 		prefilterEnabled, pitchPeriod, prefilterGain, prefilterTapset,
+		e.previousLogE, e.complexity >= 5,
 	)
 	if err != nil {
 		return 0, err
+	}
+	if patched {
+		transient = true
+		// The reference hands tf_analysis a fixed estimate for a patched
+		// frame, since the time-domain metric missed the transient.
+		tfEstimate = 0.2
 	}
 
 	info := analysis.info
