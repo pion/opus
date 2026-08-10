@@ -125,7 +125,7 @@ func TestChooseDualStereo(t *testing.T) {
 			mdctL[i] = v
 			mdctR[i] = v
 		}
-		assert.False(t, chooseDualStereo(mdctL, mdctR, 2),
+		assert.False(t, chooseDualStereo([2][]float32{mdctL, mdctR}, 2),
 			"identical L/R (mono) should always prefer mid/side")
 	})
 
@@ -136,7 +136,7 @@ func TestChooseDualStereo(t *testing.T) {
 			mdctL[i] = float32(i) * 0.1
 			mdctR[i] = float32(n-i) * 0.1
 		}
-		assert.True(t, chooseDualStereo(mdctL, mdctR, 2),
+		assert.True(t, chooseDualStereo([2][]float32{mdctL, mdctR}, 2),
 			"uncorrelated L/R should prefer dual stereo")
 	})
 
@@ -147,7 +147,7 @@ func TestChooseDualStereo(t *testing.T) {
 			mdctL[i] = float32(i) * 0.1
 			mdctR[i] = -float32(i) * 0.1
 		}
-		assert.False(t, chooseDualStereo(mdctL, mdctR, 2),
+		assert.False(t, chooseDualStereo([2][]float32{mdctL, mdctR}, 2),
 			"fully anti-correlated stereo should prefer mid/side")
 	})
 
@@ -158,7 +158,7 @@ func TestChooseDualStereo(t *testing.T) {
 			mdctL[i] = float32(i) * 0.1
 			mdctR[i] = -float32(i) * 0.1
 		}
-		assert.False(t, chooseDualStereo(mdctL, mdctR, 0),
+		assert.False(t, chooseDualStereo([2][]float32{mdctL, mdctR}, 0),
 			"LM=0 must always return false per RFC §5.3.5")
 	})
 }

@@ -613,21 +613,18 @@ func (d *Decoder) finalizeFineEnergy(
 // (independent L/R) is preferred over mid/side coupling.
 //
 // The criterion compares the L1 norm of the mid/side spectrum (scaled by
-// 1/sqrt(2)) against the L1 norm of the L/R spectrum. Dual stereo wins
-// when the M/S representation is relatively expensive — i.e. when the
-// channels are uncorrelated.
-//
-// Mirrors libopus with QCONST16(0.707107f,15) = 23170 for the Q15 scale.
-func chooseDualStereo(mdctL, mdctR []float32, lm int) bool {
+// 1/sqrt(2)) against the L1 norm of the L/R spectrum, both taken over the
+// normalised bands. Dual stereo wins when the M/S representation is
+// relatively expensive — i.e. when the channels are uncorrelated.
+func chooseDualStereo(normalized [2][]float32, lm int) bool {
 	if lm == 0 {
 		return false
 	}
 
 	scale := 1 << lm
-	var sumLR int64
-	var sumMS int64
+	var sumLR, sumMS float64
 
-	mdctLen := min(len(mdctL), len(mdctR))
+	mdctLen := min(len(normalized[0]), len(normalized[1]))
 	for band := 0; band < 13 && band+1 < len(bandEdges); band++ {
 		bandStart := scale * int(bandEdges[band])
 		bandEnd := min(scale*int(bandEdges[band+1]), mdctLen)
@@ -636,25 +633,27 @@ func chooseDualStereo(mdctL, mdctR []float32, lm int) bool {
 		}
 
 		for i := bandStart; i < bandEnd; i++ {
-			l := int64(mdctL[i] * (1 << 14))
-			r := int64(mdctR[i] * (1 << 14))
-			m := l + r
-			s := l - r
-			sumLR += abs64(l) + abs64(r)
-			sumMS += abs64(m) + abs64(s)
+			l := float64(normalized[0][i])
+			r := float64(normalized[1][i])
+			sumLR += math.Abs(l) + math.Abs(r)
+			sumMS += math.Abs(l+r) + math.Abs(l-r)
 		}
 	}
 
-	sumMS = (sumMS * 23170) >> 15
+	sumMS *= 0.707107
 
 	thetas := 13
+	// The lower bands do not need thetas at LM<=1.
 	if lm <= 1 {
-		thetas = 5
+		thetas -= 8
 	}
 
-	bins := int64(scale * int(bandEdges[13]))
+	// The weight is eBands[13]<<(LM+1), twice the bin count of the range
+	// scanned above — that factor is what sets how much cheaper M/S has to be
+	// before dual stereo wins.
+	bins := float64(int(bandEdges[13]) << (lm + 1))
 
-	return (bins+int64(thetas))*sumMS > bins*sumLR
+	return (bins+float64(thetas))*sumMS > bins*sumLR
 }
 
 // chooseAllocationTrim returns the allocation trim [0,10] based on bitrate,
@@ -738,13 +737,6 @@ func chooseAllocationTrim(
 		trimIndex = 10
 	}
 	return trimIndex
-}
-
-func abs64(x int64) int64 {
-	if x < 0 {
-		return -x
-	}
-	return x
 }
 
 func abs32(x float32) float32 {
