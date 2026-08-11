@@ -523,27 +523,32 @@ func (e *Encoder) computeIntensityAndDualStereo(
 // Simplified version of libopus compute_vbr() (celt_encoder.c, ~line 1605).
 // Not ported: tonality/activity boost, stereo saving, surround masking,
 // temporal VBR — these need the full analysis pipeline pion doesn't have yet.
+// vbrTFCalibration is the average tf_estimate the target is calibrated for,
+// so a typical frame gets no boost (celt_encoder.c compute_vbr).
+const vbrTFCalibration = 0.044
+
 func computeVBR(
 	baseTarget int, // 1/8-bit units
 	maxDepth float32,
 	totBoostBits int,
-	transient, constrainedVBR bool,
+	constrainedVBR bool,
 	channelCount int,
-	effectiveBytes int,
 	lm int,
+	tfEstimate float32,
 ) int {
 	target := baseTarget + totBoostBits - (19 << lm) // dynalloc calibration
-	if transient {
-		target += target >> 3
-	}
 
-	floorDepth := float32(channelCount*effectiveBytes*8) * maxDepth / 65536
-	if floorDepth < float32(target>>2) {
-		floorDepth = float32(target >> 2)
-	}
-	if float32(target) > floorDepth {
-		target = int(floorDepth)
-	}
+	// Transient boost, compensated for the average frame. The reference scales
+	// the target by tf_estimate rather than switching on the transient flag.
+	target += int((tfEstimate - vbrTFCalibration) * float32(target))
+
+	// The floor is the depth the spectrum can actually use: the coded bin count
+	// times the per-bin depth. The Q shift around it in celt_encoder.c is a
+	// no-op in the float build, so maxDepth goes in unscaled.
+	bins := int(bandEdges[maxBands-2]) << lm
+	floorDepth := int(float32(channelCount*bins<<bitResolution) * maxDepth)
+	floorDepth = max(floorDepth, target>>2)
+	target = min(target, floorDepth)
 
 	// Constrained VBR can't sustain a higher bitrate for long, so pull 1/3
 	// of the way back to baseTarget (libopus's fixed 0.67 factor).
@@ -559,8 +564,8 @@ func computeVBR(
 // tellFrac is e.rangeEncoder.TellFrac() at the point of the call. Mirrors
 // celt_encoder.c's VBR block around compute_vbr (~lines 2436-2530).
 func (e *Encoder) applyVBR(
-	frameBytes int, transient bool, dr dynallocResult,
-	effectiveBytes, lm, channelCount, tellFrac int,
+	frameBytes int, dr dynallocResult,
+	effectiveBytes, lm, channelCount, tellFrac int, tfEstimate float32,
 ) int {
 	vbrRate := frameBytes << 6 // libopus vbr_rate, 1/8-bit units
 
@@ -580,7 +585,7 @@ func (e *Encoder) applyVBR(
 	// bytes. libopus uses this pre-rounding value for the drift update below
 	// and the rounded value for the reservoir — they're not the same number.
 	rawTarget := computeVBR(
-		baseTarget, dr.maxDepth, dr.totBoostBits, transient, e.constrainedVBR, channelCount, effectiveBytes, lm,
+		baseTarget, dr.maxDepth, dr.totBoostBits, e.constrainedVBR, channelCount, lm, tfEstimate,
 	) + tellFrac
 
 	nbAvailableBytes := max(2, (rawTarget+(1<<5))>>6)
@@ -678,9 +683,9 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 		return 0, err
 	}
 	if patched {
-		transient = true
-		// The reference hands tf_analysis a fixed estimate for a patched
-		// frame, since the time-domain metric missed the transient.
+		// analyzeFrame already flipped info.transient; what is left is the
+		// fixed estimate the reference hands tf_analysis and the VBR target
+		// for a frame the time-domain metric missed.
 		tfEstimate = 0.2
 	}
 
@@ -748,7 +753,7 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 	tellFrac := int(e.rangeEncoder.TellFrac())
 
 	if e.vbr {
-		effectiveBytes = e.applyVBR(frameBytes, transient, dr, effectiveBytes, info.lm, info.channelCount, tellFrac)
+		effectiveBytes = e.applyVBR(frameBytes, dr, effectiveBytes, info.lm, info.channelCount, tellFrac, tfEstimate)
 	}
 	info.totalBits = uint(effectiveBytes) * 8
 	shapeBits := (int(info.totalBits) << bitResolution) - tellFrac - 1

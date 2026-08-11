@@ -623,28 +623,62 @@ func TestConstrainedVBRPacketRoundTrip(t *testing.T) {
 }
 
 func TestVBRProducesVaryingPacketSizes(t *testing.T) {
-	enc, err := NewEncoder(WithVBR(true), WithConstrainedVBR(false))
+	enc, err := NewEncoder(WithChannels(2), WithBitrate(96000), WithVBR(true), WithConstrainedVBR(false))
 	require.NoError(t, err)
 
 	sizes := make(map[int]bool)
-	for i := range 20 {
-		pcm := make([]float32, encoderTestFrameSampleCount)
-		if i%2 == 0 {
-			for j := range pcm {
-				pcm[j] = float32(j%100) / 100
-			}
-		} else {
-			for j := range pcm {
-				pcm[j] = 0.0001
+	phase := 0.0
+	for i := range 6 {
+		pcm := make([]float32, encoderTestFrameSampleCount*2)
+		// The first frame is silence, which needs far fewer bits than the tone
+		// that follows it.
+		if i > 0 {
+			for j := range encoderTestFrameSampleCount {
+				v := float32(math.Sin(phase)) * 0.3
+				pcm[2*j] = v
+				pcm[2*j+1] = -v
+				phase += 2 * math.Pi * 440 / 48000
 			}
 		}
-		packet := make([]byte, 256)
-		n, err := enc.EncodeFloat32(pcm, packet)
-		require.NoError(t, err)
+		packet := make([]byte, 1500)
+		n, encErr := enc.EncodeFloat32(pcm, packet)
+		require.NoError(t, encErr)
 		sizes[n] = true
 	}
 
 	assert.Greater(t, len(sizes), 1, "VBR should produce varying packet sizes")
+}
+
+func TestVBRTracksTargetBitrate(t *testing.T) {
+	// The VBR target is clamped by a floor derived from the coded bin count.
+	// Deriving it from the byte budget instead pinned every frame near a
+	// quarter of the target, so VBR delivered about a third of the rate asked
+	// for. Guard the rate, not just the variation.
+	const bitrate = 96000
+	enc, err := NewEncoder(WithChannels(2), WithBitrate(bitrate), WithVBR(true), WithConstrainedVBR(false))
+	require.NoError(t, err)
+
+	frameBudget := bitrate / 50 / 8
+	total, frames := 0, 40
+	phase := 0.0
+	for range frames {
+		pcm := make([]float32, encoderTestFrameSampleCount*2)
+		for j := range encoderTestFrameSampleCount {
+			v := float32(math.Sin(phase)+0.5*math.Sin(phase*7.3)) * 0.3
+			pcm[2*j] = v
+			pcm[2*j+1] = -v
+			phase += 2 * math.Pi * 440 / 48000
+		}
+		packet := make([]byte, 1500)
+		n, encErr := enc.EncodeFloat32(pcm, packet)
+		require.NoError(t, encErr)
+		total += n
+	}
+
+	// Only the lower bound belongs here: what the floor bug broke was the rate
+	// being delivered, and the ceiling is the frame budget's own business.
+	avg := float64(total) / float64(frames)
+	assert.Greater(t, avg, 0.8*float64(frameBudget), "VBR undershoots the requested rate")
 }
 
 func TestVBRPacketRoundTripMultiFrame(t *testing.T) {
