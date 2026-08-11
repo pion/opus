@@ -861,3 +861,51 @@ func freqEnergy(samples []float32, freq float64) float64 {
 
 	return math.Sqrt(re*re+im*im) / float64(len(samples))
 }
+
+func TestStereoWidthQ14Schedule(t *testing.T) {
+	// Above 32 kb/s the image is untouched, below 16 kb/s it collapses to mono,
+	// and in between it narrows monotonically.
+	assert.Equal(t, stereoWidthFull, stereoWidthQ14(33000))
+	assert.Equal(t, 0, stereoWidthQ14(15000))
+
+	prev := 0
+	for rate := stereoWidthMinRate; rate <= stereoWidthMaxRate; rate += 250 {
+		got := stereoWidthQ14(rate)
+		assert.GreaterOrEqual(t, got, prev, "width must not narrow as the rate grows: rate=%d", rate)
+		assert.LessOrEqual(t, got, stereoWidthFull, "rate=%d", rate)
+		prev = got
+	}
+}
+
+func TestApplyStereoFadeCollapsesToMono(t *testing.T) {
+	// Width zero on both ends means every sample pair becomes its own average.
+	left := []float32{1, 1, 1, 1}
+	right := []float32{-1, -1, -1, -1}
+	applyStereoFade(left, right, 0, 0, nil)
+	for i := range left {
+		assert.InDelta(t, 0, left[i], 1e-6, "sample %d", i)
+		assert.InDelta(t, 0, right[i], 1e-6, "sample %d", i)
+	}
+}
+
+func TestApplyStereoFadeFullWidthIsIdentity(t *testing.T) {
+	left := []float32{0.5, -0.25, 0.75, 0}
+	right := []float32{-0.5, 0.25, 0, 0.75}
+	wantL := append([]float32(nil), left...)
+	wantR := append([]float32(nil), right...)
+	applyStereoFade(left, right, 1, 1, nil)
+	assert.Equal(t, wantL, left)
+	assert.Equal(t, wantR, right)
+}
+
+func TestApplyStereoFadeCrossfadesOverOverlap(t *testing.T) {
+	// Coming from full width down to mono, the first sample keeps the old
+	// width and the tail past the overlap is fully narrowed.
+	window := []float32{0, 1}
+	left := []float32{1, 1, 1}
+	right := []float32{-1, -1, -1}
+	applyStereoFade(left, right, 1, 0, window)
+	assert.InDelta(t, 1, left[0], 1e-6, "overlap starts at the previous width")
+	assert.InDelta(t, 0, left[1], 1e-6, "overlap ends at the new width")
+	assert.InDelta(t, 0, left[2], 1e-6, "past the overlap the new width applies")
+}

@@ -872,3 +872,10 @@ func minFloat32(a, b float32) float32 {
 
 	return b
 }
+
+// OverlapWindow returns the MDCT overlap window (celt_mode->window in libopus).
+// The encoder-side gain crossfades in src/opus_encoder.c are shaped by it, and
+// those run before the CELT layer sees the samples.
+func OverlapWindow() []float32 {
+	return celtWindow120[:]
+}

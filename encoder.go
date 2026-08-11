@@ -90,6 +90,7 @@ type Encoder struct {
 	bandwidth      Bandwidth
 	maxBandwidth   Bandwidth
 	silkDCBlockMem float32
+	stereoWidth    int
 }
 
 // EncoderOption configures an Encoder during construction.
@@ -249,6 +250,7 @@ func NewEncoder(opts ...EncoderOption) (*Encoder, error) {
 		lossRate:       0,
 		bandwidth:      BandwidthAuto,
 		maxBandwidth:   BandwidthFullband,
+		stereoWidth:    stereoWidthFull,
 	}
 
 	for _, opt := range opts {
@@ -384,6 +386,7 @@ func (e *Encoder) EncodeFloat32(in []float32, out []byte) (int, error) {
 	}
 
 	channels := splitChannels(in, e.channels, frameSamples)
+	e.narrowStereo(channels)
 
 	frameBytes := e.frameBytes()
 	if frameBytes <= 0 || frameBytes > maxOpusFrameSize {
@@ -563,4 +566,85 @@ func (e *Encoder) frameBytes() int {
 
 func (e *Encoder) frameSampleCount() int {
 	return int(int64(celtSampleRate) * frame20msNS / 1000000000)
+}
+
+const (
+	// stereoWidthFull is Q14 unity: the image is left alone.
+	stereoWidthFull = 1 << 14
+	// Below stereoWidthMinRate the image is collapsed to mono; above
+	// stereoWidthMaxRate it is untouched. In between it narrows gradually.
+	stereoWidthMinRate = 16000
+	stereoWidthMaxRate = 32000
+)
+
+// equivalentRate expresses the configured bitrate as the rate an ideal encoder
+// would need for the same quality, which is what libopus compares against its
+// stereo-width and mode thresholds (compute_equiv_rate, src/opus_encoder.c).
+// The frame-rate term is a no-op here because every frame is 20 ms.
+func (e *Encoder) equivalentRate() int {
+	equiv := e.bitrate
+	// CBR costs about 8%.
+	if !e.vbr {
+		equiv -= equiv / 12
+	}
+	equiv = equiv * (90 + e.complexity) / 100
+	// Below complexity 5 CELT drops the pitch filter, worth about 10%.
+	if e.complexity < silkComplexityInterpolationThreshold+1 {
+		equiv = equiv * 9 / 10
+	}
+
+	return equiv
+}
+
+// stereoWidthQ14 returns how much of the stereo image to keep, in Q14.
+// Mirrors the schedule in libopus opus_encode_native.
+func stereoWidthQ14(equivRate int) int {
+	switch {
+	case equivRate > stereoWidthMaxRate:
+		return stereoWidthFull
+	case equivRate < stereoWidthMinRate:
+		return 0
+	default:
+		return stereoWidthFull - 2048*(stereoWidthMaxRate-equivRate)/(equivRate-14000)
+	}
+}
+
+// applyStereoFade narrows the stereo image toward mono by scaling the side
+// signal, crossfading from the previous frame's width across the MDCT overlap
+// so the change does not land as a step. Mirrors libopus stereo_fade
+// (src/opus_encoder.c). At low bitrates the side channel is not worth its bits,
+// and narrowing it beats letting the allocator starve both channels.
+func applyStereoFade(left, right []float32, prevWidth, width float32, window []float32) {
+	g1 := 1 - prevWidth
+	g2 := 1 - width
+	overlap := min(len(window), len(left))
+	for i := range overlap {
+		w := window[i] * window[i]
+		g := w*g2 + (1-w)*g1
+		diff := 0.5 * (left[i] - right[i]) * g
+		left[i] -= diff
+		right[i] += diff
+	}
+	for i := overlap; i < len(left); i++ {
+		diff := 0.5 * (left[i] - right[i]) * g2
+		left[i] -= diff
+		right[i] += diff
+	}
+}
+
+// narrowStereo applies the low-bitrate stereo width reduction to the split
+// channels and advances the width state.
+func (e *Encoder) narrowStereo(channels [][]float32) {
+	if len(channels) != 2 {
+		return
+	}
+	width := stereoWidthQ14(e.equivalentRate())
+	if e.stereoWidth < stereoWidthFull || width < stereoWidthFull {
+		applyStereoFade(
+			channels[0], channels[1],
+			float32(e.stereoWidth)/stereoWidthFull, float32(width)/stereoWidthFull,
+			celt.OverlapWindow(),
+		)
+	}
+	e.stereoWidth = width
 }
