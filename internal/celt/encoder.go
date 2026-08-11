@@ -356,6 +356,7 @@ func (e *Encoder) encodeDynamicAllocation(info *frameSideInfo, offsets [maxBands
 // enough budget left to signal it.
 func (e *Encoder) encodeAllocationTrim(
 	info *frameSideInfo, logBandAmp [2][maxBands]float32, mdct [2][]float32, totalBitsEighth uint,
+	tfEstimate float32,
 ) {
 	info.allocationTrim = defaultAllocationTrim
 	if e.rangeEncoder.TellFrac()+uint(allocationTrimBitCost<<bitResolution) <= totalBitsEighth {
@@ -364,6 +365,7 @@ func (e *Encoder) encodeAllocationTrim(
 			mdct,
 			info.channelCount, info.lm, info.endBand,
 			info.totalBits,
+			tfEstimate,
 		)
 		e.rangeEncoder.EncodeSymbolWithICDF(icdfAllocationTrim, uint32(info.allocationTrim))
 	}
@@ -743,7 +745,7 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 	e.prevSpreadDecision = info.spread
 	e.encodeSpread(&info)
 	totalBitsEighth := e.encodeDynamicAllocation(&info, offsets)
-	e.encodeAllocationTrim(&info, analysis.logBandAmp, analysis.mdct, totalBitsEighth)
+	e.encodeAllocationTrim(&info, analysis.logBandAmp, analysis.mdct, totalBitsEighth, tfEstimate)
 
 	tellFrac := int(e.rangeEncoder.TellFrac())
 

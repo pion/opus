@@ -392,10 +392,10 @@ func TestAnalyzeFrameAppliesDCBlock(t *testing.T) {
 func TestChooseAllocationTrimDefault(t *testing.T) {
 	// Espectro plano a 128kbps → trim cerca de 5 (default).
 	logBandAmp := makeFlatLogBandAmp(0.0) // todas las bandas iguales
-	mdct := makeFlatMDCT(1.0)
+	mdct := makeFlatMDCT()
 	trim := chooseAllocationTrim(
 		[2][maxBands]float32{logBandAmp, logBandAmp},
-		[2][]float32{mdct, mdct}, 1, maxLM, maxBands, 128*8*50,
+		[2][]float32{mdct, mdct}, 1, maxLM, maxBands, 128*8*50, 0,
 	)
 	assert.InDelta(t, 5, trim, 1, "flat spectrum at 128kbps should stay near default")
 }
@@ -403,10 +403,10 @@ func TestChooseAllocationTrimDefault(t *testing.T) {
 func TestChooseAllocationTrimLowBitrate(t *testing.T) {
 	// A 32kbps → base trim=4 (no 5).
 	logBandAmp := makeFlatLogBandAmp(0.0)
-	mdct := makeFlatMDCT(1.0)
+	mdct := makeFlatMDCT()
 	trim := chooseAllocationTrim(
 		[2][maxBands]float32{logBandAmp, logBandAmp},
-		[2][]float32{mdct, mdct}, 1, maxLM, maxBands, 32*8*50,
+		[2][]float32{mdct, mdct}, 1, maxLM, maxBands, 32*8*50, 0,
 	)
 	assert.LessOrEqual(t, trim, 5, "low bitrate should bias trim downward")
 }
@@ -416,11 +416,11 @@ func TestChooseAllocationTrimSpectralTilt(t *testing.T) {
 	// (trim > 5 biases bits toward low bands). High-heavy → opposite.
 	lowHeavy := makeTiltedLogBandAmp(-1.0)  // bandas bajas con más energía
 	highHeavy := makeTiltedLogBandAmp(+1.0) // bandas altas con más energía
-	mdct := makeFlatMDCT(1.0)
+	mdct := makeFlatMDCT()
 	trimLow := chooseAllocationTrim([2][maxBands]float32{lowHeavy, lowHeavy},
-		[2][]float32{mdct, mdct}, 1, maxLM, maxBands, 128*8*50)
+		[2][]float32{mdct, mdct}, 1, maxLM, maxBands, 128*8*50, 0)
 	trimHigh := chooseAllocationTrim([2][maxBands]float32{highHeavy, highHeavy},
-		[2][]float32{mdct, mdct}, 1, maxLM, maxBands, 128*8*50)
+		[2][]float32{mdct, mdct}, 1, maxLM, maxBands, 128*8*50, 0)
 	assert.Greater(t, trimLow, trimHigh, "low-heavy spectrum should bias trim upward (more bits to lows)")
 }
 
@@ -429,14 +429,26 @@ func TestChooseAllocationTrimStereoCorrelated(t *testing.T) {
 	logBandAmp := makeFlatLogBandAmp(0.0)
 	mdct := makeSineMDCT(440) // mismo contenido en ambos canales
 	trimCorr := chooseAllocationTrim([2][maxBands]float32{logBandAmp, logBandAmp},
-		[2][]float32{mdct, mdct}, 2, maxLM, maxBands, 128*8*50)
+		[2][]float32{mdct, mdct}, 2, maxLM, maxBands, 128*8*50, 0)
 
 	// L y R decorrelated → trim sin ajuste stereo.
 	mdctR := makeNoiseMDCT(42)
 	trimDecorr := chooseAllocationTrim([2][maxBands]float32{logBandAmp, logBandAmp},
-		[2][]float32{mdct, mdctR}, 2, maxLM, maxBands, 128*8*50)
+		[2][]float32{mdct, mdctR}, 2, maxLM, maxBands, 128*8*50, 0)
 
 	assert.Less(t, trimCorr, trimDecorr, "correlated stereo should have lower trim than decorrelated")
+}
+
+func TestChooseAllocationTrimTFEstimate(t *testing.T) {
+	// A frame asking for finer time resolution gets its trim pulled down by
+	// twice tf_estimate, so bits move up the spectrum.
+	logBandAmp := makeFlatLogBandAmp(0.0)
+	mdct := makeFlatMDCT()
+	trimFlat := chooseAllocationTrim([2][maxBands]float32{logBandAmp, logBandAmp},
+		[2][]float32{mdct, mdct}, 1, maxLM, maxBands, 128*8*50, 0)
+	trimTF := chooseAllocationTrim([2][maxBands]float32{logBandAmp, logBandAmp},
+		[2][]float32{mdct, mdct}, 1, maxLM, maxBands, 128*8*50, 1.0)
+	assert.Equal(t, trimFlat-2, trimTF, "tf_estimate of 1.0 should drop the trim by 2")
 }
 
 // makeFlatLogBandAmp returns a per-band log amplitude array with every band
@@ -462,11 +474,11 @@ func makeTiltedLogBandAmp(slope float32) [maxBands]float32 {
 }
 
 // makeFlatMDCT returns an MDCT spectrum of the full frame with every bin set
-// to v. Cosine similarity between two identical flat spectra is 1.0.
-func makeFlatMDCT(v float32) []float32 {
+// to one. Cosine similarity between two identical flat spectra is 1.0.
+func makeFlatMDCT() []float32 {
 	mdct := make([]float32, (1<<maxLM)*int(bandEdges[maxBands]))
 	for i := range mdct {
-		mdct[i] = v
+		mdct[i] = 1
 	}
 
 	return mdct

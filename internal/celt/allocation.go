@@ -669,6 +669,7 @@ func chooseAllocationTrim(
 	mdct [2][]float32,
 	channelCount, lm, endBand int,
 	totalBits uint,
+	tfEstimate float32,
 ) int {
 	frameSampleCount := shortBlockSampleCount << lm
 	equivRate := int(totalBits) * sampleRate / frameSampleCount
@@ -728,6 +729,11 @@ func chooseAllocationTrim(
 	diff /= float32(channelCount * (endBand - 1))
 	tiltContrib := max32(-2.0, min32(2.0, (diff+1.0)/6.0))
 	trim -= tiltContrib
+
+	// A frame that wants finer time resolution wants its bits spread up the
+	// spectrum, so the reference backs the trim off by twice tf_estimate
+	// (celt_encoder.c:820). The Q shift there is a no-op in the float build.
+	trim -= 2 * tfEstimate
 
 	// Round and clamp to [0, 10].
 	trimIndex := int(trim + 0.5)
