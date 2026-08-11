@@ -557,8 +557,15 @@ func splitChannels(in []float32, numChannels, frameSamples int) [][]float32 {
 	return ch
 }
 
+// tocHeaderBytes is the single table-of-contents byte every packet starts with.
+const tocHeaderBytes = 1
+
+// frameBytes returns the CELT payload budget. The packet carries a TOC byte in
+// front of it, so the payload gets one byte less than the frame's share of the
+// bitrate — otherwise every packet overshoots the target by a byte, which is
+// 400 bps at 20 ms.
 func (e *Encoder) frameBytes() int {
-	return int(int64(e.bitrate) * frame20msNS / 1000000000 / 8)
+	return int(int64(e.bitrate)*frame20msNS/1000000000/8) - tocHeaderBytes
 }
 
 func (e *Encoder) frameSampleCount() int {
