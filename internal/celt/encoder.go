@@ -126,7 +126,10 @@ func (e *Encoder) Reset() {
 	e.cwrsScratch = make([]uint32, 0, cwrsMaxPulseCount+2)
 	e.pitchBuf = make([]float32, 0, (combFilterMaxPeriod+maxFrameSampleCount)>>1)
 
-	e.spreadAverage = 0
+	// libopus seeds tonal_average at 256 (celt_encoder.c:3091), the midpoint
+	// of the spreading metric — starting at zero biases the first frames
+	// toward aggressive spreading.
+	e.spreadAverage = 256
 	e.hfAverage = 0
 	e.tapsetDecision = 0
 	e.prevSpreadDecision = defaultSpreadDecision

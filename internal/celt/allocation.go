@@ -862,16 +862,17 @@ func dynallocAnalysis(
 			}
 			sig[band] = mask[band]
 		}
-		// Forward: -6 dB/Bark → -0.996 log2.
+		// The reference spreads the mask by 2 and 3 in the same log2 domain as
+		// bandLogE, not in dB (celt_encoder.c: dynalloc_analysis, GCONST is the
+		// identity in the float build).
 		for band := 1; band < endBand; band++ {
-			if mask[band-1]-0.996 > mask[band] {
-				mask[band] = mask[band-1] - 0.996
+			if mask[band-1]-2.0 > mask[band] {
+				mask[band] = mask[band-1] - 2.0
 			}
 		}
-		// Backward: -9 dB/Bark → -1.495 log2.
 		for band := endBand - 2; band >= 0; band-- {
-			if mask[band+1]-1.495 > mask[band] {
-				mask[band] = mask[band+1] - 1.495
+			if mask[band+1]-3.0 > mask[band] {
+				mask[band] = mask[band+1] - 3.0
 			}
 		}
 		// SMR → shift → spread_weight = 32 >> shift.
