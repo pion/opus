@@ -457,6 +457,11 @@ func (e *Encoder) choosePrefilter(
 		frameBytes, len(srcs), tfEstimate,
 		uint(frameBytes)*8, e.rangeEncoder.Tell(),
 	)
+	if enabled && shouldCancelPrefilter(
+		srcs, &e.analysis, frameSampleCount, pitchPeriod, quantizedGain, e.tapsetDecision,
+	) {
+		enabled, qq, quantizedGain = false, 0, 0
+	}
 
 	return enabled, pitchPeriod, qq, quantizedGain, e.tapsetDecision
 }

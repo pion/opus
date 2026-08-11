@@ -85,9 +85,76 @@ func prefilterDecision(
 		return false, 0, 0
 	}
 
+	// Snap to the previous gain when the change is small: the post-filter
+	// crossfades between frames, so letting the gain flap by one quantizer
+	// step every frame modulates the output for no benefit.
+	if abs32(gain-prevGain) < 0.1 {
+		gain = prevGain
+	}
+
 	qq, quantizedGain = quantizePitchGain(gain)
 
 	return true, qq, quantizedGain
+}
+
+// shouldCancelPrefilter applies the comb filter to a scratch copy and reports
+// whether it actually reduced the signal. libopus runs the filter first and
+// reverts when the answer is no (celt_encoder.c: run_prefilter), because the
+// gain threshold alone lets through frames the filter makes worse.
+func shouldCancelPrefilter(
+	srcs [][]float32, state *analysisState, frameSampleCount, period int, gain float32, tapset int,
+) bool {
+	var before, after [2]float64
+	for ch, src := range srcs {
+		before[ch] = measureEnergy(src, postfilterHistorySampleCount, frameSampleCount)
+		dst := state.prefilterOut[ch][:len(src)]
+		// Must mirror what applyPrefilterChannel will run, crossfade endpoints
+		// included, or the decision is about a different filter.
+		applyPrefilter(
+			dst, src,
+			state.prefilter.period, period,
+			frameSampleCount,
+			state.prefilter.gain, gain,
+			state.prefilter.tapset, tapset,
+		)
+		after[ch] = measureEnergy(dst, postfilterHistorySampleCount, frameSampleCount)
+	}
+
+	return cancelPitch(len(srcs), gain, before, after)
+}
+
+// cancelPitch compares the sum of absolute samples before and after filtering
+// and reports whether the pre-filter should be reverted.
+func cancelPitch(channels int, gain float32, before, after [2]float64) bool {
+	if channels == 1 {
+		return after[0] > before[0]
+	}
+
+	gain64 := float64(gain)
+	thresh0 := 0.25*gain64*before[0] + 0.01*before[1]
+	thresh1 := 0.25*gain64*before[1] + 0.01*before[0]
+
+	// Revert if either channel got significantly worse.
+	if after[0]-before[0] > thresh0 || after[1]-before[1] > thresh1 {
+		return true
+	}
+
+	// Revert unless at least one channel got significantly better.
+	return before[0]-after[0] < thresh0 && before[1]-after[1] < thresh1
+}
+
+func measureEnergy(buf []float32, start, n int) float64 {
+	var sum float64
+	end := min(start+n, len(buf))
+	for i := start; i < end; i++ {
+		value := buf[i]
+		if value < 0 {
+			value = -value
+		}
+		sum += float64(value)
+	}
+
+	return sum
 }
 
 func absInt(x int) int {
