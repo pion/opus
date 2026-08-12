@@ -81,36 +81,41 @@ func rangeDecoderWithRawBits(bits byte) rangecoding.Decoder {
 	return decoder
 }
 
-func TestIntensityStartBand(t *testing.T) {
-	// RFC 6716 Table 66 thresholds for 20ms frames (frameMs=20, framesPerSec=50).
-	// effectiveKbps = (bitrateBps - 80*50) / 1000.
+func TestIntensityBandForRate(t *testing.T) {
+	// libopus intensity_thresholds, read against equiv_rate in kb/s. The values
+	// are the bands opus_demo picks at each of these rates for 20 ms stereo.
 	cases := []struct {
-		bitrateBps int
-		startBand  int
+		kbps int
+		band int
 	}{
-		{32000, 8},
-		{45000, 12},
-		{64000, 16},
-		{96000, 19},
-		{128000, 20},
-		{160000, maxBands},
+		{23, 9},
+		{31, 10},
+		{47, 12},
+		{63, 15},
+		{95, 19},
+		{127, 20},
 	}
 
 	for _, tc := range cases {
-		t.Run("", func(t *testing.T) {
-			got := intensityStartBand(tc.bitrateBps, 20)
-			assert.Equal(t, tc.startBand, got,
-				"bitrateBps=%d", tc.bitrateBps)
-		})
+		got := intensityBandForRate(tc.kbps, 0)
+		assert.Equal(t, tc.band, got, "kbps=%d", tc.kbps)
 	}
 }
 
-func TestIntensityStartBandMonotonic(t *testing.T) {
+func TestIntensityBandForRateHysteresis(t *testing.T) {
+	// 24 kb/s alone lands on band 10, but coming from 9 the entry's margin
+	// (thresholds[9]+hysteresis[9] = 26) holds it there for another frame.
+	assert.Equal(t, 10, intensityBandForRate(24, 0))
+	assert.Equal(t, 9, intensityBandForRate(24, 9))
+	assert.Equal(t, 10, intensityBandForRate(26, 9))
+}
+
+func TestIntensityBandForRateMonotonic(t *testing.T) {
 	prev := 0
-	for bitrate := range 200000 {
-		got := intensityStartBand(bitrate, 20)
+	for kbps := range 200 {
+		got := intensityBandForRate(kbps, 0)
 		assert.GreaterOrEqual(t, got, prev,
-			"intensity must be monotonically non-decreasing: bitrate=%d got=%d prev=%d", bitrate, got, prev)
+			"intensity must be monotonically non-decreasing: kbps=%d got=%d prev=%d", kbps, got, prev)
 		prev = got
 	}
 }

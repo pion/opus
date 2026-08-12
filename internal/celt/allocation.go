@@ -546,28 +546,6 @@ func pulsesToBits(band, lm, pulses int) int {
 	return int(pulseCacheBits[cacheStart+pulses]) + 1
 }
 
-func intensityStartBand(bitrateBps, frameMs int) int {
-	framesPerSec := 1000 / frameMs
-	effectiveKbps := (bitrateBps - 80*framesPerSec) / 1000
-
-	switch {
-	case effectiveKbps < 35:
-		return 8
-	case effectiveKbps < 50:
-		return 12
-	case effectiveKbps < 68:
-		return 16
-	case effectiveKbps < 84:
-		return 17
-	case effectiveKbps < 102:
-		return 19
-	case effectiveKbps < 130:
-		return 20
-	default:
-		return maxBands
-	}
-}
-
 // decodeFineEnergy applies the first RFC 6716 Section 4.3.2.2 fine-energy
 // refinement, using the number of raw bits assigned by Section 4.3.3.
 func (d *Decoder) decodeFineEnergy(info *frameSideInfo, fineQuant [maxBands]int) {

@@ -506,23 +506,14 @@ func (e *Encoder) computeIntensityAndDualStereo(
 		return 0, 0
 	}
 
-	frameSampleCount := shortBlockSampleCount << info.lm
-	bitrateBps := int(info.totalBits) * sampleRate / frameSampleCount
-	frameMs := max(1, frameSampleCount*1000/sampleRate)
-	raw := intensityStartBand(bitrateBps, frameMs)
-	if e.prevIntensityBand == 0 {
-		e.prevIntensityBand = raw
-	}
-	// ±1 dead band: require two consecutive frames to confirm a direction
-	// change, matching the hysteresis pattern in libopus CELTEncoder.
-	if raw > e.prevIntensityBand+1 {
-		raw = e.prevIntensityBand + 1
-	} else if raw < e.prevIntensityBand-1 {
-		raw = e.prevIntensityBand - 1
-	}
+	// equiv_rate is the frame budget expressed as a steady bit rate, net of the
+	// per-packet overhead the reference charges (celt_encoder.c:1926).
+	frameBytes := int(info.totalBits) / 8
+	equivRate := frameBytes*8*50<<(3-info.lm) - (40*info.channelCount+20)*((400>>info.lm)-50)
+	raw := intensityBandForRate(equivRate/1000, e.prevIntensityBand)
 	e.prevIntensityBand = raw
 
-	targetIntensity = raw
+	targetIntensity = min(info.endBand, max(info.startBand, raw))
 	if chooseDualStereo(normalized, info.lm) {
 		targetDualStereo = 1
 	}
