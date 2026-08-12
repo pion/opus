@@ -166,20 +166,25 @@ func applyPrefilterChannel(
 	ch int, state *analysisState, src, pre []float32,
 	prefilterEnabled bool, prefilterPeriod int, prefilterGain float32, prefilterTapset int,
 ) {
-	if prefilterEnabled {
-		dst := state.prefilterOut[ch][:len(src)]
-		// The crossfade starts from the previous frame's filter, which is
-		// still in prefilter.period/gain/tapset here — updatePrefilterState
-		// only rotates them in after the frame is encoded.
-		applyPrefilter(
-			dst, src,
-			state.prefilter.period, prefilterPeriod,
-			len(pre),
-			state.prefilter.gain, prefilterGain,
-			state.prefilter.tapset, prefilterTapset,
-		)
-		copy(pre, dst[postfilterHistorySampleCount:])
+	// libopus runs the comb filter on every frame, not just filtered ones
+	// (celt_encoder.c: run_prefilter). A frame that turns the pre-filter off
+	// still has to fade the previous frame's gain down to zero, or it leaves a
+	// step the decoder's post-filter cannot follow.
+	if !prefilterEnabled {
+		prefilterGain = 0
 	}
+	dst := state.prefilterOut[ch][:len(src)]
+	// The crossfade starts from the previous frame's filter, which is
+	// still in prefilter.period/gain/tapset here — updatePrefilterState
+	// only rotates them in after the frame is encoded.
+	applyPrefilter(
+		dst, src,
+		state.prefilter.period, prefilterPeriod,
+		len(pre),
+		state.prefilter.gain, prefilterGain,
+		state.prefilter.tapset, prefilterTapset,
+	)
+	copy(pre, dst[postfilterHistorySampleCount:])
 	// The history advances every frame, filtered or not (libopus updates
 	// prefilter_mem outside the pf_on branch); otherwise the comb filter
 	// picks up stale samples whenever it switches back on. It carries the
