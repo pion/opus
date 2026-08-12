@@ -473,10 +473,16 @@ func (e *Encoder) updatePrefilterState(
 	info *frameSideInfo, enabled bool,
 	period int, gain float32, qq int, tapset int,
 ) {
+	// libopus stores the searched period and tapset whether or not the filter
+	// ran (celt_encoder.c:2768); only the gain goes to zero. Resetting the
+	// period instead traps the filter off: the next frame's continuity check
+	// compares against it, so a reset always looks like a pitch jump and adds
+	// 0.2 to the enable threshold, which a mid-strength pitch never clears.
+	e.analysis.prefilter.period = period
+	e.analysis.prefilter.tapset = tapset
+	e.analysis.prefilter.gain = 0
 	if enabled {
-		e.analysis.prefilter.period = period
 		e.analysis.prefilter.gain = gain
-		e.analysis.prefilter.tapset = tapset
 
 		info.postFilter = postFilter{
 			enabled: true,
@@ -485,10 +491,6 @@ func (e *Encoder) updatePrefilterState(
 			qq:      qq,
 			tapset:  tapset,
 		}
-	} else {
-		e.analysis.prefilter.period = combFilterMinPeriod
-		e.analysis.prefilter.gain = 0
-		e.analysis.prefilter.tapset = 0
 	}
 }
 
