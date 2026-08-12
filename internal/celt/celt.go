@@ -9,8 +9,10 @@ const (
 	// 48 kHz mode with 21 energy bands and 2.5 ms band-edge units.
 	sampleRate            = 48000
 	shortBlockSampleCount = 120
-	maxLM                 = 3
-	maxFrameSampleCount   = shortBlockSampleCount << maxLM
-	maxBands              = 21
-	hybridStartBand       = 17
+	// maxCELTFrameBytes is the largest Opus frame payload (RFC 6716 Section 3.4).
+	maxCELTFrameBytes   = 1275
+	maxLM               = 3
+	maxFrameSampleCount = shortBlockSampleCount << maxLM
+	maxBands            = 21
+	hybridStartBand     = 17
 )

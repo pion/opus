@@ -943,3 +943,42 @@ func TestApplyStereoFadeCrossfadesOverOverlap(t *testing.T) {
 	assert.InDelta(t, 0, left[1], 1e-6, "overlap ends at the new width")
 	assert.InDelta(t, 0, left[2], 1e-6, "past the overlap the new width applies")
 }
+
+func TestVBRUsesBufferHeadroom(t *testing.T) {
+	// Unconstrained VBR may run a hard frame past the nominal rate when the
+	// caller left room, and the reservoir wins it back on the easy ones. Capping
+	// every frame at the rate is what kept pion from ever reaching its target.
+	const bitrate = 96000
+	enc, err := NewEncoder(WithChannels(2), WithBitrate(bitrate), WithVBR(true), WithConstrainedVBR(false))
+	require.NoError(t, err)
+
+	frameBudget := bitrate / 50 / 8
+	total, frames, largest := 0, 60, 0
+	phase := 0.0
+	for i := range frames {
+		pcm := make([]float32, encoderTestFrameSampleCount*2)
+		// Alternate quiet stretches with dense ones so the target has to move.
+		amp := float32(0.02)
+		if i%4 == 0 {
+			amp = 0.6
+		}
+		for j := range encoderTestFrameSampleCount {
+			v := amp * float32(math.Sin(phase)+math.Sin(phase*7.3)+math.Sin(phase*23.1))
+			pcm[2*j] = v
+			pcm[2*j+1] = -v
+			phase += 2 * math.Pi * 440 / 48000
+		}
+		packet := make([]byte, 1500)
+		n, encErr := enc.EncodeFloat32(pcm, packet)
+		require.NoError(t, encErr)
+		total += n
+		largest = max(largest, n)
+	}
+
+	// No ceiling assertion here on purpose: on a sustained hard signal there is
+	// nothing easy to win the bits back on, and the reference overshoots the
+	// nominal rate by the same margin. TestVBRTracksTargetBitrate covers the
+	// average on material that can actually be tracked.
+	assert.Greater(t, largest, frameBudget, "a demanding frame should be allowed past the nominal rate")
+	assert.Positive(t, total)
+}

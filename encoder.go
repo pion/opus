@@ -392,7 +392,7 @@ func (e *Encoder) EncodeFloat32(in []float32, out []byte) (int, error) {
 	if frameBytes <= 0 || frameBytes > maxOpusFrameSize {
 		return 0, fmt.Errorf("%w: %d", errInvalidFrameByteBudget, frameBytes)
 	}
-	if len(out) < frameBytes+1 {
+	if len(out) < frameBytes+tocHeaderBytes {
 		return 0, errOutBufferTooSmall
 	}
 	out[0] = byte(e.tocHeader())
@@ -401,7 +401,14 @@ func (e *Encoder) EncodeFloat32(in []float32, out []byte) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	n, err := e.celtEncoder.EncodeFrame(channels, out[1:frameBytes+1], frameBytes, startBand, endBand)
+	// VBR gets the whole buffer the caller supplied: a demanding frame may run
+	// past the nominal rate and the bit reservoir wins it back later. CBR is
+	// pinned to its share.
+	payload := out[tocHeaderBytes:]
+	if !e.vbr && len(payload) > frameBytes {
+		payload = payload[:frameBytes]
+	}
+	n, err := e.celtEncoder.EncodeFrame(channels, payload, frameBytes, startBand, endBand)
 	if err != nil {
 		return 0, err
 	}
