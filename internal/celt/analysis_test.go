@@ -561,6 +561,25 @@ func TestDynallocSpreadWeightMaskedBandReduced(t *testing.T) {
 	assert.Less(t, dr.spreadWeight[5], 32, "band far from peak should have reduced weight")
 }
 
+func TestDynallocSpreadWeightMaskDecayRate(t *testing.T) {
+	// The mask spreads by 2 per band upward and 3 downward, in the same log2
+	// domain as bandLogE. A peak of 4 stops masking two bands up, so the weight
+	// recovers there; reading those constants as dB would halve the step and
+	// leave the band masked.
+	logBandAmp := makeFlatLogBandAmp(0.0)
+	logBandAmp[10] = 4.0
+	prev := makeFlatLogBandAmp(0.0)
+	dr := dynallocAnalysis(
+		[2][maxBands]float32{logBandAmp, logBandAmp},
+		[2][maxBands]float32{prev, prev},
+		maxLM, 0, maxBands, 1, 120, false,
+	)
+	assert.Greater(t, dr.spreadWeight[12], dr.spreadWeight[11],
+		"weight should recover two bands above the peak")
+	assert.Less(t, dr.spreadWeight[9], dr.spreadWeight[8],
+		"the band just below the peak stays masked")
+}
+
 func TestDynallocLowBitrateGated(t *testing.T) {
 	// Below 30+5*LM bytes → dynalloc disabled, all offsets zero.
 	logBandAmp := makeFlatLogBandAmp(0.0)
