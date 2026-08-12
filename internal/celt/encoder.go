@@ -74,6 +74,10 @@ type Encoder struct {
 	constrainedVBR bool
 	lossRate       int
 	complexity     int
+	// bitrate is the nominal target the caller asked for. The reference caps
+	// equiv_rate with it, which is what keeps a VBR frame's rate-derived
+	// decisions from tracking the output buffer instead of the target.
+	bitrate int
 
 	// VBR bit reservoir state (celt_encoder.c), all in 1/8-bit units.
 	vbrReservoir int32
@@ -158,6 +162,11 @@ func (e *Encoder) SetVBR(vbr bool) {
 
 func (e *Encoder) SetConstrainedVBR(cvbr bool) {
 	e.constrainedVBR = cvbr
+}
+
+// SetBitrate sets the nominal target bitrate in bits per second.
+func (e *Encoder) SetBitrate(bps int) {
+	e.bitrate = bps
 }
 
 // SetLossRate sets the expected packet loss rate (0-100 percent).
@@ -367,7 +376,7 @@ func (e *Encoder) encodeDynamicAllocation(info *frameSideInfo, offsets [maxBands
 // enough budget left to signal it.
 func (e *Encoder) encodeAllocationTrim(
 	info *frameSideInfo, logBandAmp [2][maxBands]float32, mdct [2][]float32, totalBitsEighth uint,
-	tfEstimate float32, intensity int,
+	tfEstimate float32, intensity, equivRate int,
 ) {
 	info.allocationTrim = defaultAllocationTrim
 	if e.rangeEncoder.TellFrac()+uint(allocationTrimBitCost<<bitResolution) <= totalBitsEighth {
@@ -375,8 +384,7 @@ func (e *Encoder) encodeAllocationTrim(
 			logBandAmp,
 			mdct,
 			info.channelCount, info.lm, info.endBand,
-			info.totalBits,
-			tfEstimate, intensity, &e.stereoSaving,
+			tfEstimate, intensity, &e.stereoSaving, equivRate,
 		)
 		e.rangeEncoder.EncodeSymbolWithICDF(icdfAllocationTrim, uint32(info.allocationTrim))
 	}
@@ -508,16 +516,12 @@ func (e *Encoder) updatePrefilterState(
 // computeIntensityAndDualStereo returns the intensity band and dual stereo flag
 // for the current frame. Intensity band includes ±1 hysteresis to avoid oscillation.
 func (e *Encoder) computeIntensityAndDualStereo(
-	info *frameSideInfo, normalized [2][]float32,
+	info *frameSideInfo, normalized [2][]float32, equivRate int,
 ) (targetIntensity, targetDualStereo int) {
 	if info.channelCount != 2 {
 		return 0, 0
 	}
 
-	// equiv_rate is the frame budget expressed as a steady bit rate, net of the
-	// per-packet overhead the reference charges (celt_encoder.c:1926).
-	frameBytes := int(info.totalBits) / 8
-	equivRate := frameBytes*8*50<<(3-info.lm) - (40*info.channelCount+20)*((400>>info.lm)-50)
 	raw := intensityBandForRate(equivRate/1000, e.prevIntensityBand)
 	e.prevIntensityBand = raw
 
@@ -609,6 +613,66 @@ func computeVBR(
 // and updates the bit reservoir/drift state that biases future frames.
 // tellFrac is e.rangeEncoder.TellFrac() at the point of the call. Mirrors
 // celt_encoder.c's VBR block around compute_vbr (~lines 2436-2530).
+// equivalentRate expresses the frame's byte budget as a steady bit rate, net of
+// the per-packet overhead the reference charges, and never above the nominal
+// target (celt_encoder.c:1926). In VBR the budget is the whole output buffer,
+// so without the cap every rate-derived decision would read as if the encoder
+// were running at hundreds of kb/s.
+func (e *Encoder) equivalentRate(maxBytes, lm, channelCount int) int {
+	overhead := (40*channelCount + 20) * ((400 >> lm) - 50)
+	equiv := maxBytes*8*50<<(3-lm) - overhead
+	if e.bitrate > 0 {
+		equiv = min(equiv, e.bitrate-overhead)
+	}
+
+	return equiv
+}
+
+// settleFrameBudget fixes how many bytes the frame gets — running the VBR
+// target when it applies — and returns what is left for the band shapes after
+// the header and the anti-collapse reservation.
+func (e *Encoder) settleFrameBudget(
+	info *frameSideInfo, logBandAmp [2][maxBands]float32, dr dynallocResult,
+	effectiveBytes, rateBytes, maxBytes int, tfEstimate float32, intensity int,
+) (int, int) {
+	tellFrac := int(e.rangeEncoder.TellFrac())
+	if e.vbr {
+		effectiveBytes = e.applyVBR(info, logBandAmp, dr, rateBytes, maxBytes, tellFrac, tfEstimate, intensity)
+	}
+	info.totalBits = uint(effectiveBytes) * 8
+
+	shapeBits := (int(info.totalBits) << bitResolution) - tellFrac - 1
+	info.antiCollapseRsv = 0
+	if info.transient && info.lm >= 2 && shapeBits >= (info.lm+2)<<bitResolution {
+		info.antiCollapseRsv = 1 << bitResolution
+	}
+
+	return effectiveBytes, shapeBits - info.antiCollapseRsv
+}
+
+// frameBudget returns the byte budget the rate-derived decisions are measured
+// against, and the ceiling the frame may actually occupy.
+func (e *Encoder) frameBudget(
+	dst []byte, frameBytes, frameSamples, lm, channelCount int,
+) (rateBytes, maxBytes, equivRate int) {
+	rateBytes = e.rateBytes(frameBytes, frameSamples)
+	maxBytes = e.frameCeiling(dst, frameBytes)
+
+	return rateBytes, maxBytes, e.equivalentRate(maxBytes, lm, channelCount)
+}
+
+// rateBytes is the byte budget the VBR target is measured against. The
+// reference derives it straight from the nominal bitrate (celt_encoder.c:1904),
+// so it covers the whole frame's share including the packet header byte that
+// the CBR payload budget leaves out; the reservoir absorbs the difference.
+func (e *Encoder) rateBytes(frameBytes, frameSamples int) int {
+	if !e.vbr || e.bitrate <= 0 {
+		return frameBytes
+	}
+
+	return e.bitrate * frameSamples / (sampleRate * 8)
+}
+
 // frameCeiling is how many bytes the frame may occupy. libopus caps a VBR frame
 // at the room the caller left (nbCompressedBytes), which is what lets it run
 // above the nominal rate on a hard frame; CBR stays pinned to its share.
@@ -655,9 +719,7 @@ func (e *Encoder) applyVBR(
 	lm, channelCount := info.lm, info.channelCount
 	temporalVBR := e.temporalVBR(logBandAmp, info.startBand, info.endBand, channelCount, lm, info.transient)
 	vbrRate := frameBytes << 6 // libopus vbr_rate, 1/8-bit units
-	// equiv_rate at the CELT layer: the frame's byte share expressed as a rate,
-	// net of the per-packet overhead (celt_encoder.c:1926).
-	equivRate := frameBytes*8*50<<(3-lm) - (40*channelCount+20)*((400>>lm)-50)
+	equivRate := e.equivalentRate(maxBytes, lm, channelCount)
 
 	if e.constrainedVBR {
 		// libopus allows any multiple of vbrRate as the bound; pion always
@@ -812,8 +874,8 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 	// Compute dynalloc offsets, spread_weight and importance BEFORE the spread
 	// and tf decisions: spread_weight feeds spreadingDecision and importance
 	// feeds tfAnalysis (libopus runs dynalloc_analysis first).
-	effectiveBytes := frameBytes
-	maxBytes := e.frameCeiling(dst, frameBytes)
+	rateBytes, maxBytes, equivRate := e.frameBudget(dst, frameBytes, frameSamples, info.lm, info.channelCount)
+	effectiveBytes := rateBytes
 	dr := dynallocAnalysis(
 		analysis.logBandAmp, e.prevLogBandAmp,
 		info.lm, info.startBand, info.endBand, info.channelCount,
@@ -852,22 +914,12 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 	// The reference settles the intensity band before both the trim and the VBR
 	// target, and both read it (celt_encoder.c:2404). It also derives it from
 	// the nominal rate, not from the post-VBR frame size.
-	targetIntensity, targetDualStereo := e.computeIntensityAndDualStereo(&info, normalized)
-	e.encodeAllocationTrim(&info, analysis.logBandAmp, analysis.mdct, totalBitsEighth, tfEstimate, targetIntensity)
+	targetIntensity, targetDualStereo := e.computeIntensityAndDualStereo(&info, normalized, equivRate)
+	e.encodeAllocationTrim(
+		&info, analysis.logBandAmp, analysis.mdct, totalBitsEighth, tfEstimate, targetIntensity, equivRate)
 
-	tellFrac := int(e.rangeEncoder.TellFrac())
-
-	if e.vbr {
-		effectiveBytes = e.applyVBR(
-			&info, analysis.logBandAmp, dr, frameBytes, maxBytes, tellFrac, tfEstimate, targetIntensity)
-	}
-	info.totalBits = uint(effectiveBytes) * 8
-	shapeBits := (int(info.totalBits) << bitResolution) - tellFrac - 1
-	info.antiCollapseRsv = 0
-	if info.transient && info.lm >= 2 && shapeBits >= (info.lm+2)<<bitResolution {
-		info.antiCollapseRsv = 1 << bitResolution
-	}
-	shapeBits -= info.antiCollapseRsv
+	effectiveBytes, shapeBits := e.settleFrameBudget(
+		&info, analysis.logBandAmp, dr, effectiveBytes, rateBytes, maxBytes, tfEstimate, targetIntensity)
 	info.allocation = e.computeAllocationMono(&info, shapeBits, targetIntensity, targetDualStereo)
 	e.encodeFineEnergy(&info, info.allocation.fineQuant, targetLogE)
 
