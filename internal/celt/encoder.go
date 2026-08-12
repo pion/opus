@@ -879,7 +879,7 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 	dr := dynallocAnalysis(
 		analysis.logBandAmp, e.prevLogBandAmp,
 		info.lm, info.startBand, info.endBand, info.channelCount,
-		effectiveBytes, info.transient,
+		effectiveBytes, info.transient, e.vbr, e.constrainedVBR,
 	)
 	offsets := dr.offsets
 	spreadWeight := dr.spreadWeight

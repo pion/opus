@@ -532,7 +532,7 @@ func TestDynallocFlatSpectrumNoBoost(t *testing.T) {
 	dr := dynallocAnalysis(
 		[2][maxBands]float32{logBandAmp, logBandAmp},
 		[2][maxBands]float32{prev, prev},
-		maxLM, 0, maxBands, 1, 120, false,
+		maxLM, 0, maxBands, 1, 120, false, false, false,
 	)
 	for band := range maxBands {
 		assert.Equal(t, 0, dr.offsets[band], "flat spectrum band %d should get no boost", band)
@@ -547,7 +547,7 @@ func TestDynallocIsolatedPeakGetsBoost(t *testing.T) {
 	dr := dynallocAnalysis(
 		[2][maxBands]float32{logBandAmp, logBandAmp},
 		[2][maxBands]float32{prev, prev},
-		maxLM, 0, maxBands, 1, 120, false,
+		maxLM, 0, maxBands, 1, 120, false, false, false,
 	)
 	assert.Greater(t, dr.offsets[10], 0, "isolated peak should get boost")
 }
@@ -560,7 +560,7 @@ func TestDynallocSpreadWeightMaskedBandReduced(t *testing.T) {
 	dr := dynallocAnalysis(
 		[2][maxBands]float32{logBandAmp, logBandAmp},
 		[2][maxBands]float32{prev, prev},
-		maxLM, 0, maxBands, 1, 120, false,
+		maxLM, 0, maxBands, 1, 120, false, false, false,
 	)
 	// Bands far from the peak should have reduced weight.
 	assert.Less(t, dr.spreadWeight[5], 32, "band far from peak should have reduced weight")
@@ -577,7 +577,7 @@ func TestDynallocSpreadWeightMaskDecayRate(t *testing.T) {
 	dr := dynallocAnalysis(
 		[2][maxBands]float32{logBandAmp, logBandAmp},
 		[2][maxBands]float32{prev, prev},
-		maxLM, 0, maxBands, 1, 120, false,
+		maxLM, 0, maxBands, 1, 120, false, false, false,
 	)
 	assert.Greater(t, dr.spreadWeight[12], dr.spreadWeight[11],
 		"weight should recover two bands above the peak")
@@ -593,7 +593,7 @@ func TestDynallocLowBitrateGated(t *testing.T) {
 	dr := dynallocAnalysis(
 		[2][maxBands]float32{logBandAmp, logBandAmp},
 		[2][maxBands]float32{prev, prev},
-		maxLM, 0, maxBands, 1, 10, false, // 10 bytes < 30+15=45
+		maxLM, 0, maxBands, 1, 10, false, false, false, // 10 bytes < 30+15=45
 	)
 	for band := range maxBands {
 		assert.Equal(t, 0, dr.offsets[band], "low bitrate should gate dynalloc")

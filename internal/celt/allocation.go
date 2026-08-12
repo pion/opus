@@ -826,7 +826,7 @@ func dynallocAnalysis(
 	prevLogBandAmp [2][maxBands]float32,
 	lm, startBand, endBand, channelCount int,
 	effectiveBytes int,
-	isTransient bool,
+	isTransient, vbr, constrainedVBR bool,
 ) dynallocResult {
 	var offsets [maxBands]int
 	var spreadWeight [maxBands]int
@@ -1037,8 +1037,10 @@ func dynallocAnalysis(
 			13*math.Pow(2, float64(minFloat32(combined[band], 4)))))
 	}
 
-	// Halve non-transient frames (CBR path); boost low bands, reduce high.
-	if !isTransient {
+	// CBR and constrained VBR halve the dynalloc contribution on a steady
+	// frame; unconstrained VBR keeps it whole, because there the boost also
+	// raises the frame's own target instead of competing for a fixed budget.
+	if (!vbr || constrainedVBR) && !isTransient {
 		for band := startBand; band < endBand; band++ {
 			combined[band] *= 0.5
 		}
@@ -1085,9 +1087,12 @@ func dynallocAnalysis(
 			boostBits = boost * 6 << bitResolution
 		}
 
-		// CBR keeps dynalloc under 2/3 of the frame. libopus hands the leftover
-		// budget to this band as the offset and stops boosting entirely.
-		if (totBoostBits+boostBits)>>bitResolution>>3 > 2*effectiveBytes/3 {
+		// CBR — and a constrained-VBR frame that is not a transient — keeps
+		// dynalloc under 2/3 of the frame. Unconstrained VBR has no such cap:
+		// there the boost total also raises the frame's own target, so capping
+		// it here would quietly hold the whole frame below the asked rate.
+		capped := !vbr || (constrainedVBR && !isTransient)
+		if capped && (totBoostBits+boostBits)>>bitResolution>>3 > 2*effectiveBytes/3 {
 			capBits := (2 * effectiveBytes / 3) << bitResolution << 3
 			offsets[band] = capBits - totBoostBits
 			totBoostBits = capBits
