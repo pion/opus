@@ -37,12 +37,13 @@ func tfAnalysis(
 	tfChan, frameSize int,
 	importance *[maxBands]int,
 	tfRes *[maxBands]int,
+	scratch *encoderScratch,
 ) int {
 	bias := 0.04 * maxFloat32(-0.25, 0.5-tfEstimate)
 
 	widest := int(bandEdges[endBand]-bandEdges[endBand-1]) << lm
-	tmp := make([]float32, widest)
-	tmpOne := make([]float32, widest)
+	tmp := scratch.tfTmp[:widest]
+	tmpOne := scratch.tfTmpOne[:widest]
 
 	var metric [maxBands]int
 	for band := startBand; band < endBand; band++ {

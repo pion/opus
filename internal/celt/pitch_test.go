@@ -28,15 +28,16 @@ func runPitchPipeline(pcm []float32) (int, float32) {
 	const frameSampleCount = 960
 	pitchLen := (combFilterMaxPeriod + frameSampleCount) >> 1
 	buf := make([]float32, pitchLen)
-	pitchDownsample([][]float32{pcm}, buf, pitchLen, 2)
+	var scratch encoderScratch
+	pitchDownsample([][]float32{pcm}, buf, pitchLen, 2, &scratch)
 
 	period := pitchSearch(
 		buf[combFilterMaxPeriod>>1:], buf,
-		frameSampleCount, combFilterMaxPeriod-3*combFilterMinPeriod,
+		frameSampleCount, combFilterMaxPeriod-3*combFilterMinPeriod, &scratch,
 	)
 	period = combFilterMaxPeriod - period
 	gain := removeDoubling(
-		buf, combFilterMaxPeriod, combFilterMinPeriod, frameSampleCount, &period, 0, 0)
+		buf, combFilterMaxPeriod, combFilterMinPeriod, frameSampleCount, &period, 0, 0, &scratch)
 
 	return period, gain
 }
@@ -83,7 +84,7 @@ func TestCeltLPCFlatSpectrum(t *testing.T) {
 	// White-noise autocorrelation (only ac[0] non-zero) has no prediction gain,
 	// so every coefficient must come out at zero.
 	ac := []float32{1, 0, 0, 0, 0}
-	lpc := celtLPC(ac, 4)
+	lpc := celtLPC(ac, 4, make([]float32, 4))
 
 	for i, v := range lpc {
 		assert.InDelta(t, 0, v, 1e-6, "coefficient %d", i)

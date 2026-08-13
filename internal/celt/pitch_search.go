@@ -31,9 +31,9 @@ func celtFir5(x []float32, num [5]float32) {
 	}
 }
 
-// celtAutocorr returns lag+1 autocorrelation values of x.
-func celtAutocorr(x []float32, lag int) []float32 {
-	ac := make([]float32, lag+1)
+// celtAutocorr returns lag+1 autocorrelation values of x, written into ac.
+func celtAutocorr(x []float32, lag int, ac []float32) []float32 {
+	ac = ac[:lag+1]
 	for k := 0; k <= lag; k++ {
 		var d float64
 		for i := k; i < len(x); i++ {
@@ -47,8 +47,9 @@ func celtAutocorr(x []float32, lag int) []float32 {
 
 // celtLPC solves for p LPC coefficients by Levinson-Durbin recursion.
 // Port of libopus _celt_lpc (celt/celt_lpc.c).
-func celtLPC(ac []float32, p int) []float32 {
-	lpc := make([]float32, p)
+func celtLPC(ac []float32, p int, lpc []float32) []float32 {
+	lpc = lpc[:p]
+	clear(lpc)
 	if ac[0] <= 1e-10 {
 		return lpc
 	}
@@ -79,7 +80,7 @@ func celtLPC(ac []float32, p int) []float32 {
 
 // pitchDownsample decimates the channels by factor into xLP, sums them, then
 // whitens the result with a 4th-order LPC filter plus a fixed zero.
-func pitchDownsample(x [][]float32, xLP []float32, length, factor int) {
+func pitchDownsample(x [][]float32, xLP []float32, length, factor int, scratch *encoderScratch) {
 	offset := factor / 2
 	for i := 1; i < length; i++ {
 		xLP[i] = 0.25*x[0][factor*i-offset] + 0.25*x[0][factor*i+offset] + 0.5*x[0][factor*i]
@@ -92,7 +93,7 @@ func pitchDownsample(x [][]float32, xLP []float32, length, factor int) {
 		xLP[0] += 0.25*right[offset] + 0.5*right[0]
 	}
 
-	ac := celtAutocorr(xLP[:length], pitchLPCOrder)
+	ac := celtAutocorr(xLP[:length], pitchLPCOrder, scratch.autocorr[:])
 	// Noise floor at -40 dB, then lag windowing: both keep the LPC solve from
 	// chasing a near-singular autocorrelation on quiet or very tonal frames.
 	ac[0] *= 1.0001
@@ -100,7 +101,7 @@ func pitchDownsample(x [][]float32, xLP []float32, length, factor int) {
 		ac[i] -= ac[i] * (0.008 * float32(i)) * (0.008 * float32(i))
 	}
 
-	lpc := celtLPC(ac, pitchLPCOrder)
+	lpc := celtLPC(ac, pitchLPCOrder, scratch.lpc[:])
 	tmp := float32(1.0)
 	for i := range pitchLPCOrder {
 		tmp *= 0.9
@@ -183,12 +184,13 @@ func refineXcorr(xLP, y, xcorr []float32, length, maxPitch int, coarse [2]int) {
 // pitchSearch finds the lag of the strongest correlation between xLP and y.
 // Port of libopus pitch_search: a coarse pass on a further 2x decimation, then
 // a finer pass restricted to the neighborhood of the two best coarse lags.
-func pitchSearch(xLP, y []float32, length, maxPitch int) int {
+func pitchSearch(xLP, y []float32, length, maxPitch int, scratch *encoderScratch) int {
 	lag := length + maxPitch
 
-	xLP4 := make([]float32, length>>2)
-	yLP4 := make([]float32, lag>>2)
-	xcorr := make([]float32, maxPitch>>1)
+	xLP4 := scratch.pitchX[:length>>2]
+	yLP4 := scratch.pitchY[:lag>>2]
+	xcorr := scratch.pitchXC[:maxPitch>>1]
+	clear(xcorr)
 
 	// Downsample by 2 again.
 	for j := range xLP4 {
@@ -252,6 +254,7 @@ func dualInnerProdLag(x []float32, base, n, lagA, lagB int) (a, b float32) {
 //nolint:cyclop,gocognit // Mirrors the reference sub-multiple scan.
 func removeDoubling(
 	x []float32, maxPeriod, minPeriod, n int, period *int, prevPeriod int, prevGain float32,
+	scratch *encoderScratch,
 ) float32 {
 	minPeriod0 := minPeriod
 	maxPeriod /= 2
@@ -274,7 +277,7 @@ func removeDoubling(
 
 	// yyLookup[i] is the energy of the window ending i samples back, updated
 	// incrementally so each candidate lag costs one inner product, not two.
-	yyLookup := make([]float32, maxPeriod+1)
+	yyLookup := scratch.yyLookup[:maxPeriod+1]
 	yyLookup[0] = xx
 	yy := xx
 	for i := 1; i <= maxPeriod; i++ {
