@@ -566,9 +566,20 @@ func computeVBR(
 // and updates the bit reservoir/drift state that biases future frames.
 // tellFrac is e.rangeEncoder.TellFrac() at the point of the call. Mirrors
 // celt_encoder.c's VBR block around compute_vbr (~lines 2436-2530).
+// frameCeiling is how many bytes the frame may occupy. libopus caps a VBR frame
+// at the room the caller left (nbCompressedBytes), which is what lets it run
+// above the nominal rate on a hard frame; CBR stays pinned to its share.
+func (e *Encoder) frameCeiling(dst []byte, frameBytes int) int {
+	if !e.vbr {
+		return frameBytes
+	}
+
+	return min(len(dst), maxCELTFrameBytes)
+}
+
 func (e *Encoder) applyVBR(
 	frameBytes int, dr dynallocResult,
-	effectiveBytes, lm, channelCount, tellFrac int, tfEstimate float32,
+	maxBytes, lm, channelCount, tellFrac int, tfEstimate float32,
 ) int {
 	vbrRate := frameBytes << 6 // libopus vbr_rate, 1/8-bit units
 
@@ -576,7 +587,7 @@ func (e *Encoder) applyVBR(
 		// libopus allows any multiple of vbrRate as the bound; pion always
 		// uses 2x (vbr_bound == vbr_rate in celt_encoder.c).
 		maxAllowed := max(2, (2*vbrRate-int(e.vbrReservoir))>>6)
-		effectiveBytes = min(effectiveBytes, maxAllowed)
+		maxBytes = min(maxBytes, maxAllowed)
 	}
 
 	baseTarget := max(0, vbrRate-((40*channelCount+20)<<3))
@@ -591,8 +602,16 @@ func (e *Encoder) applyVBR(
 		baseTarget, dr.maxDepth, dr.totBoostBits, e.constrainedVBR, channelCount, lm, tfEstimate,
 	) + tellFrac
 
-	nbAvailableBytes := max(2, (rawTarget+(1<<5))>>6)
-	nbAvailableBytes = min(nbAvailableBytes, effectiveBytes)
+	// The frame still has to fit what has already been written plus the
+	// dynalloc boosts, or the range coder runs out of room (libopus
+	// min_allowed).
+	minAllowed := ((tellFrac + dr.totBoostBits + (1 << 6) - 1) >> 6) + 2
+
+	// The ceiling is how much room the caller left, not the nominal rate:
+	// unconstrained VBR is allowed to spend over the average on a hard frame
+	// and win it back later through the reservoir.
+	nbAvailableBytes := max(minAllowed, (rawTarget+(1<<5))>>6)
+	nbAvailableBytes = min(nbAvailableBytes, maxBytes)
 
 	e.updateVBRReservoir(vbrRate, rawTarget, nbAvailableBytes<<6)
 
@@ -716,6 +735,7 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 	// and tf decisions: spread_weight feeds spreadingDecision and importance
 	// feeds tfAnalysis (libopus runs dynalloc_analysis first).
 	effectiveBytes := frameBytes
+	maxBytes := e.frameCeiling(dst, frameBytes)
 	dr := dynallocAnalysis(
 		analysis.logBandAmp, e.prevLogBandAmp,
 		info.lm, info.startBand, info.endBand, info.channelCount,
@@ -756,7 +776,7 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 	tellFrac := int(e.rangeEncoder.TellFrac())
 
 	if e.vbr {
-		effectiveBytes = e.applyVBR(frameBytes, dr, effectiveBytes, info.lm, info.channelCount, tellFrac, tfEstimate)
+		effectiveBytes = e.applyVBR(frameBytes, dr, maxBytes, info.lm, info.channelCount, tellFrac, tfEstimate)
 	}
 	info.totalBits = uint(effectiveBytes) * 8
 	shapeBits := (int(info.totalBits) << bitResolution) - tellFrac - 1
