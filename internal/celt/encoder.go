@@ -47,6 +47,8 @@ type Encoder struct {
 	normalizedBands   [2][]float32
 	pitchBuf          []float32
 	pitchChannels     [2][]float32
+	bandTmpScratch    []float32
+	scratch           encoderScratch
 	// rdoScratch and rdoState back the stereo-angle search. They live here so
 	// the per-frame band state can borrow them instead of allocating.
 	rdoScratch [4][]float32
@@ -138,6 +140,7 @@ func (e *Encoder) Reset() {
 		e.normalizedBands[ch] = make([]float32, 0, maxFrameSampleCount)
 	}
 	e.cwrsScratch = make([]uint32, 0, cwrsMaxPulseCount+2)
+	e.bandTmpScratch = make([]float32, 0, maxFrameSampleCount)
 	e.pitchBuf = make([]float32, 0, (combFilterMaxPeriod+maxFrameSampleCount)>>1)
 
 	// libopus seeds tonal_average at 256 (celt_encoder.c:3091), the midpoint
@@ -446,19 +449,19 @@ func (e *Encoder) choosePrefilter(
 
 	pitchLen := (combFilterMaxPeriod + frameSampleCount) >> 1
 	buf := slicetools.Resize(&e.pitchBuf, pitchLen)
-	pitchDownsample(pitchInput, buf, pitchLen, 2)
+	pitchDownsample(pitchInput, buf, pitchLen, 2, &e.scratch)
 
 	// The top 1.5 octave of the range is skipped: short-term correlation there
 	// produces too many false positives.
 	pitchPeriod := pitchSearch(
 		buf[combFilterMaxPeriod>>1:], buf,
-		frameSampleCount, combFilterMaxPeriod-3*combFilterMinPeriod,
+		frameSampleCount, combFilterMaxPeriod-3*combFilterMinPeriod, &e.scratch,
 	)
 	pitchPeriod = combFilterMaxPeriod - pitchPeriod
 
 	pitchGain := removeDoubling(
 		buf, combFilterMaxPeriod, combFilterMinPeriod, frameSampleCount,
-		&pitchPeriod, e.analysis.prefilter.period, e.analysis.prefilter.gain,
+		&pitchPeriod, e.analysis.prefilter.period, e.analysis.prefilter.gain, &e.scratch,
 	)
 	pitchPeriod = min(pitchPeriod, combFilterMaxPeriod-2)
 
@@ -812,6 +815,7 @@ func (e *Encoder) newBandState(
 		norm:           e.bandNorm[:0],
 		lowbandScratch: e.bandLowScratch[:0],
 		collapseMasks:  e.bandCollapseMasks[:0],
+		tmpScratch:     e.bandTmpScratch[:0],
 		// libopus only searches the stereo angle at complexity 8 and up: it
 		// encodes every stereo band twice, so the cost is real.
 		thetaRDO:   e.complexity >= thetaRDOComplexity && info.channelCount == 2,
@@ -936,6 +940,7 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 		info.tfSelect = tfAnalysis(
 			normalized[tfChan], info.lm, info.startBand, info.endBand, info.transient,
 			lambda, tfEstimate, 0, len(analysis.mdct[tfChan]), &dr.importance, &info.tfChange,
+			&e.scratch,
 		)
 	} else {
 		for band := info.startBand; band < info.endBand; band++ {
