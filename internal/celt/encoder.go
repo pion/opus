@@ -757,18 +757,21 @@ func (e *Encoder) applyVBR(
 	nbAvailableBytes := max(minAllowed, (rawTarget+(1<<5))>>6)
 	nbAvailableBytes = min(nbAvailableBytes, maxBytes)
 
-	e.updateVBRReservoir(vbrRate, rawTarget, nbAvailableBytes<<6)
+	// A reservoir that has gone negative means the last frames spent under the
+	// rate; the reference hands those bits back here instead of dropping them,
+	// which is what keeps constrained VBR on target over time.
+	nbAvailableBytes += e.updateVBRReservoir(vbrRate, rawTarget, nbAvailableBytes<<6)
 
-	return nbAvailableBytes
+	return min(nbAvailableBytes, maxBytes)
 }
 
 // updateVBRReservoir tracks the VBR bit surplus/deficit for this frame and
 // updates the drift correction that biases baseTarget on future frames.
 // All three args are in 1/8-bit units (see applyVBR), matching libopus's
 // vbr_reservoir/vbr_drift/vbr_offset in celt_encoder.c.
-func (e *Encoder) updateVBRReservoir(vbrRate, rawTarget, roundedTarget int) {
+func (e *Encoder) updateVBRReservoir(vbrRate, rawTarget, roundedTarget int) int {
 	if !e.vbr {
-		return
+		return 0
 	}
 
 	var alpha float32
@@ -780,7 +783,7 @@ func (e *Encoder) updateVBRReservoir(vbrRate, rawTarget, roundedTarget int) {
 	}
 
 	if !e.constrainedVBR {
-		return
+		return 0
 	}
 
 	e.vbrReservoir += int32(roundedTarget - vbrRate)
@@ -789,9 +792,13 @@ func (e *Encoder) updateVBRReservoir(vbrRate, rawTarget, roundedTarget int) {
 	e.vbrDrift += int32(alpha * driftDelta)
 	e.vbrOffset = -e.vbrDrift
 
+	adjust := 0
 	if e.vbrReservoir < 0 {
+		adjust = int(-e.vbrReservoir) >> 6
 		e.vbrReservoir = 0
 	}
+
+	return adjust
 }
 
 // newBandState wires up the per-frame state the band quantiser works from,
