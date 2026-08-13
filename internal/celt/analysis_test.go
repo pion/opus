@@ -395,7 +395,7 @@ func TestChooseAllocationTrimDefault(t *testing.T) {
 	mdct := makeFlatMDCT()
 	trim := chooseAllocationTrim(
 		[2][maxBands]float32{logBandAmp, logBandAmp},
-		[2][]float32{mdct, mdct}, 1, maxLM, maxBands, 128*8*50, 0,
+		[2][]float32{mdct, mdct}, 1, maxLM, maxBands, 128*8*50, 0, 0, new(float32),
 	)
 	assert.InDelta(t, 5, trim, 1, "flat spectrum at 128kbps should stay near default")
 }
@@ -406,7 +406,7 @@ func TestChooseAllocationTrimLowBitrate(t *testing.T) {
 	mdct := makeFlatMDCT()
 	trim := chooseAllocationTrim(
 		[2][maxBands]float32{logBandAmp, logBandAmp},
-		[2][]float32{mdct, mdct}, 1, maxLM, maxBands, 32*8*50, 0,
+		[2][]float32{mdct, mdct}, 1, maxLM, maxBands, 32*8*50, 0, 0, new(float32),
 	)
 	assert.LessOrEqual(t, trim, 5, "low bitrate should bias trim downward")
 }
@@ -418,9 +418,11 @@ func TestChooseAllocationTrimSpectralTilt(t *testing.T) {
 	highHeavy := makeTiltedLogBandAmp(+1.0) // bandas altas con más energía
 	mdct := makeFlatMDCT()
 	trimLow := chooseAllocationTrim([2][maxBands]float32{lowHeavy, lowHeavy},
-		[2][]float32{mdct, mdct}, 1, maxLM, maxBands, 128*8*50, 0)
+		[2][]float32{mdct, mdct}, 1, maxLM, maxBands, 128*8*50, 0, 0, new(float32),
+	)
 	trimHigh := chooseAllocationTrim([2][maxBands]float32{highHeavy, highHeavy},
-		[2][]float32{mdct, mdct}, 1, maxLM, maxBands, 128*8*50, 0)
+		[2][]float32{mdct, mdct}, 1, maxLM, maxBands, 128*8*50, 0, 0, new(float32),
+	)
 	assert.Greater(t, trimLow, trimHigh, "low-heavy spectrum should bias trim upward (more bits to lows)")
 }
 
@@ -429,12 +431,14 @@ func TestChooseAllocationTrimStereoCorrelated(t *testing.T) {
 	logBandAmp := makeFlatLogBandAmp(0.0)
 	mdct := makeSineMDCT(440) // mismo contenido en ambos canales
 	trimCorr := chooseAllocationTrim([2][maxBands]float32{logBandAmp, logBandAmp},
-		[2][]float32{mdct, mdct}, 2, maxLM, maxBands, 128*8*50, 0)
+		[2][]float32{mdct, mdct}, 2, maxLM, maxBands, 128*8*50, 0, 0, new(float32),
+	)
 
 	// L y R decorrelated → trim sin ajuste stereo.
 	mdctR := makeNoiseMDCT(42)
 	trimDecorr := chooseAllocationTrim([2][maxBands]float32{logBandAmp, logBandAmp},
-		[2][]float32{mdct, mdctR}, 2, maxLM, maxBands, 128*8*50, 0)
+		[2][]float32{mdct, mdctR}, 2, maxLM, maxBands, 128*8*50, 0, 0, new(float32),
+	)
 
 	assert.Less(t, trimCorr, trimDecorr, "correlated stereo should have lower trim than decorrelated")
 }
@@ -445,9 +449,10 @@ func TestChooseAllocationTrimTFEstimate(t *testing.T) {
 	logBandAmp := makeFlatLogBandAmp(0.0)
 	mdct := makeFlatMDCT()
 	trimFlat := chooseAllocationTrim([2][maxBands]float32{logBandAmp, logBandAmp},
-		[2][]float32{mdct, mdct}, 1, maxLM, maxBands, 128*8*50, 0)
+		[2][]float32{mdct, mdct}, 1, maxLM, maxBands, 128*8*50, 0, 0, new(float32),
+	)
 	trimTF := chooseAllocationTrim([2][maxBands]float32{logBandAmp, logBandAmp},
-		[2][]float32{mdct, mdct}, 1, maxLM, maxBands, 128*8*50, 1.0)
+		[2][]float32{mdct, mdct}, 1, maxLM, maxBands, 128*8*50, 1.0, 0, new(float32))
 	assert.Equal(t, trimFlat-2, trimTF, "tf_estimate of 1.0 should drop the trim by 2")
 }
 

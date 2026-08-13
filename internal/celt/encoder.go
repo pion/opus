@@ -53,6 +53,9 @@ type Encoder struct {
 	tapsetDecision     int
 	prevSpreadDecision int
 	prevIntensityBand  int
+	// stereoSaving estimates how many bits mid/side is saving over plain
+	// stereo; the VBR target spends less when the channels are redundant.
+	stereoSaving float32
 	// lastCodedBands feeds the band-skip hysteresis in computeAllocation
 	// (st->lastCodedBands in libopus celt_encoder.c). Zero means "no previous
 	// frame", which the update below seeds directly instead of clamping.
@@ -134,6 +137,7 @@ func (e *Encoder) Reset() {
 	e.tapsetDecision = 0
 	e.prevSpreadDecision = defaultSpreadDecision
 	e.prevIntensityBand = 0
+	e.stereoSaving = 0
 	e.lastCodedBands = 0
 	e.consecTransient = 0
 	e.analysis.prefilter = postFilterState{}
@@ -359,7 +363,7 @@ func (e *Encoder) encodeDynamicAllocation(info *frameSideInfo, offsets [maxBands
 // enough budget left to signal it.
 func (e *Encoder) encodeAllocationTrim(
 	info *frameSideInfo, logBandAmp [2][maxBands]float32, mdct [2][]float32, totalBitsEighth uint,
-	tfEstimate float32,
+	tfEstimate float32, intensity int,
 ) {
 	info.allocationTrim = defaultAllocationTrim
 	if e.rangeEncoder.TellFrac()+uint(allocationTrimBitCost<<bitResolution) <= totalBitsEighth {
@@ -368,7 +372,7 @@ func (e *Encoder) encodeAllocationTrim(
 			mdct,
 			info.channelCount, info.lm, info.endBand,
 			info.totalBits,
-			tfEstimate,
+			tfEstimate, intensity, &e.stereoSaving,
 		)
 		e.rangeEncoder.EncodeSymbolWithICDF(icdfAllocationTrim, uint32(info.allocationTrim))
 	}
@@ -538,8 +542,34 @@ func computeVBR(
 	channelCount int,
 	lm int,
 	tfEstimate float32,
+	intensity, lastCodedBands int, stereoSaving float32,
 ) int {
-	target := baseTarget + totBoostBits - (19 << lm) // dynalloc calibration
+	target := baseTarget
+
+	// Stereo savings: bands coded in intensity stereo carry one channel's
+	// worth of shape, so the frame needs fewer bits the more redundant the
+	// two channels are. Capped by the share of the spectrum that is actually
+	// stereo-coded (celt_encoder.c compute_vbr).
+	if channelCount == 2 {
+		codedBands := lastCodedBands
+		if codedBands == 0 {
+			codedBands = maxBands
+		}
+		codedBins := int(bandEdges[codedBands]) << lm
+		codedStereoBands := min(intensity, codedBands)
+		codedBins += int(bandEdges[codedStereoBands]) << lm
+		codedStereoDOF := (int(bandEdges[codedStereoBands]) << lm) - codedStereoBands
+		if codedBins > 0 {
+			maxFrac := 0.8 * float32(codedStereoDOF) / float32(codedBins)
+			saving := min32(stereoSaving, 1.0)
+			target -= min(
+				int(maxFrac*float32(target)),
+				int((saving-0.1)*float32(codedStereoDOF<<bitResolution)),
+			)
+		}
+	}
+
+	target += totBoostBits - (19 << lm) // dynalloc calibration
 
 	// Transient boost, compensated for the average frame. The reference scales
 	// the target by tf_estimate rather than switching on the transient flag.
@@ -579,7 +609,7 @@ func (e *Encoder) frameCeiling(dst []byte, frameBytes int) int {
 
 func (e *Encoder) applyVBR(
 	frameBytes int, dr dynallocResult,
-	maxBytes, lm, channelCount, tellFrac int, tfEstimate float32,
+	maxBytes, lm, channelCount, tellFrac int, tfEstimate float32, intensity int,
 ) int {
 	vbrRate := frameBytes << 6 // libopus vbr_rate, 1/8-bit units
 
@@ -600,6 +630,7 @@ func (e *Encoder) applyVBR(
 	// and the rounded value for the reservoir — they're not the same number.
 	rawTarget := computeVBR(
 		baseTarget, dr.maxDepth, dr.totBoostBits, e.constrainedVBR, channelCount, lm, tfEstimate,
+		intensity, e.lastCodedBands, e.stereoSaving,
 	) + tellFrac
 
 	// The frame still has to fit what has already been written plus the
@@ -771,12 +802,17 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 	e.prevSpreadDecision = info.spread
 	e.encodeSpread(&info)
 	totalBitsEighth := e.encodeDynamicAllocation(&info, offsets)
-	e.encodeAllocationTrim(&info, analysis.logBandAmp, analysis.mdct, totalBitsEighth, tfEstimate)
+	// The reference settles the intensity band before both the trim and the VBR
+	// target, and both read it (celt_encoder.c:2404). It also derives it from
+	// the nominal rate, not from the post-VBR frame size.
+	targetIntensity, targetDualStereo := e.computeIntensityAndDualStereo(&info, normalized)
+	e.encodeAllocationTrim(&info, analysis.logBandAmp, analysis.mdct, totalBitsEighth, tfEstimate, targetIntensity)
 
 	tellFrac := int(e.rangeEncoder.TellFrac())
 
 	if e.vbr {
-		effectiveBytes = e.applyVBR(frameBytes, dr, maxBytes, info.lm, info.channelCount, tellFrac, tfEstimate)
+		effectiveBytes = e.applyVBR(
+			frameBytes, dr, maxBytes, info.lm, info.channelCount, tellFrac, tfEstimate, targetIntensity)
 	}
 	info.totalBits = uint(effectiveBytes) * 8
 	shapeBits := (int(info.totalBits) << bitResolution) - tellFrac - 1
@@ -785,7 +821,6 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 		info.antiCollapseRsv = 1 << bitResolution
 	}
 	shapeBits -= info.antiCollapseRsv
-	targetIntensity, targetDualStereo := e.computeIntensityAndDualStereo(&info, normalized)
 	info.allocation = e.computeAllocationMono(&info, shapeBits, targetIntensity, targetDualStereo)
 	e.encodeFineEnergy(&info, info.allocation.fineQuant, targetLogE)
 

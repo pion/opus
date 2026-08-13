@@ -647,7 +647,7 @@ func chooseAllocationTrim(
 	mdct [2][]float32,
 	channelCount, lm, endBand int,
 	totalBits uint,
-	tfEstimate float32,
+	tfEstimate float32, intensity int, stereoSaving *float32,
 ) int {
 	frameSampleCount := shortBlockSampleCount << lm
 	equivRate := int(totalBits) * sampleRate / frameSampleCount
@@ -671,23 +671,25 @@ func chooseAllocationTrim(
 		scale := 1 << lm
 		var corrSum float32
 		for band := 0; band < 8 && band < endBand; band++ {
-			start := scale * int(bandEdges[band])
-			end := scale * int(bandEdges[band+1])
-			var dot, l2, r2 float32
-			for i := start; i < end; i++ {
-				dot += mdct[0][i] * mdct[1][i]
-				l2 += mdct[0][i] * mdct[0][i]
-				r2 += mdct[1][i] * mdct[1][i]
-			}
-			if l2 > 1e-30 && r2 > 1e-30 {
-				corrSum += dot / sqrtf(l2*r2)
-			}
+			corrSum += bandCorrelation(mdct, scale, band)
 		}
 		avgCorr := abs32(corrSum / 8.0)
 		if avgCorr > 1.0 {
 			avgCorr = 1.0
 		}
+		// minXC is the weakest correlation across the intensity-coded range;
+		// a single decorrelated band there means mid/side is not saving much,
+		// however redundant the low bands look.
+		minXC := avgCorr
+		for band := 8; band < intensity && band < endBand; band++ {
+			minXC = min32(minXC, abs32(bandCorrelation(mdct, scale, band)))
+		}
+		if minXC > 1.0 {
+			minXC = 1.0
+		}
 		logXC := float32(math.Log2(1.001 - float64(avgCorr*avgCorr)))
+		logXC2 := max32(0.5*logXC, float32(math.Log2(1.001-float64(minXC*minXC))))
+		*stereoSaving = min32(*stereoSaving+0.25, -0.5*logXC2)
 		trim += max32(-4.0, 0.75*logXC)
 	}
 
@@ -721,6 +723,25 @@ func chooseAllocationTrim(
 		trimIndex = 10
 	}
 	return trimIndex
+}
+
+// bandCorrelation returns the cosine similarity of the two channels over one
+// band, which is what the reference gets from the inner product of the
+// normalised spectrum.
+func bandCorrelation(mdct [2][]float32, scale, band int) float32 {
+	start := scale * int(bandEdges[band])
+	end := scale * int(bandEdges[band+1])
+	var dot, l2, r2 float32
+	for i := start; i < end; i++ {
+		dot += mdct[0][i] * mdct[1][i]
+		l2 += mdct[0][i] * mdct[0][i]
+		r2 += mdct[1][i] * mdct[1][i]
+	}
+	if l2 <= 1e-30 || r2 <= 1e-30 {
+		return 0
+	}
+
+	return dot / sqrtf(l2*r2)
 }
 
 func abs32(x float32) float32 {
