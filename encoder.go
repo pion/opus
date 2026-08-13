@@ -263,6 +263,7 @@ func NewEncoder(opts ...EncoderOption) (*Encoder, error) {
 	encoder.celtEncoder.SetConstrainedVBR(encoder.constrainedVBR)
 	encoder.celtEncoder.SetLossRate(encoder.lossRate)
 	encoder.celtEncoder.SetComplexity(encoder.complexity)
+	encoder.celtEncoder.SetBitrate(encoder.bitrate)
 	encoder.silkEncoder.SetUseInterpolatedNLSFs(encoder.complexity >= silkComplexityInterpolationThreshold)
 
 	return encoder, nil
@@ -270,7 +271,12 @@ func NewEncoder(opts ...EncoderOption) (*Encoder, error) {
 
 // SetBitrate updates the target bitrate in bits per second.
 func (e *Encoder) SetBitrate(bps int) error {
-	return WithBitrate(bps)(e)
+	if err := WithBitrate(bps)(e); err != nil {
+		return err
+	}
+	e.celtEncoder.SetBitrate(e.bitrate)
+
+	return nil
 }
 
 // SetComplexity updates the encoder complexity on the standard Opus 0..10

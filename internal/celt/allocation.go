@@ -646,12 +646,8 @@ func chooseAllocationTrim(
 	logBandAmp [2][maxBands]float32,
 	mdct [2][]float32,
 	channelCount, lm, endBand int,
-	totalBits uint,
-	tfEstimate float32, intensity int, stereoSaving *float32,
+	tfEstimate float32, intensity int, stereoSaving *float32, equivRate int,
 ) int {
-	frameSampleCount := shortBlockSampleCount << lm
-	equivRate := int(totalBits) * sampleRate / frameSampleCount
-
 	// bitrate base, trim=5 default, 4 at low bitrate, interpolated 64-80kbps.
 	trim := float32(5.0)
 	if equivRate < 64000 {
