@@ -378,3 +378,31 @@ func TestEncodeLaplaceClampsToDecodableValue(t *testing.T) {
 	assert.Equal(t, encoded, decoder.DecodeLaplace(fs0, decay),
 		"the decoder must recover exactly the value EncodeLaplace returned, not the original input")
 }
+
+func TestEncoderSaveRestoreRewindsOutput(t *testing.T) {
+	// A speculative encode must leave nothing behind: the bytes, the pending
+	// carry state and the bit counter all have to come back.
+	var reference Encoder
+	reference.Init()
+	reference.EncodeSymbolLogP(2, 1)
+	reference.EncodeUniform(64, 40)
+	want := append([]byte(nil), reference.Done()...)
+
+	var enc Encoder
+	enc.Init()
+	enc.EncodeSymbolLogP(2, 1)
+
+	var saved State
+	enc.SaveInto(&saved)
+	savedTell := enc.TellFrac()
+	// Burn a very different sequence, then rewind it.
+	for range 40 {
+		enc.EncodeUniform(255, 200)
+		enc.EncodeRawBits(7, 99)
+	}
+	enc.Restore(&saved)
+
+	assert.Equal(t, savedTell, enc.TellFrac(), "TellFrac must rewind")
+	enc.EncodeUniform(64, 40)
+	assert.Equal(t, want, enc.Done(), "output must match an encoder that never speculated")
+}
