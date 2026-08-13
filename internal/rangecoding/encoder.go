@@ -630,3 +630,48 @@ func boolToInt(value bool) int {
 
 	return 0
 }
+
+// State is a snapshot of the encoder taken mid-frame. Rewinding needs the
+// output bytes as well as the scalars: a speculative encode that is rolled back
+// leaves the next one writing over the same positions, so the first one's bytes
+// are gone by the time we might want them again.
+type State struct {
+	buf       []byte
+	tail      []byte
+	endWindow uint64
+	nendBits  uint
+	rangeSize uint32
+	low       uint32
+	rem       int
+	extBytes  int
+
+	nbitsTotal uint
+}
+
+// SaveInto captures the encoder state so a speculative encode can be undone.
+// It reuses dst's buffers, so a caller that snapshots in a loop allocates once.
+func (e *Encoder) SaveInto(dst *State) {
+	dst.buf = append(dst.buf[:0], e.buf...)
+	dst.tail = append(dst.tail[:0], e.tail...)
+	dst.endWindow = e.endWindow
+	dst.nendBits = e.nendBits
+	dst.rangeSize = e.rangeSize
+	dst.low = e.low
+	dst.rem = e.rem
+	dst.extBytes = e.extBytes
+	dst.nbitsTotal = e.nbitsTotal
+}
+
+// Restore rewinds to a state taken by SaveInto. Only states from the same frame
+// are meaningful.
+func (e *Encoder) Restore(s *State) {
+	e.buf = append(e.buf[:0], s.buf...)
+	e.tail = append(e.tail[:0], s.tail...)
+	e.endWindow = s.endWindow
+	e.nendBits = s.nendBits
+	e.rangeSize = s.rangeSize
+	e.low = s.low
+	e.rem = s.rem
+	e.extBytes = s.extBytes
+	e.nbitsTotal = s.nbitsTotal
+}

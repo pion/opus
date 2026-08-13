@@ -11,6 +11,10 @@ import (
 	"github.com/pion/opus/internal/slicetools"
 )
 
+// thetaRDOComplexity is the encoder complexity at which libopus turns on the
+// rate-distortion search over the stereo angle (celt/bands.c).
+const thetaRDOComplexity = 8
+
 type bandEncodeState struct {
 	rangeEncoder   *rangecoding.Encoder
 	seed           uint32
@@ -22,6 +26,45 @@ type bandEncodeState struct {
 	// intensityStereo weighs its downmix by. libopus hands quant_all_bands the
 	// unquantized bandE from compute_band_energies, so this mirrors that.
 	bandEnergy [2][maxBands]float32
+	// thetaRDO turns on the rate-distortion search over the stereo angle
+	// (libopus gates it on complexity>=8). rdoScratch holds the copies the
+	// search needs to rewind between the two candidates.
+	thetaRDO   bool
+	rdoScratch *[4][]float32
+	rdoState   *[2]rangecoding.State
+}
+
+// rdoSave copies a band's two channels aside so a speculative encode can be
+// undone. slot 0 holds the state before the first candidate, slot 1 the result
+// of the first candidate.
+func (s *bandEncodeState) rdoSave(slot int, x, y []float32) {
+	s.rdoScratch[2*slot] = append(s.rdoScratch[2*slot][:0], x...)
+	s.rdoScratch[2*slot+1] = append(s.rdoScratch[2*slot+1][:0], y...)
+}
+
+func (s *bandEncodeState) rdoRestore(slot int, x, y []float32) {
+	copy(x, s.rdoScratch[2*slot])
+	copy(y, s.rdoScratch[2*slot+1])
+}
+
+// channelWeights mirrors libopus compute_channel_weights: the quieter channel
+// is nudged up so a near-silent side does not dominate the distortion.
+func channelWeights(ex, ey float32) (float32, float32) {
+	minE := min32(ex, ey)
+
+	return ex + minE/3, ey + minE/3
+}
+
+// bandDistortion is the weighted correlation between the original band and its
+// reconstruction. Higher is better, which is the direction libopus compares.
+func bandDistortion(xOrig, yOrig, x, y []float32, wx, wy float32) float64 {
+	var dx, dy float64
+	for i := range x {
+		dx += float64(xOrig[i]) * float64(x[i])
+		dy += float64(yOrig[i]) * float64(y[i])
+	}
+
+	return float64(wx)*dx + float64(wy)*dy
 }
 
 func (s *bandEncodeState) floatScratch(n int) []float32 {
@@ -542,6 +585,7 @@ func quantBandStereo(
 	yScratch [2][]int,
 	absXScratch, signScratch [2][]float32,
 	cwrsScratch []uint32,
+	thetaRound int,
 ) uint {
 	if n == 1 {
 		xSign := uint32(0)
@@ -587,7 +631,7 @@ func quantBandStereo(
 	itheta := 0
 	invert := false
 	if qn != 1 {
-		thetaSym = quantizeStereoBandTheta(x, y, qn)
+		thetaSym = quantizeStereoBandTheta(x, y, qn, thetaRound)
 		encodeBandTheta(thetaSym, qn, n, true, blocks, state.rangeEncoder)
 		itheta = thetaSym * 16384 / qn
 		// libopus compute_theta (celt/bands.c:866-871): a zero angle means the
@@ -754,7 +798,11 @@ func stereoSplit(x []float32, y []float32, n int) {
 	}
 }
 
-func quantizeStereoBandTheta(x []float32, y []float32, qn int) int {
+// quantizeStereoBandTheta returns the coded angle symbol. thetaRound is 0 for
+// the plain nearest-value choice; -1 and +1 ask for the two candidates the
+// rate-distortion search compares, biased toward the ends of the range so the
+// pair straddles the unrounded angle (libopus celt/bands.c compute_theta).
+func quantizeStereoBandTheta(x []float32, y []float32, qn, thetaRound int) int {
 	if qn <= 1 {
 		return 0
 	}
@@ -774,9 +822,23 @@ func quantizeStereoBandTheta(x []float32, y []float32, qn int) int {
 	}
 
 	theta := math.Atan2(math.Sqrt(ey), math.Sqrt(ex))
-	symbol := int(math.Round(theta * float64(qn) / (0.5 * math.Pi)))
+	// The reference works in a Q14 angle; keeping the same domain here makes
+	// the bias below the same integer it uses.
+	raw := theta * 16384 / (0.5 * math.Pi)
+	if thetaRound == 0 {
+		return min(qn, max(0, int(math.Round(raw*float64(qn)/16384))))
+	}
 
-	return min(qn, max(0, symbol))
+	bias := 32767 / qn
+	if raw <= 8192 {
+		bias = -bias
+	}
+	down := min(qn-1, max(0, int(math.Floor((raw*float64(qn)+float64(bias))/16384))))
+	if thetaRound < 0 {
+		return down
+	}
+
+	return down + 1
 }
 
 func quantAllBandsStereo(
@@ -918,25 +980,22 @@ func quantAllBandsStereo(
 				yScratch[1], absXScratch[1], signScratch[1], cwrsScratch,
 			)
 		} else {
-			xMask = quantBandStereo(
-				band,
-				x[bandStart:bandEnd],
-				y[bandStart:bandEnd],
-				bandWidth,
-				bandBits,
-				info.spread,
-				blocks,
-				info.allocation.intensity,
-				info.tfChange[band],
-				lowband,
-				&remainingBits,
-				info.lm,
-				1,
-				lowbandScratch,
-				xMask|yMask,
-				state,
-				yScratch, absXScratch, signScratch, cwrsScratch,
-			)
+			bx := x[bandStart:bandEnd]
+			by := y[bandStart:bandEnd]
+			quant := func(round int, mask uint) uint {
+				return quantBandStereo(
+					band, bx, by, bandWidth, bandBits, info.spread, blocks,
+					info.allocation.intensity, info.tfChange[band], lowband,
+					&remainingBits, info.lm, 1, lowbandScratch, mask, state,
+					yScratch, absXScratch, signScratch, cwrsScratch, round,
+				)
+			}
+			if state.thetaRDO && band < info.allocation.intensity {
+				xMask = quantBandStereoRDO(state, quant, bx, by, xMask|yMask, &remainingBits,
+					state.bandEnergy[0][band], state.bandEnergy[1][band])
+			} else {
+				xMask = quant(0, xMask|yMask)
+			}
 			yMask = xMask
 		}
 
@@ -949,4 +1008,42 @@ func quantAllBandsStereo(
 	}
 
 	return collapseMasks
+}
+
+// quantBandStereoRDO encodes the band twice — rounding the stereo angle down
+// and then up — and keeps whichever reconstruction tracks the original more
+// closely. The two encodes are speculative, so the range coder, the band and
+// the noise-fill seed all rewind between them (libopus celt/bands.c).
+func quantBandStereoRDO(
+	state *bandEncodeState, quant func(round int, mask uint) uint,
+	x, y []float32, mask uint, remainingBits *int, ex, ey float32,
+) uint {
+	wx, wy := channelWeights(ex, ey)
+
+	state.rangeEncoder.SaveInto(&state.rdoState[0])
+	seedBefore, bitsBefore := state.seed, *remainingBits
+	state.rdoSave(0, x, y)
+
+	maskDown := quant(-1, mask)
+	distDown := bandDistortion(state.rdoScratch[0], state.rdoScratch[1], x, y, wx, wy)
+
+	state.rangeEncoder.SaveInto(&state.rdoState[1])
+	seedDown, bitsDown := state.seed, *remainingBits
+	state.rdoSave(1, x, y)
+
+	state.rangeEncoder.Restore(&state.rdoState[0])
+	state.seed, *remainingBits = seedBefore, bitsBefore
+	state.rdoRestore(0, x, y)
+
+	maskUp := quant(1, mask)
+	distUp := bandDistortion(state.rdoScratch[0], state.rdoScratch[1], x, y, wx, wy)
+	if distDown < distUp {
+		return maskUp
+	}
+
+	state.rangeEncoder.Restore(&state.rdoState[1])
+	state.seed, *remainingBits = seedDown, bitsDown
+	state.rdoRestore(1, x, y)
+
+	return maskDown
 }

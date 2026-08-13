@@ -47,6 +47,10 @@ type Encoder struct {
 	normalizedBands   [2][]float32
 	pitchBuf          []float32
 	pitchChannels     [2][]float32
+	// rdoScratch and rdoState back the stereo-angle search. They live here so
+	// the per-frame band state can borrow them instead of allocating.
+	rdoScratch [4][]float32
+	rdoState   [2]rangecoding.State
 
 	spreadAverage      int
 	hfAverage          int
@@ -790,6 +794,33 @@ func (e *Encoder) updateVBRReservoir(vbrRate, rawTarget, roundedTarget int) {
 	}
 }
 
+// newBandState wires up the per-frame state the band quantiser works from,
+// including the linear band energies libopus hands quant_all_bands.
+func (e *Encoder) newBandState(
+	info *frameSideInfo, logBandAmp [2][maxBands]float32,
+) bandEncodeState {
+	state := bandEncodeState{
+		rangeEncoder:   &e.rangeEncoder,
+		seed:           e.rng,
+		norm:           e.bandNorm[:0],
+		lowbandScratch: e.bandLowScratch[:0],
+		collapseMasks:  e.bandCollapseMasks[:0],
+		// libopus only searches the stereo angle at complexity 8 and up: it
+		// encodes every stereo band twice, so the cost is real.
+		thetaRDO:   e.complexity >= thetaRDOComplexity && info.channelCount == 2,
+		rdoScratch: &e.rdoScratch,
+		rdoState:   &e.rdoState,
+	}
+	for ch := range info.channelCount {
+		for band := info.startBand; band < info.endBand; band++ {
+			state.bandEnergy[ch][band] = float32(math.Pow(2,
+				float64(logBandAmp[ch][band]+energyMeans[band])))
+		}
+	}
+
+	return state
+}
+
 // EncodeFrame encodes one CELT frame from float PCM into dst.
 // It returns the number of bytes written. dst must be at least frameBytes long.
 //
@@ -924,19 +955,7 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 	e.encodeFineEnergy(&info, info.allocation.fineQuant, targetLogE)
 
 	totalBits := (int(info.totalBits) << bitResolution) - info.antiCollapseRsv
-	bandState := bandEncodeState{
-		rangeEncoder:   &e.rangeEncoder,
-		seed:           e.rng,
-		norm:           e.bandNorm[:0],
-		lowbandScratch: e.bandLowScratch[:0],
-		collapseMasks:  e.bandCollapseMasks[:0],
-	}
-	for ch := range info.channelCount {
-		for band := info.startBand; band < info.endBand; band++ {
-			bandState.bandEnergy[ch][band] = float32(math.Pow(2,
-				float64(analysis.logBandAmp[ch][band]+energyMeans[band])))
-		}
-	}
+	bandState := e.newBandState(&info, analysis.logBandAmp)
 	shape0 := normalized[0]
 	if info.channelCount == 2 {
 		shape1 := normalized[1]
