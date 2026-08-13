@@ -62,6 +62,10 @@ type corpusBaseline struct {
 // Set OPUS_QUALITY_CORPUS to a directory of 48 kHz stereo s16le .pcm files and
 // OPUS_RFC6716_REFERENCE to a libopus checkout. Set OPUS_QUALITY_CORPUS_UPDATE
 // to rewrite the baseline instead of asserting against it.
+//
+// The committed baseline was measured on the corpus that
+// .github/scripts/fetch-quality-corpus.sh builds; a different corpus needs its
+// own baseline.
 func TestEncoderQualityRealCorpus(t *testing.T) {
 	if runtime.GOOS == conformanceWindowsGOOS {
 		t.Skip("the reference tools use a POSIX-oriented Makefile")
