@@ -53,6 +53,9 @@ type Encoder struct {
 	tapsetDecision     int
 	prevSpreadDecision int
 	prevIntensityBand  int
+	// specAvg tracks the running spectral level the temporal-VBR term compares
+	// each frame against (st->spec_avg in celt_encoder.c).
+	specAvg float32
 	// stereoSaving estimates how many bits mid/side is saving over plain
 	// stereo; the VBR target spends less when the channels are redundant.
 	stereoSaving float32
@@ -138,6 +141,7 @@ func (e *Encoder) Reset() {
 	e.prevSpreadDecision = defaultSpreadDecision
 	e.prevIntensityBand = 0
 	e.stereoSaving = 0
+	e.specAvg = 0
 	e.lastCodedBands = 0
 	e.consecTransient = 0
 	e.analysis.prefilter = postFilterState{}
@@ -543,6 +547,7 @@ func computeVBR(
 	lm int,
 	tfEstimate float32,
 	intensity, lastCodedBands int, stereoSaving float32,
+	equivRate int, temporalVBR float32,
 ) int {
 	target := baseTarget
 
@@ -589,6 +594,14 @@ func computeVBR(
 		target = baseTarget + int(0.67*float32(target-baseTarget))
 	}
 
+	// Temporal VBR only applies to frames that are not asking for finer time
+	// resolution, and it fades out as the rate approaches 96 kb/s, where there
+	// are enough bits that leveling them out stops paying.
+	if tfEstimate < 0.2 {
+		amount := 0.0000031 * float32(max(0, min(32000, 96000-equivRate)))
+		target += int(temporalVBR * amount * float32(target))
+	}
+
 	return max(min(target, 2*baseTarget), 0)
 }
 
@@ -599,6 +612,34 @@ func computeVBR(
 // frameCeiling is how many bytes the frame may occupy. libopus caps a VBR frame
 // at the room the caller left (nbCompressedBytes), which is what lets it run
 // above the nominal rate on a hard frame; CBR stays pinned to its share.
+// temporalVBR measures how far the frame's spectral level sits above or below
+// the running average, following a decaying envelope so a brief dip does not
+// register. The VBR target leans on it to spend more on a frame that is
+// louder than its neighbors (celt_encoder.c).
+func (e *Encoder) temporalVBR(
+	logBandAmp [2][maxBands]float32, startBand, endBand, channelCount, lm int, transient bool,
+) float32 {
+	follow := float32(-10.0)
+	var frameAvg float32
+	var offset float32
+	if transient {
+		offset = 0.5 * float32(lm)
+	}
+	for band := startBand; band < endBand; band++ {
+		follow = max32(follow-1.0, logBandAmp[0][band]-offset)
+		if channelCount == 2 {
+			follow = max32(follow, logBandAmp[1][band]-offset)
+		}
+		frameAvg += follow
+	}
+	frameAvg /= float32(endBand - startBand)
+
+	tvbr := min32(3.0, max32(-1.5, frameAvg-e.specAvg))
+	e.specAvg += 0.02 * tvbr
+
+	return tvbr
+}
+
 func (e *Encoder) frameCeiling(dst []byte, frameBytes int) int {
 	if !e.vbr {
 		return frameBytes
@@ -608,10 +649,15 @@ func (e *Encoder) frameCeiling(dst []byte, frameBytes int) int {
 }
 
 func (e *Encoder) applyVBR(
-	frameBytes int, dr dynallocResult,
-	maxBytes, lm, channelCount, tellFrac int, tfEstimate float32, intensity int,
+	info *frameSideInfo, logBandAmp [2][maxBands]float32, dr dynallocResult,
+	frameBytes, maxBytes, tellFrac int, tfEstimate float32, intensity int,
 ) int {
+	lm, channelCount := info.lm, info.channelCount
+	temporalVBR := e.temporalVBR(logBandAmp, info.startBand, info.endBand, channelCount, lm, info.transient)
 	vbrRate := frameBytes << 6 // libopus vbr_rate, 1/8-bit units
+	// equiv_rate at the CELT layer: the frame's byte share expressed as a rate,
+	// net of the per-packet overhead (celt_encoder.c:1926).
+	equivRate := frameBytes*8*50<<(3-lm) - (40*channelCount+20)*((400>>lm)-50)
 
 	if e.constrainedVBR {
 		// libopus allows any multiple of vbrRate as the bound; pion always
@@ -631,6 +677,7 @@ func (e *Encoder) applyVBR(
 	rawTarget := computeVBR(
 		baseTarget, dr.maxDepth, dr.totBoostBits, e.constrainedVBR, channelCount, lm, tfEstimate,
 		intensity, e.lastCodedBands, e.stereoSaving,
+		equivRate, temporalVBR,
 	) + tellFrac
 
 	// The frame still has to fit what has already been written plus the
@@ -812,7 +859,7 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 
 	if e.vbr {
 		effectiveBytes = e.applyVBR(
-			frameBytes, dr, maxBytes, info.lm, info.channelCount, tellFrac, tfEstimate, targetIntensity)
+			&info, analysis.logBandAmp, dr, frameBytes, maxBytes, tellFrac, tfEstimate, targetIntensity)
 	}
 	info.totalBits = uint(effectiveBytes) * 8
 	shapeBits := (int(info.totalBits) << bitResolution) - tellFrac - 1
