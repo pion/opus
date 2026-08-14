@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "bitrate": 96000,
+  "clips": {
+    "SOMS2004-11-13": {
+      "weightedError": 0.624648,
+      "badWindows": 1,
+      "totalWindows": 2999
+    },
+    "esmith2003-01-31": {
+      "weightedError": 0.680949,
+      "badWindows": 0,
+      "totalWindows": 2999
+    },
+    "gd1977-05-08": {
+      "weightedError": 0.395929,
+      "badWindows": 0,
+      "totalWindows": 2999
+    },
+    "jj2008-06-14": {
+      "weightedError": 0.485416,
+      "badWindows": 0,
+      "totalWindows": 2999
+    },
+    "johnmayer2008-08-02": {
+      "weightedError": 0.563283,
+      "badWindows": 0,
+      "totalWindows": 2999
+    },
+    "maroon5-2004-10-21": {
+      "weightedError": 1.043867,
+      "badWindows": 0,
+      "totalWindows": 2999
+    },
+    "moe2004-10-29": {
+      "weightedError": 0.804476,
+      "badWindows": 0,
+      "totalWindows": 2999
+    },
+    "mss2003-12-31": {
+      "weightedError": 0.579516,
+      "badWindows": 0,
+      "totalWindows": 2999
+    },
+    "oar2006-01-14": {
+      "weightedError": 1.146483,
+      "badWindows": 0,
+      "totalWindows": 2999
+    },
+    "pattersonh2006-01-07": {
+      "weightedError": 0.413035,
+      "badWindows": 0,
+      "totalWindows": 2999
+    },
+    "ryanadams2006-10-17": {
+      "weightedError": 0.569696,
+      "badWindows": 0,
+      "totalWindows": 2999
+    },
+    "tlg2006-10-21": {
+      "weightedError": 0.281118,
+      "badWindows": 0,
+      "totalWindows": 2999
+    }
+  }
+}
