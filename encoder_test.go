@@ -982,3 +982,51 @@ func TestVBRUsesBufferHeadroom(t *testing.T) {
 	assert.Greater(t, largest, frameBudget, "a demanding frame should be allowed past the nominal rate")
 	assert.Positive(t, total)
 }
+
+// TestEncodeDoesNotAllocate guards the reuse in encodeScratch. The CELT layer
+// was already allocation-free per frame, but nothing measured the public entry
+// points, so the wrapper around it churned ~16 kB a frame unnoticed.
+func TestEncodeDoesNotAllocate(t *testing.T) {
+	enc, err := NewEncoder(WithChannels(2), WithBitrate(96000))
+	require.NoError(t, err)
+
+	in := make([]byte, encoderTestFrameSampleCount*2*2)
+	for i := range in {
+		in[i] = byte(i * 7)
+	}
+	out := make([]byte, 1500)
+	var encErr error
+	allocs := testing.AllocsPerRun(50, func() {
+		_, encErr = enc.Encode(in, out)
+	})
+	require.NoError(t, encErr)
+	assert.Zerof(t, allocs, "Encode allocated %v times per frame", allocs)
+
+	pcm := make([]float32, encoderTestFrameSampleCount*2)
+	for i := range pcm {
+		pcm[i] = float32(i%800) / 8000
+	}
+	allocs = testing.AllocsPerRun(50, func() {
+		_, encErr = enc.EncodeFloat32(pcm, out)
+	})
+	require.NoError(t, encErr)
+	assert.Zerof(t, allocs, "EncodeFloat32 allocated %v times per frame", allocs)
+}
+
+func BenchmarkEncode(b *testing.B) {
+	enc, err := NewEncoder(WithChannels(2), WithBitrate(96000))
+	require.NoError(b, err)
+
+	in := make([]byte, encoderTestFrameSampleCount*2*2)
+	for i := range in {
+		in[i] = byte(i * 7)
+	}
+	out := make([]byte, 1500)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if _, err := enc.Encode(in, out); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

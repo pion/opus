@@ -47,7 +47,22 @@ const (
 	minBitrate     = 6000
 	maxBitrate     = 510000
 	frame20msNS    = 20000000
+	// encodeFrameSamples is the one frame length the public encode path takes,
+	// and encodeMaxChannels the widest layout, so together they bound its
+	// per-frame working buffers.
+	encodeFrameSamples = celtSampleRate * frame20msNS / 1000000000
+	encodeMaxChannels  = 2
 )
+
+// encodeScratch holds what Encode and EncodeFloat32 would otherwise allocate on
+// every call. The CELT layer already reuses its own analysis buffers; without
+// this the wrapper around it still churned ~16 kB per frame, which at 50 frames
+// a second is a lot of garbage for a server carrying many streams at once.
+type encodeScratch struct {
+	pcm      [encodeFrameSamples * encodeMaxChannels]float32
+	deinter  [encodeMaxChannels][encodeFrameSamples]float32
+	channels [encodeMaxChannels][]float32
+}
 
 // celtOnlyFullband20msConfig is the TOC config number (bits 3..7) for
 // CELT-only, fullband, 20 ms frames per RFC 6716 Table 2. The mono/stereo bit
@@ -91,6 +106,7 @@ type Encoder struct {
 	maxBandwidth   Bandwidth
 	silkDCBlockMem float32
 	stereoWidth    int
+	scratch        encodeScratch
 }
 
 // EncoderOption configures an Encoder during construction.
@@ -369,7 +385,7 @@ func (e *Encoder) Encode(in []byte, out []byte) (int, error) {
 		return 0, fmt.Errorf("%w: got %d samples, want %d", errInvalidFrameSize, len(in)/2, expectedSamples)
 	}
 
-	pcm := make([]float32, len(in)/2)
+	pcm := e.scratch.pcm[:len(in)/2]
 	for i := range pcm {
 		sample := int16(binary.LittleEndian.Uint16(in[i*2:])) //nolint:gosec // G115: little-endian s16 round-trip.
 		pcm[i] = float32(sample) / 32768
@@ -391,7 +407,7 @@ func (e *Encoder) EncodeFloat32(in []float32, out []byte) (int, error) {
 		return 0, fmt.Errorf("%w: got %d samples, want %d", errInvalidFrameSize, len(in), frameSamples*e.channels)
 	}
 
-	channels := splitChannels(in, e.channels, frameSamples)
+	channels := e.splitChannels(in, e.channels, frameSamples)
 	e.narrowStereo(channels)
 
 	frameBytes := e.frameBytes()
@@ -555,8 +571,8 @@ func (e *Encoder) autoSelectBandwidth() Bandwidth {
 
 // splitChannels splits interleaved PCM into per-channel slices.
 // For mono, it returns the input directly without allocation.
-func splitChannels(in []float32, numChannels, frameSamples int) [][]float32 {
-	ch := make([][]float32, numChannels)
+func (e *Encoder) splitChannels(in []float32, numChannels, frameSamples int) [][]float32 {
+	ch := e.scratch.channels[:numChannels]
 	if numChannels == 1 {
 		ch[0] = in
 
@@ -564,10 +580,11 @@ func splitChannels(in []float32, numChannels, frameSamples int) [][]float32 {
 	}
 
 	for c := range numChannels {
-		ch[c] = make([]float32, frameSamples)
+		buf := e.scratch.deinter[c][:frameSamples]
 		for i := range frameSamples {
-			ch[c][i] = in[i*numChannels+c]
+			buf[i] = in[i*numChannels+c]
 		}
+		ch[c] = buf
 	}
 
 	return ch
