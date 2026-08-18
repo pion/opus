@@ -132,17 +132,24 @@ func celtPitchXcorr(x, y, xcorr []float32, length, maxPitch int) {
 	i := 0
 	for ; i+7 < maxPitch; i += 8 {
 		var s0, s1, s2, s3, s4, s5, s6, s7 float64
-		yb := y[i : i+length+7]
+		yb := y[i : i+length]
+		y1 := y[i+1 : i+1+length]
+		y2 := y[i+2 : i+2+length]
+		y3 := y[i+3 : i+3+length]
+		y4 := y[i+4 : i+4+length]
+		y5 := y[i+5 : i+5+length]
+		y6 := y[i+6 : i+6+length]
+		y7 := y[i+7 : i+7+length]
 		for j := range length {
 			xj := float64(x[j])
 			s0 += xj * float64(yb[j])
-			s1 += xj * float64(yb[j+1])
-			s2 += xj * float64(yb[j+2])
-			s3 += xj * float64(yb[j+3])
-			s4 += xj * float64(yb[j+4])
-			s5 += xj * float64(yb[j+5])
-			s6 += xj * float64(yb[j+6])
-			s7 += xj * float64(yb[j+7])
+			s1 += xj * float64(y1[j])
+			s2 += xj * float64(y2[j])
+			s3 += xj * float64(y3[j])
+			s4 += xj * float64(y4[j])
+			s5 += xj * float64(y5[j])
+			s6 += xj * float64(y6[j])
+			s7 += xj * float64(y7[j])
 		}
 		xcorr[i], xcorr[i+1], xcorr[i+2], xcorr[i+3] = float32(s0), float32(s1), float32(s2), float32(s3)
 		xcorr[i+4], xcorr[i+5], xcorr[i+6], xcorr[i+7] = float32(s4), float32(s5), float32(s6), float32(s7)

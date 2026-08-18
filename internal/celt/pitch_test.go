@@ -388,23 +388,23 @@ func TestCeltPitchXcorrMatchesScalarReference(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(fmt.Sprintf("len=%d/pitch=%d", tc.length, tc.maxPitch), func(t *testing.T) {
-			x := make([]float32, tc.length)
-			y := make([]float32, tc.length+tc.maxPitch)
-			for i := range x {
-				x[i] = rng()
+			input := make([]float32, tc.length)
+			window := make([]float32, tc.length+tc.maxPitch)
+			for i := range input {
+				input[i] = rng()
 			}
-			for i := range y {
-				y[i] = rng()
+			for i := range window {
+				window[i] = rng()
 			}
 
 			got := make([]float32, tc.maxPitch)
-			celtPitchXcorr(x, y, got, tc.length, tc.maxPitch)
+			celtPitchXcorr(input, window, got, tc.length, tc.maxPitch)
 
 			want := make([]float32, tc.maxPitch)
 			for i := range tc.maxPitch {
 				var sum float64
 				for j := range tc.length {
-					sum += float64(x[j]) * float64(y[i+j])
+					sum += float64(input[j]) * float64(window[i+j])
 				}
 				want[i] = float32(sum)
 			}
