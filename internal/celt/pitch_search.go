@@ -121,8 +121,33 @@ func pitchDownsample(x [][]float32, xLP []float32, length, factor int, scratch *
 }
 
 // celtPitchXcorr fills xcorr[i] with the inner product of x and y shifted by i.
+//
+// Eight lags are processed per outer iteration, each with its own independent
+// float64 accumulator. Every accumulator is a chain over j = 0..length-1 in the
+// same order and with the same precision as the single-lag version, so the
+// result is bit-identical: each lag's sum is untouched, we just interleave the
+// independent chains to break the serial dependency that keeps the single-lag
+// loop running at ADD latency.
 func celtPitchXcorr(x, y, xcorr []float32, length, maxPitch int) {
-	for i := range maxPitch {
+	i := 0
+	for ; i+7 < maxPitch; i += 8 {
+		var s0, s1, s2, s3, s4, s5, s6, s7 float64
+		yb := y[i : i+length+7]
+		for j := range length {
+			xj := float64(x[j])
+			s0 += xj * float64(yb[j])
+			s1 += xj * float64(yb[j+1])
+			s2 += xj * float64(yb[j+2])
+			s3 += xj * float64(yb[j+3])
+			s4 += xj * float64(yb[j+4])
+			s5 += xj * float64(yb[j+5])
+			s6 += xj * float64(yb[j+6])
+			s7 += xj * float64(yb[j+7])
+		}
+		xcorr[i], xcorr[i+1], xcorr[i+2], xcorr[i+3] = float32(s0), float32(s1), float32(s2), float32(s3)
+		xcorr[i+4], xcorr[i+5], xcorr[i+6], xcorr[i+7] = float32(s4), float32(s5), float32(s6), float32(s7)
+	}
+	for ; i < maxPitch; i++ {
 		var sum float64
 		for j := range length {
 			sum += float64(x[j]) * float64(y[i+j])
