@@ -3,15 +3,17 @@
 
 package celt
 
+import "math"
+
 // l1Metric is libopus's l1_metric: the L1 norm of a band, biased so that a
 // coarser time resolution has to win by a margin before it is chosen.
 func l1Metric(x []float32, lm int, bias float32) float32 {
 	var l1 float32
 	for _, v := range x {
-		if v < 0 {
-			v = -v
-		}
-		l1 += v
+		// math.Abs instead of branching on the sign: the signs of MDCT
+		// coefficients are unpredictable, so the branch mispredicts about half
+		// the time and costs more than the whole rest of the loop.
+		l1 += float32(math.Abs(float64(v)))
 	}
 
 	return l1 + float32(lm)*bias*l1
