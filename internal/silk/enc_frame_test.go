@@ -25,9 +25,7 @@ func TestEncodeSILKFrameDecodable(t *testing.T) {
 		}
 
 		enc := NewEncoder()
-		enc.rangeEncoder.Init()
-		enc.encodeSILKFrame(input, bandwidth)
-		data := enc.rangeEncoder.Done()
+		data := enc.Encode(input, bandwidth, 0)
 		require.NotEmpty(t, data)
 
 		dec := NewDecoder()
@@ -49,9 +47,7 @@ func TestEncodeSILKFrameSilence(t *testing.T) {
 	frameLength := 20 * silkInternalRate(bandwidth)
 
 	enc := NewEncoder()
-	enc.rangeEncoder.Init()
-	enc.encodeSILKFrame(make([]int16, frameLength), bandwidth)
-	data := enc.rangeEncoder.Done()
+	data := enc.Encode(make([]int16, frameLength), bandwidth, 0)
 
 	dec := NewDecoder()
 	out := make([]float32, frameLength)
@@ -79,17 +75,15 @@ func TestEncodeSILKFrameInterpolatedNLSF(t *testing.T) {
 
 	enc := NewEncoder()
 	enc.SetUseInterpolatedNLSFs(true)
-	enc.rangeEncoder.Init()
-	enc.encodeSILKFrame(gen(0), bandwidth)
+	first := enc.Encode(gen(0), bandwidth, 0)
 	require.False(t, enc.firstFrameAfterReset, "first call should clear firstFrameAfterReset")
 
-	enc.rangeEncoder.Init()
-	enc.encodeSILKFrame(gen(frameLength), bandwidth)
-	data := enc.rangeEncoder.Done()
+	data := enc.Encode(gen(frameLength), bandwidth, 0)
 	require.NotEmpty(t, data)
 
 	dec := NewDecoder()
 	out := make([]float32, frameLength)
+	require.NoError(t, dec.Decode(first, out, false, nanoseconds20Ms, bandwidth))
 	require.NoError(t, dec.Decode(data, out, false, nanoseconds20Ms, bandwidth))
 }
 
@@ -111,16 +105,13 @@ func TestEncodeSILKFrameUnvoicedHighOffset(t *testing.T) {
 	}
 
 	enc := NewEncoder()
-	enc.rangeEncoder.Init()
-	enc.encodeSILKFrame(gen(0), bandwidth)
-
-	enc.rangeEncoder.Init()
-	enc.encodeSILKFrame(gen(frameLength), bandwidth)
-	data := enc.rangeEncoder.Done()
+	first := enc.Encode(gen(0), bandwidth, 0)
+	data := enc.Encode(gen(frameLength), bandwidth, 0)
 	require.NotEmpty(t, data)
 
 	dec := NewDecoder()
 	out := make([]float32, frameLength)
+	require.NoError(t, dec.Decode(first, out, false, nanoseconds20Ms, bandwidth))
 	require.NoError(t, dec.Decode(data, out, false, nanoseconds20Ms, bandwidth))
 }
 
@@ -148,16 +139,13 @@ func TestEncodeSILKFrameVoicedHighOffset(t *testing.T) {
 	}
 
 	enc := NewEncoder()
-	enc.rangeEncoder.Init()
-	enc.encodeSILKFrame(gen(0), bandwidth)
-
-	enc.rangeEncoder.Init()
-	enc.encodeSILKFrame(gen(frameLength), bandwidth)
-	data := enc.rangeEncoder.Done()
+	first := enc.Encode(gen(0), bandwidth, 0)
+	data := enc.Encode(gen(frameLength), bandwidth, 0)
 	require.NotEmpty(t, data)
 
 	dec := NewDecoder()
 	out := make([]float32, frameLength)
+	require.NoError(t, dec.Decode(first, out, false, nanoseconds20Ms, bandwidth))
 	require.NoError(t, dec.Decode(data, out, false, nanoseconds20Ms, bandwidth))
 }
 

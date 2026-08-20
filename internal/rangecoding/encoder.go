@@ -202,7 +202,6 @@ func (e *Encoder) EncodeCumulative(low, high, total uint32) {
 	if total == 0 || low >= high || high > total {
 		return
 	}
-
 	scale := e.rangeSize / total
 	if low != 0 {
 		e.low += e.rangeSize - scale*(total-low)
@@ -292,6 +291,35 @@ func (e *Encoder) EncodeRawBits(n uint, value uint32) {
 		e.tail = append(e.tail, byte(e.endWindow&symMax))
 		e.endWindow >>= symBits
 		e.nendBits -= symBits
+	}
+}
+
+// PatchInitialBits replaces the first bitCount coded bits with the MSB-first bit
+// pattern value. It is the Go equivalent of ec_enc_patch_initial_bits().
+//
+// SILK delays its per-frame VAD/LBRR flags until the packet has been analyzed.
+// Depending on how far encoding has progressed, the initial bits may already
+// be in the first finalized byte, in the pending carry byte, or still in low.
+// Patching must not change the current range or the bit count.
+//
+// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.3
+func (e *Encoder) PatchInitialBits(value uint32, bitCount uint) {
+	if bitCount == 0 || bitCount > symBits {
+		return
+	}
+
+	value &= bitMask(bitCount)
+	shift := uint(symBits) - bitCount
+	mask := bitMask(bitCount) << shift
+	switch {
+	case len(e.buf) > 0:
+		//nolint:gosec // G115: value and mask are limited to one byte.
+		e.buf[0] = (e.buf[0] &^ byte(mask)) | byte(value<<shift)
+	case e.rem >= 0:
+		e.rem = (e.rem &^ int(mask)) | int(value<<shift)
+	case e.rangeSize <= codeTop>>bitCount:
+		stateMask := mask << codeShift
+		e.low = (e.low &^ stateMask) | value<<(codeShift+shift)
 	}
 }
 

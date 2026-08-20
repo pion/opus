@@ -69,12 +69,18 @@ type encodeScratch struct {
 // is separate (bit 2 of the TOC) and not part of this constant.
 const celtOnlyFullband20msConfig = 31
 
-// SILK-only, 20 ms TOC config numbers per RFC 6716 Table 2, one per bandwidth
-// EncodeSILK supports.
+// SILK-only TOC config numbers per RFC 6716 Table 2, one per bandwidth and
+// duration EncodeSILK supports.
 const (
 	silkOnlyNarrowband20msConfig = 1
+	silkOnlyNarrowband40msConfig = 2
+	silkOnlyNarrowband60msConfig = 3
 	silkOnlyMediumband20msConfig = 5
+	silkOnlyMediumband40msConfig = 6
+	silkOnlyMediumband60msConfig = 7
 	silkOnlyWideband20msConfig   = 9
+	silkOnlyWideband40msConfig   = 10
+	silkOnlyWideband60msConfig   = 11
 )
 
 // silkComplexityInterpolationThreshold is the encoder complexity at or above
@@ -438,39 +444,56 @@ func (e *Encoder) EncodeFloat32(in []float32, out []byte) (int, error) {
 	return 1 + n, nil
 }
 
-// EncodeSILK encodes one 20 ms mono SILK frame into a SILK-only Opus packet.
-// pcm must hold exactly one 20 ms frame of mono s16 samples at the
-// bandwidth's internal rate: 160 (Narrowband/8 kHz), 240 (Mediumband/12 kHz),
-// or 320 (Wideband/16 kHz) samples. This is a separate entry point from
-// Encode/EncodeFloat32 — bitrate-based auto-selection always picks CELT
-// bandwidths (Wideband and up); SILK is for callers who specifically want a
-// SILK-only voice packet (VoIP/narrowband use cases), not an automatic
-// CELT/SILK/hybrid switch. Superwideband and Fullband aren't SILK
-// bandwidths and are rejected. Applies a fixed DC-removal high-pass before
-// encoding (libopus's dc_reject applied to the shared PCM path); the
-// pitch-adaptive VoIP cutoff (hp_cutoff) is not implemented. Covers
-// voiced/LTP prediction, noise shaping and NLSF interpolation (see
+// EncodeSILK encodes one 20, 40, or 60 ms mono SILK frame into a SILK-only
+// Opus packet. pcm must hold exactly one frame of mono s16 samples at the
+// bandwidth's internal rate: 160/320/480 (Narrowband/8 kHz), 240/480/720
+// (Mediumband/12 kHz), or 320/640/960 (Wideband/16 kHz) samples for 20/40/60
+// ms. Durations longer than 20 ms are coded as multiple 20 ms SILK coding
+// units in a single SILK header, per RFC 6716 Section 4.2.1. This is a
+// separate entry point from Encode/EncodeFloat32 — bitrate-based
+// auto-selection always picks CELT bandwidths (Wideband and up); SILK is for
+// callers who specifically want a SILK-only voice packet (VoIP/narrowband use
+// cases), not an automatic CELT/SILK/hybrid switch. Superwideband and
+// Fullband aren't SILK bandwidths and are rejected. Applies a fixed DC-removal
+// high-pass before encoding (libopus's dc_reject applied to the shared PCM
+// path); the pitch-adaptive VoIP cutoff (hp_cutoff) is not implemented.
+// Covers voiced/LTP prediction, noise shaping and NLSF interpolation (see
 // internal/silk); the delayed-decision NSQ, stereo, hybrid mode, and the
 // bitrate-control loop are not yet implemented.
 func (e *Encoder) EncodeSILK(pcm []int16, bandwidth Bandwidth, out []byte) (int, error) {
+	unitSamples := bandwidth.SampleRate() / 50 // 20 ms
+	if unitSamples == 0 || len(pcm)%unitSamples != 0 {
+		return 0, fmt.Errorf("%w: got %d samples, want a multiple of %d", errInvalidFrameSize, len(pcm), unitSamples)
+	}
+	frameCount := len(pcm) / unitSamples
+	// A SILK-only packet carries at least one 20 ms coding unit and at most
+	// three (RFC 6716 Section 2.1.4); an empty input is not a well-formed
+	// frame and fails closed like any other invalid size.
+	if frameCount < 1 || frameCount > 3 {
+		return 0, fmt.Errorf("%w: got %d samples, want 1..3 frames of %d", errInvalidFrameSize, len(pcm), unitSamples)
+	}
+
+	// The SILK-only TOC config numbers in RFC 6716 Table 2 are consecutive
+	// per duration within each bandwidth (e.g. Wideband: 9, 10, 11 for
+	// 20/40/60 ms), so the duration offset is frameCount-1, not (frameCount-1)*2.
 	var config int
 	switch bandwidth {
 	case BandwidthNarrowband:
-		config = silkOnlyNarrowband20msConfig
+		config = silkOnlyNarrowband20msConfig + (frameCount - 1) //nolint:gosec // G115: frameCount is 1..3.
 	case BandwidthMediumband:
-		config = silkOnlyMediumband20msConfig
+		config = silkOnlyMediumband20msConfig + (frameCount - 1) //nolint:gosec // G115: frameCount is 1..3.
 	case BandwidthWideband:
-		config = silkOnlyWideband20msConfig
+		config = silkOnlyWideband20msConfig + (frameCount - 1) //nolint:gosec // G115: frameCount is 1..3.
 	default:
 		return 0, fmt.Errorf("%w: %d", errInvalidBandwidth, bandwidth)
 	}
 
-	want := bandwidth.SampleRate() / 50 // 20 ms
-	if len(pcm) != want {
-		return 0, fmt.Errorf("%w: got %d samples, want %d", errInvalidFrameSize, len(pcm), want)
-	}
-
 	filtered := applySILKDCBlock(pcm, bandwidth.SampleRate(), &e.silkDCBlockMem)
+	// The SILK encoder keeps its prediction state (NLSF interpolation, pitch
+	// lag, gain, LCG seed) across packets so consecutive 60 ms frames stay in
+	// sync with the decoder's stateful stream. Only the range coder is
+	// re-initialized per packet, so each packet is a self-contained bitstream
+	// that the decoder can start reading from scratch.
 	payload := e.silkEncoder.Encode(filtered, silk.Bandwidth(bandwidth), e.bitrate)
 	if len(out) < len(payload)+1 {
 		return 0, errOutBufferTooSmall

@@ -34,6 +34,12 @@ type Encoder struct {
 	// interpolation.
 	prevNLSFq []int16
 
+	// vadFlags holds the per-unit VAD decision of the in-progress packet,
+	// indexed by unit. The header interval is reserved as active before the
+	// units are coded and patched from these flags after the last unit,
+	// mirroring libopus's VAD_flags[] plus ec_enc_patch_initial_bits.
+	vadFlags [3]bool
+
 	// Analysis state for the frame encoder.
 	vad               vadState
 	nsq               *nsqState
@@ -78,6 +84,7 @@ func (e *Encoder) resetPredictionState() {
 	e.isPreviousFrameVoiced = false
 	e.firstFrameAfterReset = true
 	e.sumLogGainQ7 = 0
+	e.vadFlags = [3]bool{}
 	e.prevNLSFq = make([]int16, maxLPCOrder)
 	if e.targetBitrate == 0 {
 		e.targetBitrate = 24000
