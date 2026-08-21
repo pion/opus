@@ -247,21 +247,21 @@ func (d *Decoder) determineFrameType(voiceActivityDetected bool) (
 		frameTypeSymbol = d.rangeDecoder.DecodeSymbolWithICDF(icdfFrameTypeVADInactive)
 	}
 
-	// +------------+-------------+--------------------------+
-	// | Frame Type | Signal Type | Quantization Offset Type |
-	// +------------+-------------+--------------------------+
-	// | 0          | Inactive    |                      Low |
-	// |            |             |                          |
-	// | 1          | Inactive    |                     High |
-	// |            |             |                          |
-	// | 2          | Unvoiced    |                      Low |
-	// |            |             |                          |
-	// | 3          | Unvoiced    |                     High |
-	// |            |             |                          |
-	// | 4          | Voiced      |                      Low |
-	// |            |             |                          |
-	// | 5          | Voiced      |                     High |
-	// +------------+-------------+--------------------------+
+	//  +------------+-------------+--------------------------+
+	//  | Frame Type | Signal Type | Quantization Offset Type |
+	//  +------------+-------------+--------------------------+
+	//  | 0          | Inactive    |                      Low |
+	//  |            |             |                          |
+	//  | 1          | Inactive    |                     High |
+	//  |            |             |                          |
+	//  | 2          | Unvoiced    |                      Low |
+	//  |            |             |                          |
+	//  | 3          | Unvoiced    |                     High |
+	//  |            |             |                          |
+	//  | 4          | Voiced      |                      Low |
+	//  |            |             |                          |
+	//  | 5          | Voiced      |                     High |
+	//  +------------+-------------+--------------------------+
 	//
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.3
 
@@ -792,23 +792,23 @@ func (d *Decoder) decodeLinearCongruentialGeneratorSeed() uint32 {
 // Table 44 lists the number of shell blocks required for a SILK frame
 // for each possible audio bandwidth and frame size.
 //
-// +-----------------+------------+------------------------+
-// | Audio Bandwidth | Frame Size | Number of Shell Blocks |
-// +-----------------+------------+------------------------+
-// | NB              | 10 ms      |                      5 |
-// |                 |            |                        |
-// | MB              | 10 ms      |                      8 |
-// |                 |            |                        |
-// | WB              | 10 ms      |                     10 |
-// |                 |            |                        |
-// | NB              | 20 ms      |                     10 |
-// |                 |            |                        |
-// | MB              | 20 ms      |                     15 |
-// |                 |            |                        |
-// | WB              | 20 ms      |                     20 |
-// +-----------------+------------+------------------------+
+//	 +-----------------+------------+------------------------+
+//	 | Audio Bandwidth | Frame Size | Number of Shell Blocks |
+//	 +-----------------+------------+------------------------+
+//	 | NB              | 10 ms      |                      5 |
+//	 |                 |            |                        |
+//	 | MB              | 10 ms      |                      8 |
+//	 |                 |            |                        |
+//	 | WB              | 10 ms      |                     10 |
+//	 |                 |            |                        |
+//	 | NB              | 20 ms      |                     10 |
+//	 |                 |            |                        |
+//	 | MB              | 20 ms      |                     15 |
+//	 |                 |            |                        |
+//	 | WB              | 20 ms      |                     20 |
+//	 +-----------------+------------+------------------------+
 //
-//	Table 44: Number of Shell Blocks Per SILK Frame
+//		Table 44: Number of Shell Blocks Per SILK Frame
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8
 //
@@ -1126,22 +1126,23 @@ func (d *Decoder) decodeExcitation(
 	// The constant quantization offset varies depending on the signal type and
 	// quantization offset type
 
-	// +-------------+--------------------------+--------------------------+
-	// | Signal Type | Quantization Offset Type |      Quantization Offset |
-	// |             |                          |                    (Q23) |
-	// +-------------+--------------------------+--------------------------+
-	// | Inactive    | Low                      |                       25 |
-	// |             |                          |                          |
-	// | Inactive    | High                     |                       60 |
-	// |             |                          |                          |
-	// | Unvoiced    | Low                      |                       25 |
-	// |             |                          |                          |
-	// | Unvoiced    | High                     |                       60 |
-	// |             |                          |                          |
-	// | Voiced      | Low                      |                        8 |
-	// |             |                          |                          |
-	// | Voiced      | High                     |                       25 |
-	// +-------------+--------------------------+--------------------------+
+	//  +-------------+--------------------------+--------------------------+
+	//  | Signal Type | Quantization Offset Type |      Quantization Offset |
+	//  |             |                          |                    (Q23) |
+	//  +-------------+--------------------------+--------------------------+
+	//  | Inactive    | Low                      |                       25 |
+	//  |             |                          |                          |
+	//  | Inactive    | High                     |                       60 |
+	//  |             |                          |                          |
+	//  | Unvoiced    | Low                      |                       25 |
+	//  |             |                          |                          |
+	//  | Unvoiced    | High                     |                       60 |
+	//  |             |                          |                          |
+	//  | Voiced      | Low                      |                        8 |
+	//  |             |                          |                          |
+	//  | Voiced      | High                     |                       25 |
+	//  +-------------+--------------------------+--------------------------+
+	//
 	// Table 53: Excitation Quantization Offsets
 	var offsetQ23 int32
 	switch {
@@ -1539,24 +1540,24 @@ func (d *Decoder) decodePitchLags(
 	// offsets to apply to the primary pitch lag for each subframe given the
 	// decoded codebook index.
 	//
-	// +-----------+--------+----------+-----------------------------------+
-	// | Audio     | SILK   | Codebook | PDF                               |
-	// | Bandwidth | Frame  |     Size |                                   |
-	// |           | Size   |          |                                   |
-	// +-----------+--------+----------+-----------------------------------+
-	// | NB        | 10 ms  |        3 | {143, 50, 63}/256                 |
-	// |           |        |          |                                   |
-	// | NB        | 20 ms  |       11 | {68, 12, 21, 17, 19, 22, 30, 24,  |
-	// |           |        |          | 17, 16, 10}/256                   |
-	// |           |        |          |                                   |
-	// | MB or WB  | 10 ms  |       12 | {91, 46, 39, 19, 14, 12, 8, 7, 6, |
-	// |           |        |          | 5, 5, 4}/256                      |
-	// |           |        |          |                                   |
-	// | MB or WB  | 20 ms  |       34 | {33, 22, 18, 16, 15, 14, 14, 13,  |
-	// |           |        |          | 13, 10, 9, 9, 8, 6, 6, 6, 5, 4,   |
-	// |           |        |          | 4, 4, 3, 3, 3, 2, 2, 2, 2, 2, 2,  |
-	// |           |        |          | 2, 1, 1, 1, 1}/256                |
-	// +-----------+--------+----------+-----------------------------------+
+	//  +-----------+--------+----------+-----------------------------------+
+	//  | Audio     | SILK   | Codebook | PDF                               |
+	//  | Bandwidth | Frame  |     Size |                                   |
+	//  |           | Size   |          |                                   |
+	//  +-----------+--------+----------+-----------------------------------+
+	//  | NB        | 10 ms  |        3 | {143, 50, 63}/256                 |
+	//  |           |        |          |                                   |
+	//  | NB        | 20 ms  |       11 | {68, 12, 21, 17, 19, 22, 30, 24,  |
+	//  |           |        |          | 17, 16, 10}/256                   |
+	//  |           |        |          |                                   |
+	//  | MB or WB  | 10 ms  |       12 | {91, 46, 39, 19, 14, 12, 8, 7, 6, |
+	//  |           |        |          | 5, 5, 4}/256                      |
+	//  |           |        |          |                                   |
+	//  | MB or WB  | 20 ms  |       34 | {33, 22, 18, 16, 15, 14, 14, 13,  |
+	//  |           |        |          | 13, 10, 9, 9, 8, 6, 6, 6, 5, 4,   |
+	//  |           |        |          | 4, 4, 3, 3, 3, 2, 2, 2, 2, 2, 2,  |
+	//  |           |        |          | 2, 1, 1, 1, 1}/256                |
+	//  +-----------+--------+----------+-----------------------------------+
 	//
 	// Table 32: PDFs for Subframe Pitch Contour
 
