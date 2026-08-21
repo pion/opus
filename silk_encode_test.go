@@ -49,35 +49,29 @@ func TestEncodeSILKRoundTrip(t *testing.T) {
 	}
 }
 
-// TestEncodeSILKMultiUnitRoundTrip encodes 20, 40, and 60 ms SILK frames and
-// decodes each back with a stateful decoder, checking that the packet TOC
-// signals the exact duration (RFC 6716 Table 2 SILK-only config), that the
-// frame code stays "one frame in the packet" (frame code 0, not a Code 3
-// repacketizer), and that the decoded output is non-silent at the full
-// duration. The direct 60 ms path uses one EncodeSILK call and one SILK-only
-// Opus packet for 960 mono 16 kHz samples at wideband. The "wideband60"
-// subtest additionally pins a representative VoIP configuration: 24 kb/s at
-// complexity 5.
+// TestEncodeSILKMultiUnitRoundTrip checks the TOC, frame code, decoded sample
+// count, and energy for 20, 40, and 60 ms at every SILK bandwidth. The 60 ms
+// case also covers a representative 24 kb/s, complexity-5 VoIP configuration.
 func TestEncodeSILKMultiUnitRoundTrip(t *testing.T) {
 	durations := []struct {
-		name     string
 		units    int // 20 ms coding units
 		wbConfig int // expected TOC config (RFC 6716 Table 2)
 		nbConfig int
 		mbConfig int
 	}{
-		{"20ms", 1, silkOnlyWideband20msConfig, silkOnlyNarrowband20msConfig, silkOnlyMediumband20msConfig},
-		{"40ms", 2, silkOnlyWideband40msConfig, silkOnlyNarrowband40msConfig, silkOnlyMediumband40msConfig},
-		{"60ms", 3, silkOnlyWideband60msConfig, silkOnlyNarrowband60msConfig, silkOnlyMediumband60msConfig},
+		{1, silkOnlyWideband20msConfig, silkOnlyNarrowband20msConfig, silkOnlyMediumband20msConfig},
+		{2, silkOnlyWideband40msConfig, silkOnlyNarrowband40msConfig, silkOnlyMediumband40msConfig},
+		{3, silkOnlyWideband60msConfig, silkOnlyNarrowband60msConfig, silkOnlyMediumband60msConfig},
 	}
 	for _, duration := range durations {
-		t.Run(duration.name, func(t *testing.T) {
+		name := fmt.Sprintf("%dms", duration.units*20)
+		t.Run(name, func(t *testing.T) {
 			t.Run("default", func(t *testing.T) {
-				runMultiUnitRoundTrip(t, duration.name, duration.units, duration.wbConfig, duration.nbConfig, duration.mbConfig)
+				runMultiUnitRoundTrip(t, name, duration.units, duration.wbConfig, duration.nbConfig, duration.mbConfig)
 			})
 			if duration.units == 3 {
 				t.Run("wideband60", func(t *testing.T) {
-					runMultiUnitRoundTripWideband60(t, duration.name)
+					runMultiUnitRoundTripWideband60(t, name)
 				})
 			}
 		})
@@ -210,66 +204,6 @@ func TestEncodeSILKStateContinuity(t *testing.T) {
 	}
 }
 
-// TestEncodeSILKMultiUnitTOCAndUnitStructure pins the direct 40/60 ms
-// structure: the packet TOC carries the exact SILK-only duration (RFC 6716
-// Table 2 config), the frame code stays 0 (one frame, not a Code 3
-// repacketizer), and the payload is one continuous range stream — a
-// self-contained bitstream the stateful decoder reads per 20 ms unit. A
-// 40 ms packet decodes to exactly two units worth of samples and a 60 ms
-// packet to three; if the encoder ever mis-indexed a multi-unit packet as one
-// longer coding unit (e.g. 12 subframes), the decoder's per-unit read order
-// would desynchronize and fail closed.
-func TestEncodeSILKMultiUnitTOCAndUnitStructure(t *testing.T) {
-	unit := BandwidthWideband.SampleRate() / 50 // 320 samples per 20 ms unit
-	durations := []struct {
-		units   int
-		wantTOC int // TOC byte: SILK-only WB config << 3, mono, frame code 0
-		wantOut int
-	}{
-		{1, silkOnlyWideband20msConfig << 3, unit},
-		{2, silkOnlyWideband40msConfig << 3, 2 * unit},
-		{3, silkOnlyWideband60msConfig << 3, 3 * unit},
-	}
-	for _, duration := range durations {
-		t.Run(fmt.Sprintf("%dunits", duration.units), func(t *testing.T) {
-			enc, err := NewEncoder(WithComplexity(8))
-			require.NoError(t, err)
-
-			pcm := make([]int16, duration.wantOut)
-			// A voiced-like periodic signal so pitch/LTP analysis runs on
-			// every unit; a sine with a period that divides each 20 ms unit.
-			for i := range pcm {
-				pcm[i] = int16(6000 * math.Sin(2*math.Pi*float64(i)/320*2))
-			}
-
-			packet := make([]byte, maxOpusFrameSize)
-			n, err := enc.EncodeSILK(pcm, BandwidthWideband, packet)
-			require.NoError(t, err)
-			require.Greater(t, n, 1)
-			packet = packet[:n]
-
-			assert.Equal(t, duration.wantTOC, int(packet[0]),
-				"TOC %#x, want %#x (SILK-only WB %d-unit config, mono, frame code 0)",
-				int(packet[0]), duration.wantTOC, duration.units)
-			assert.Equal(t, 0, int(packet[0])&1, "frame code must be 0")
-
-			dec, err := NewDecoderWithOutput(BandwidthWideband.SampleRate(), 1)
-			require.NoError(t, err)
-			out := make([]float32, duration.wantOut)
-			got, err := dec.DecodeToFloat32(packet, out)
-			require.NoError(t, err)
-			assert.Equal(t, duration.wantOut, got,
-				"decoded %d samples, want %d (%d 20 ms units)", got, duration.wantOut, duration.units)
-
-			var energy float64
-			for _, v := range out[:got] {
-				energy += float64(v) * float64(v)
-			}
-			assert.Positive(t, energy, "decoded output is silent")
-		})
-	}
-}
-
 // TestEncodeSILKInvalidSizes rejects lengths that are not a whole number of
 // 20 ms coding units at the bandwidth's internal rate, plus the case of more
 // than three units (120 ms), which the SILK packet duration cap forbids.
@@ -317,21 +251,13 @@ func TestEncodeSILKComplexityGatesInterpolation(t *testing.T) {
 	}
 }
 
-func TestEncodeSILKInvalidLength(t *testing.T) {
-	enc, err := NewEncoder()
-	require.NoError(t, err)
-
-	_, err = enc.EncodeSILK(make([]int16, 100), BandwidthWideband, make([]byte, maxOpusFrameSize))
-	require.Error(t, err)
-}
-
 func TestEncodeSILKInvalidBandwidth(t *testing.T) {
 	enc, err := NewEncoder()
 	require.NoError(t, err)
 
 	for _, bandwidth := range []Bandwidth{BandwidthSuperwideband, BandwidthFullband, BandwidthAuto} {
 		_, err = enc.EncodeSILK(make([]int16, 320), bandwidth, make([]byte, maxOpusFrameSize))
-		assert.Errorf(t, err, "bandwidth %d", bandwidth)
+		assert.ErrorIsf(t, err, errInvalidBandwidth, "bandwidth %d", bandwidth)
 	}
 }
 
