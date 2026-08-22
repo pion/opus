@@ -9,10 +9,10 @@ package silk
 // interpolation. The delayed-decision NSQ, stereo, and the rate-control loop
 // are follow-up refinements.
 
-const (
-	silkVADThreshold = 100 // speech_activity_Q8 above which a frame is treated as active
-	silkLTPScaleQ14  = 15565
-)
+// silkVADThreshold is the current Pion speech_activity_Q8 cutoff. Its value
+// 100 is a legacy encoder heuristic, not libopus's Q8 threshold 13. Pitch
+// analysis may still promote a periodic unit to active below it.
+const silkVADThreshold = 100
 
 // silkInternalRate returns the SILK internal sample rate in kHz.
 func silkInternalRate(bandwidth Bandwidth) int {
@@ -35,24 +35,77 @@ func silkLPCOrder(bandwidth Bandwidth) int {
 	return 10
 }
 
-// Encode encodes one 20 ms mono SILK frame from internal-rate PCM and returns
-// the range-coded SILK payload (the SILK header plus frame, without the Opus
-// TOC byte).
+// Encode returns one mono 20, 40, or 60 ms SILK payload without the Opus TOC.
+// Multi-unit packets share one range stream and preserve prediction state
+// across units and calls. Invalid unit counts return nil before state changes.
 func (e *Encoder) Encode(input []int16, bandwidth Bandwidth, targetBitrate int) []byte {
+	unitSamples := silkUnitSamples(bandwidth)
+	if len(input) < unitSamples || len(input)%unitSamples != 0 {
+		return nil
+	}
+	frameCount := len(input) / unitSamples
+	if frameCount > len(e.vadFlags) {
+		return nil
+	}
 	if targetBitrate > 0 {
 		e.targetBitrate = targetBitrate
 	}
+	e.vadFlags = [3]bool{}
 	e.rangeEncoder.Init()
-	e.encodeSILKFrame(input, bandwidth)
+	e.encodeSILKPacketHeader(frameCount)
+	for i := range frameCount {
+		e.encodeSILKFrame(input[i*unitSamples:(i+1)*unitSamples], i, frameCount, bandwidth)
+	}
+	// The VAD flags are only final after every unit's analysis has run.
+	// libopus writes them back into the reserved header interval with
+	// ec_enc_patch_initial_bits (enc_API.c); the decoder reads the same
+	// bits before the unit parameters.
+	var vadFlags uint32
+	for i, active := range e.vadFlags[:frameCount] {
+		if active {
+			vadFlags |= 1 << uint(frameCount-1-i) //nolint:gosec // G115: frameCount is 1..3.
+		}
+	}
+	if !e.rangeEncoder.PatchInitialBits(vadFlags, uint(frameCount)) { //nolint:gosec // G115: frameCount is 1..3.
+		return nil
+	}
 
 	return e.rangeEncoder.Done()
 }
 
-// encodeSILKFrame encodes one 20 ms mono SILK frame to the range encoder.
-// input is PCM at the internal rate for the bandwidth.
+// encodeSILKPacketHeader reserves the SILK header interval that precedes the
+// frames of a packet: one VAD bit per SILK frame (RFC 6716 Section 4.2.3)
+// plus a single LBRR-present bit (Section 4.2.4). The true VAD flags are known
+// only after every unit's analysis, so zero placeholders are patched before
+// finalizing. The encoder has no low-bitrate redundancy, so that bit stays zero.
+func (e *Encoder) encodeSILKPacketHeader(frameCount int) {
+	for range frameCount {
+		e.rangeEncoder.EncodeCumulative(0, 1, 2) // VAD flag interval, reserved
+	}
+	e.rangeEncoder.EncodeCumulative(0, 1, 2) // LBRR-present: no low-bitrate redundancy
+}
+
+// silkUnitSamples returns the number of PCM samples in one 20 ms SILK coding
+// unit at the given bandwidth's internal rate.  A 20 ms unit holds 4 subframes
+// of 5 ms each, so the count is 20 * fsKHz (e.g. 320 for 16 kHz WB).
+func silkUnitSamples(bandwidth Bandwidth) int {
+	return 20 * silkInternalRate(bandwidth)
+}
+
+// encodeSILKFrame encodes one 20 ms, four-subframe SILK coding unit. Unit zero
+// uses independent gain and pitch coding; later units use conditional coding.
+// Multi-unit packets share range and prediction state while each analysis
+// stage consumes one unit, matching libopus's silk_encode_do_VAD_FIX and
+// encode_frame_FIX.c flow (RFC 6716 Sections 4.2.7.4 and 4.2.7.6.1).
 //
 //nolint:gocyclo,cyclop // the frame encoder threads many stages in decode order.
-func (e *Encoder) encodeSILKFrame(input []int16, bandwidth Bandwidth) {
+func (e *Encoder) encodeSILKFrame(
+	input []int16,
+	unit int,
+	frameCount int,
+	bandwidth Bandwidth,
+) {
+	independent := unit == 0
 	fsKHz := silkInternalRate(bandwidth)
 	order := silkLPCOrder(bandwidth)
 	subfrCount := subframeCount(nanoseconds20Ms)
@@ -60,7 +113,9 @@ func (e *Encoder) encodeSILKFrame(input []int16, bandwidth Bandwidth) {
 	frameLength := subfrCount * subfrLength
 	ltpMemLength := 20 * fsKHz
 
-	// Voice activity.
+	// Voice activity. Pitch analysis below may promote a periodic frame to
+	// active, so the packet-header flag is recorded only after signal type is
+	// finalized.
 	saQ8, tiltQ15, quality := e.vad.getSpeechActivityQ8(input, frameLength, fsKHz)
 	active := saQ8 > silkVADThreshold
 
@@ -86,6 +141,8 @@ func (e *Encoder) encodeSILKFrame(input []int16, bandwidth Bandwidth) {
 	case active:
 		signalType = frameSignalTypeUnvoiced
 	}
+	isVoiced := signalType == frameSignalTypeVoiced
+	e.vadFlags[unit] = active
 
 	// Noise-shaping analysis: AR shaping filters, initial gains, spectral tilt,
 	// low-frequency and harmonic shaping.
@@ -118,14 +175,16 @@ func (e *Encoder) encodeSILKFrame(input []int16, bandwidth Bandwidth) {
 	var filterIndices []int8
 	var predGainDB float32
 	ltpScaleIndex := 0
-	ltpScaleQ14 := int32(silkLTPScaleQ14)
-	if voiced {
+	ltpScaleQ14 := silkLTPScaleQ14
+	if isVoiced {
 		xxLTP := make([]float32, subfrCount*ltpMatrixSize)
 		xXLTP := make([]float32, subfrCount*ltpOrder)
 		findLTPFLP(xxLTP, xXLTP, res, ltpMemLength, pitchL, subfrLength, subfrCount)
 		ltpCoefQ14, filterIndices, periodicityIndex, predGainDB = e.quantLTPGains(xxLTP, xXLTP, subfrLength, subfrCount)
 		copy(nsqPitchL, pitchL)
-		ltpScaleIndex, ltpScaleQ14 = ltpScaleControl(predGainDB, snrDBQ7, e.packetLossPerc, 1, false)
+		ltpScaleIndex, ltpScaleQ14 = ltpScaleForFrame(
+			predGainDB, snrDBQ7, e.packetLossPerc, frameCount, independent,
+		)
 
 		ltpCoefFloat := make([]float32, ltpOrder*subfrCount)
 		for i := range ltpCoefFloat {
@@ -173,11 +232,12 @@ func (e *Encoder) encodeSILKFrame(input []int16, bandwidth Bandwidth) {
 
 	// Process gains: reduce for high LTP gain, soft-limit, quantize; Lambda + offset.
 	gainsQ16Int, gainIndices, lambdaQ10, quantOffsetType := e.processGains(
-		sr, resNrg, signalType, predGainDB, snrDBQ7, saQ8, tiltQ15, subfrLength, subfrCount, false)
+		sr, resNrg, signalType, predGainDB, snrDBQ7, saQ8, tiltQ15, subfrLength, subfrCount, !independent)
 
 	// Noise-shaping quantization.
 	pulses := make([]int8, frameLength)
 	seed := uint32(e.frameCounter & 3) //nolint:gosec // G115
+
 	e.nsq.quantize(input, pulses, &nsqParams{
 		predCoefQ12:      predCoef2,
 		ltpCoefQ14:       ltpCoefQ14,
@@ -202,33 +262,32 @@ func (e *Encoder) encodeSILKFrame(input []int16, bandwidth Bandwidth) {
 	})
 	e.frameCounter++
 
-	// Emit every field in the order the decoder reads it.
-	vadBit := uint32(0)
-	if active {
-		vadBit = 1
-	}
-	e.rangeEncoder.EncodeSymbolLogP(1, vadBit)
-	e.rangeEncoder.EncodeSymbolLogP(1, 0) // LBRR flag (no redundancy)
-
+	// Emit every field in the order the decoder reads it. The per-frame VAD
+	// and LBRR header bits were already emitted by encodeSILKPacketHeader;
+	// the decoder then reads the frame type with the VAD table selected by
+	// the header flag, so the unit's active flag stays consistent with the
+	// table the decoder will use.
 	e.emitFrameType(signalType, quantOffsetType, active)
-	e.emitGainIndices(gainIndices, signalType, false)
-	e.emitNLSFIndices(index1, indices2, bandwidth, voiced)
+	e.emitGainIndices(gainIndices, signalType, !independent)
+	e.emitNLSFIndices(index1, indices2, bandwidth, isVoiced)
 	e.rangeEncoder.EncodeSymbolWithICDF(icdfNormalizedLSFInterpolationIndex, uint32(nlsfInterpQ2)) //nolint:gosec // G115
-	if voiced {
+	if isVoiced {
 		primaryLag := int(lagIndex) + peMinLagMS*fsKHz
 		contour := uint32(contourIndex)    //nolint:gosec // G115: contour index is non-negative.
 		period := uint32(periodicityIndex) //nolint:gosec // G115: periodicity index is non-negative.
 		scale := uint32(ltpScaleIndex)     //nolint:gosec // G115: scale index is 0..2.
-		e.encodePitchLags(primaryLag, contour, bandwidth, nanoseconds20Ms, true)
+		e.encodePitchLags(primaryLag, contour, bandwidth, nanoseconds20Ms, independent)
 		e.encodeLTPFilter(period, toUint32(filterIndices))
-		e.encodeLTPScaling(scale)
+		if independent {
+			e.encodeLTPScaling(scale)
+		}
 	}
 	e.rangeEncoder.EncodeSymbolWithICDF(icdfLinearCongruentialGeneratorSeed, seed)
 	e.encodePulses(signalType, quantOffsetType, pulses, frameLength)
 
 	// Carry state to the next frame.
 	copy(e.xBuf, analysis[frameLength:frameLength+ltpMemLength])
-	e.isPreviousFrameVoiced = voiced
+	e.isPreviousFrameVoiced = isVoiced
 	e.firstFrameAfterReset = false
 }
 

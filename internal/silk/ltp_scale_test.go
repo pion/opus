@@ -33,3 +33,26 @@ func TestLTPScaleControl(t *testing.T) {
 	assert.Equal(t, 2, idx, "extreme loss/gain: index")
 	assert.Equal(t, int32(8192), q14, "extreme loss/gain: scale")
 }
+
+func TestLTPScaleForFrame(t *testing.T) {
+	const (
+		predictionGainDB = float32(1)
+		snrDBQ7          = int32(22 * 128)
+		packetLoss       = 1
+		frameCount       = 3
+	)
+
+	oneFrameIndex, _ := ltpScaleControl(predictionGainDB, snrDBQ7, packetLoss, 1, false)
+	packetIndex, packetScale := ltpScaleControl(predictionGainDB, snrDBQ7, packetLoss, frameCount, false)
+	assert.NotEqual(t, oneFrameIndex, packetIndex, "test vector must be sensitive to frames per packet")
+
+	index, scale := ltpScaleForFrame(
+		predictionGainDB, snrDBQ7, packetLoss, frameCount, true,
+	)
+	assert.Equal(t, packetIndex, index)
+	assert.Equal(t, packetScale, scale)
+
+	index, scale = ltpScaleForFrame(100, 30*128, 100, frameCount, false)
+	assert.Zero(t, index, "conditional frames do not code an LTP scale index")
+	assert.Equal(t, silkLTPScaleQ14, scale)
+}
