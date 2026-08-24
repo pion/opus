@@ -96,6 +96,95 @@ func TestEncoderFinalRangeMatchesDecoder(t *testing.T) {
 	assert.Equal(t, encoder.FinalRange(), decoder.FinalRange())
 }
 
+func TestEncoderPatchInitialBits(t *testing.T) {
+	const (
+		bitCount = uint(3)
+		patched  = uint32(0b101)
+	)
+
+	tests := []struct {
+		name    string
+		prepare func(*Encoder, *[]uint32)
+		check   func(*testing.T, *Encoder)
+	}{
+		{
+			name:    "range state",
+			prepare: func(*Encoder, *[]uint32) {},
+			check: func(t *testing.T, encoder *Encoder) {
+				t.Helper()
+				assert.Empty(t, encoder.buf)
+				assert.Negative(t, encoder.rem)
+			},
+		},
+		{
+			name: "pending byte",
+			prepare: func(encoder *Encoder, tail *[]uint32) {
+				for i := 0; encoder.rem < 0 && i < 64; i++ {
+					symbol := uint32(i % 3)
+					encoder.EncodeUniform(3, symbol)
+					*tail = append(*tail, symbol)
+				}
+			},
+			check: func(t *testing.T, encoder *Encoder) {
+				t.Helper()
+				assert.Empty(t, encoder.buf)
+				assert.GreaterOrEqual(t, encoder.rem, 0)
+			},
+		},
+		{
+			name: "finalized byte",
+			prepare: func(encoder *Encoder, tail *[]uint32) {
+				for i := 0; len(encoder.buf) == 0 && i < 128; i++ {
+					symbol := uint32(i % 3)
+					encoder.EncodeUniform(3, symbol)
+					*tail = append(*tail, symbol)
+				}
+			},
+			check: func(t *testing.T, encoder *Encoder) {
+				t.Helper()
+				assert.NotEmpty(t, encoder.buf)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			encoder := &Encoder{}
+			encoder.Init()
+			for range bitCount {
+				encoder.EncodeCumulative(1, 2, 2)
+			}
+
+			var tail []uint32
+			test.prepare(encoder, &tail)
+			test.check(t, encoder)
+			assert.True(t, encoder.PatchInitialBits(patched, bitCount))
+
+			decoder := &Decoder{}
+			decoder.Init(encoder.Done())
+			for i := range bitCount {
+				want := patched >> (bitCount - 1 - i) & 1
+				assert.Equal(t, want, decoder.DecodeSymbolLogP(1), "bit %d", i)
+			}
+			for i, want := range tail {
+				got, ok := decoder.DecodeUniform(3)
+				assert.True(t, ok, "tail symbol %d", i)
+				assert.Equal(t, want, got, "tail symbol %d", i)
+			}
+		})
+	}
+
+	t.Run("unrepresentable range state", func(t *testing.T) {
+		encoder := &Encoder{}
+		encoder.Init()
+		for range symBits {
+			encoder.EncodeCumulative(1, 2, 2)
+		}
+
+		assert.False(t, encoder.PatchInitialBits(0, symBits))
+	})
+}
+
 func TestEncoderTell(t *testing.T) {
 	t.Run("reports one bit after initialization", func(t *testing.T) {
 		encoder := &Encoder{}
