@@ -202,6 +202,7 @@ func (e *Encoder) EncodeCumulative(low, high, total uint32) {
 	if total == 0 || low >= high || high > total {
 		return
 	}
+
 	scale := e.rangeSize / total
 	if low != 0 {
 		e.low += e.rangeSize - scale*(total-low)
@@ -302,10 +303,16 @@ func (e *Encoder) EncodeRawBits(n uint, value uint32) {
 // be in the first finalized byte, in the pending carry byte, or still in low.
 // Patching must not change the current range or the bit count.
 //
+// It reports whether the request is representable in the current state;
+// patching zero bits is a successful no-op.
+//
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.3
-func (e *Encoder) PatchInitialBits(value uint32, bitCount uint) {
-	if bitCount == 0 || bitCount > symBits {
-		return
+func (e *Encoder) PatchInitialBits(value uint32, bitCount uint) bool {
+	if bitCount == 0 {
+		return true
+	}
+	if bitCount > symBits {
+		return false
 	}
 
 	value &= bitMask(bitCount)
@@ -320,7 +327,11 @@ func (e *Encoder) PatchInitialBits(value uint32, bitCount uint) {
 	case e.rangeSize <= codeTop>>bitCount:
 		stateMask := mask << codeShift
 		e.low = (e.low &^ stateMask) | value<<(codeShift+shift)
+	default:
+		return false
 	}
+
+	return true
 }
 
 // Tell returns a conservative upper bound, in whole bits, of the number of

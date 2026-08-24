@@ -158,7 +158,7 @@ func TestEncoderPatchInitialBits(t *testing.T) {
 			var tail []uint32
 			test.prepare(encoder, &tail)
 			test.check(t, encoder)
-			encoder.PatchInitialBits(patched, bitCount)
+			assert.True(t, encoder.PatchInitialBits(patched, bitCount))
 
 			decoder := &Decoder{}
 			decoder.Init(encoder.Done())
@@ -173,6 +173,16 @@ func TestEncoderPatchInitialBits(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("unrepresentable range state", func(t *testing.T) {
+		encoder := &Encoder{}
+		encoder.Init()
+		for range symBits {
+			encoder.EncodeCumulative(1, 2, 2)
+		}
+
+		assert.False(t, encoder.PatchInitialBits(0, symBits))
+	})
 }
 
 func TestEncoderTell(t *testing.T) {

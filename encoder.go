@@ -461,8 +461,20 @@ func (e *Encoder) EncodeFloat32(in []float32, out []byte) (int, error) {
 // internal/silk); the delayed-decision NSQ, stereo, hybrid mode, and the
 // bitrate-control loop are not yet implemented.
 func (e *Encoder) EncodeSILK(pcm []int16, bandwidth Bandwidth, out []byte) (int, error) {
+	var config int
+	switch bandwidth {
+	case BandwidthNarrowband:
+		config = silkOnlyNarrowband20msConfig
+	case BandwidthMediumband:
+		config = silkOnlyMediumband20msConfig
+	case BandwidthWideband:
+		config = silkOnlyWideband20msConfig
+	default:
+		return 0, fmt.Errorf("%w: %d", errInvalidBandwidth, bandwidth)
+	}
+
 	unitSamples := bandwidth.SampleRate() / 50 // 20 ms
-	if unitSamples == 0 || len(pcm)%unitSamples != 0 {
+	if len(pcm)%unitSamples != 0 {
 		return 0, fmt.Errorf("%w: got %d samples, want a multiple of %d", errInvalidFrameSize, len(pcm), unitSamples)
 	}
 	frameCount := len(pcm) / unitSamples
@@ -476,17 +488,7 @@ func (e *Encoder) EncodeSILK(pcm []int16, bandwidth Bandwidth, out []byte) (int,
 	// The SILK-only TOC config numbers in RFC 6716 Table 2 are consecutive
 	// per duration within each bandwidth (e.g. Wideband: 9, 10, 11 for
 	// 20/40/60 ms), so the duration offset is frameCount-1, not (frameCount-1)*2.
-	var config int
-	switch bandwidth {
-	case BandwidthNarrowband:
-		config = silkOnlyNarrowband20msConfig + (frameCount - 1) //nolint:gosec // G115: frameCount is 1..3.
-	case BandwidthMediumband:
-		config = silkOnlyMediumband20msConfig + (frameCount - 1) //nolint:gosec // G115: frameCount is 1..3.
-	case BandwidthWideband:
-		config = silkOnlyWideband20msConfig + (frameCount - 1) //nolint:gosec // G115: frameCount is 1..3.
-	default:
-		return 0, fmt.Errorf("%w: %d", errInvalidBandwidth, bandwidth)
-	}
+	config += frameCount - 1
 
 	filtered := applySILKDCBlock(pcm, bandwidth.SampleRate(), &e.silkDCBlockMem)
 	// The SILK encoder keeps its prediction state (NLSF interpolation, pitch
