@@ -1,5 +1,5 @@
-github.com/at-wat/ebml-go v0.19.0 h1:Uyou5O4QbIdxUOCA6zmu2Zdq/g/T4dMONpPSqIgEgBQ=
-github.com/at-wat/ebml-go v0.19.0/go.mod h1:wu3fQj+DWo6SOOl9c4yDi+gFs9Oa96Z2B5qxo1OxFYY=
+github.com/at-wat/ebml-go v0.19.1 h1:Ve0yB6OTjnIS1vfRaxT5d7guHZ1aXG4kXytM+18wWEg=
+github.com/at-wat/ebml-go v0.19.1/go.mod h1:wu3fQj+DWo6SOOl9c4yDi+gFs9Oa96Z2B5qxo1OxFYY=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/pion/opus v0.1.0 h1:GgK/a3DNDrffKjUFsK39rZKqfv7bQ2S2eqRKt0BnqAE=

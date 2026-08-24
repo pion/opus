@@ -21,28 +21,29 @@ type (
 	// only) correspond to the various choices of frame size, in the same
 	// order.  For example, configuration 0 has a 10 ms frame size and
 	// configuration 3 has a 60 ms frame size.
-	// +-----------------------+-----------+-----------+-------------------+
-	// | Configuration         | Mode      | Bandwidth | Frame Sizes       |
-	// | Number(s)             |           |           |                   |
-	// +-----------------------+-----------+-----------+-------------------+
-	// | 0...3                 | SILK-only | NB        | 10, 20, 40, 60 ms |
-	// |                       |           |           |                   |
-	// | 4...7                 | SILK-only | MB        | 10, 20, 40, 60 ms |
-	// |                       |           |           |                   |
-	// | 8...11                | SILK-only | WB        | 10, 20, 40, 60 ms |
-	// |                       |           |           |                   |
-	// | 12...13               | Hybrid    | SWB       | 10, 20 ms         |
-	// |                       |           |           |                   |
-	// | 14...15               | Hybrid    | FB        | 10, 20 ms         |
-	// |                       |           |           |                   |
-	// | 16...19               | CELT-only | NB        | 2.5, 5, 10, 20 ms |
-	// |                       |           |           |                   |
-	// | 20...23               | CELT-only | WB        | 2.5, 5, 10, 20 ms |
-	// |                       |           |           |                   |
-	// | 24...27               | CELT-only | SWB       | 2.5, 5, 10, 20 ms |
-	// |                       |           |           |                   |
-	// | 28...31               | CELT-only | FB        | 2.5, 5, 10, 20 ms |
-	// +-----------------------+-----------+-----------+-------------------+
+	//
+	//  +-----------------------+-----------+-----------+-------------------+
+	//  | Configuration         | Mode      | Bandwidth | Frame Sizes       |
+	//  | Number(s)             |           |           |                   |
+	//  +-----------------------+-----------+-----------+-------------------+
+	//  | 0...3                 | SILK-only | NB        | 10, 20, 40, 60 ms |
+	//  |                       |           |           |                   |
+	//  | 4...7                 | SILK-only | MB        | 10, 20, 40, 60 ms |
+	//  |                       |           |           |                   |
+	//  | 8...11                | SILK-only | WB        | 10, 20, 40, 60 ms |
+	//  |                       |           |           |                   |
+	//  | 12...13               | Hybrid    | SWB       | 10, 20 ms         |
+	//  |                       |           |           |                   |
+	//  | 14...15               | Hybrid    | FB        | 10, 20 ms         |
+	//  |                       |           |           |                   |
+	//  | 16...19               | CELT-only | NB        | 2.5, 5, 10, 20 ms |
+	//  |                       |           |           |                   |
+	//  | 20...23               | CELT-only | WB        | 2.5, 5, 10, 20 ms |
+	//  |                       |           |           |                   |
+	//  | 24...27               | CELT-only | SWB       | 2.5, 5, 10, 20 ms |
+	//  |                       |           |           |                   |
+	//  | 28...31               | CELT-only | FB        | 2.5, 5, 10, 20 ms |
+	//  +-----------------------+-----------+-----------+-------------------+
 	//
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-3.1
 	Configuration byte
@@ -82,19 +83,20 @@ type (
 	// flexibility to adapt to varying content and network conditions
 	// without renegotiating the current session.  The codec allows input
 	// and output of various audio bandwidths, defined as follows:
-	// +----------------------+-----------------+-------------------------+
-	// | Abbreviation         | Audio Bandwidth | Sample Rate (Effective) |
-	// +----------------------+-----------------+-------------------------+
-	// | NB (narrowband)      |           4 kHz |                   8 kHz |
-	// |                      |                 |                         |
-	// | MB (medium-band)     |           6 kHz |                  12 kHz |
-	// |                      |                 |                         |
-	// | WB (wideband)        |           8 kHz |                  16 kHz |
-	// |                      |                 |                         |
-	// | SWB (super-wideband) |          12 kHz |                  24 kHz |
-	// |                      |                 |                         |
-	// | FB (fullband)        |      20 kHz (*) |                  48 kHz |
-	// +----------------------+-----------------+-------------------------+
+	//
+	//  +----------------------+-----------------+-------------------------+
+	//  | Abbreviation         | Audio Bandwidth | Sample Rate (Effective) |
+	//  +----------------------+-----------------+-------------------------+
+	//  | NB (narrowband)      |           4 kHz |                   8 kHz |
+	//  |                      |                 |                         |
+	//  | MB (medium-band)     |           6 kHz |                  12 kHz |
+	//  |                      |                 |                         |
+	//  | WB (wideband)        |           8 kHz |                  16 kHz |
+	//  |                      |                 |                         |
+	//  | SWB (super-wideband) |          12 kHz |                  24 kHz |
+	//  |                      |                 |                         |
+	//  | FB (fullband)        |      20 kHz (*) |                  48 kHz |
+	//  +----------------------+-----------------+-------------------------+
 	//
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-2
 	Bandwidth byte

@@ -4,6 +4,7 @@
 package celt
 
 import (
+	"fmt"
 	"math"
 	"testing"
 
@@ -363,4 +364,69 @@ func TestEncoderResetClearsPrefilterState(t *testing.T) {
 	assert.Zero(t, encoder.analysis.prefilter.period)
 	assert.Zero(t, encoder.analysis.prefilter.gain)
 	assert.Zero(t, encoder.analysis.prefilter.tapset)
+}
+
+func TestCeltPitchXcorrMatchesScalarReference(t *testing.T) {
+	seed := uint32(987654321)
+	rng := func() float32 {
+		seed = seed*1664525 + 1013904223
+
+		return float32(int32(seed>>8)%2000)/2000 - 1
+	}
+
+	cases := []struct {
+		length, maxPitch int
+	}{
+		{0, 0},
+		{1, 1},
+		{3, 3},
+		{240, 244},
+		{240, 250},
+		{8, 16},
+		{31, 23},
+		{100, 100},
+	}
+	for _, tc := range cases {
+		t.Run(fmt.Sprintf("len=%d/pitch=%d", tc.length, tc.maxPitch), func(t *testing.T) {
+			input := make([]float32, tc.length)
+			window := make([]float32, tc.length+tc.maxPitch)
+			for i := range input {
+				input[i] = rng()
+			}
+			for i := range window {
+				window[i] = rng()
+			}
+
+			got := make([]float32, tc.maxPitch)
+			celtPitchXcorr(input, window, got, tc.length, tc.maxPitch)
+
+			want := make([]float32, tc.maxPitch)
+			for i := range tc.maxPitch {
+				var sum float64
+				for j := range tc.length {
+					sum += float64(input[j]) * float64(window[i+j])
+				}
+				want[i] = float32(sum)
+			}
+
+			assert.Equal(t, want, got, "bit-identical vs scalar reference")
+		})
+	}
+}
+
+func BenchmarkCeltPitchXcorr(b *testing.B) {
+	const length, maxPitch = 240, 244
+	x := make([]float32, length)
+	y := make([]float32, length+maxPitch)
+	xcorr := make([]float32, maxPitch)
+	for i := range y {
+		y[i] = float32(i%17) / 17
+	}
+	for i := range x {
+		x[i] = float32(i%13) / 13
+	}
+	b.ResetTimer()
+	for range b.N {
+		celtPitchXcorr(x, y, xcorr, length, maxPitch)
+	}
 }
