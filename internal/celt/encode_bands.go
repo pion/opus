@@ -83,7 +83,7 @@ func normaliseBandsForEncoding(
 	for band := info.startBand; band < info.endBand; band++ {
 		start := scale * int(bandEdges[band])
 		end := scale * int(bandEdges[band+1])
-		amp := float32(math.Exp2(float64(logBandAmp[band]+energyMeans[band])))
+		amp := float32(math.Exp2(float64(logBandAmp[band] + energyMeans[band])))
 		if amp <= 1e-15 {
 			continue
 		}

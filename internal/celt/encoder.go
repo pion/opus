@@ -827,7 +827,7 @@ func (e *Encoder) newBandState(
 	for ch := range info.channelCount {
 		for band := info.startBand; band < info.endBand; band++ {
 			state.bandEnergy[ch][band] = float32(math.Exp2(
-				float64(logBandAmp[ch][band]+energyMeans[band])))
+				float64(logBandAmp[ch][band] + energyMeans[band])))
 		}
 	}
 
