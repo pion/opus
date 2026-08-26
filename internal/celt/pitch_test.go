@@ -458,3 +458,39 @@ func TestMeasureEnergyMatchesBranchingReference(t *testing.T) {
 		})
 	}
 }
+
+func TestDualInnerProdLagMatchesScalarReference(t *testing.T) {
+	samples := make([]float32, 24)
+	for i := range samples {
+		samples[i] = float32(i%7-3) / 3
+	}
+
+	cases := []struct {
+		name                     string
+		base, length, lagA, lagB int
+	}{
+		{name: "near samples", base: 5, length: 8, lagA: 1, lagB: 3},
+		{name: "distant samples", base: 10, length: 10, lagA: 2, lagB: 7},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var wantA, wantB float64
+			for i := range tc.length {
+				value := float64(samples[tc.base+i])
+				wantA += value * float64(samples[tc.base+i-tc.lagA])
+				wantB += value * float64(samples[tc.base+i-tc.lagB])
+			}
+
+			gotA, gotB := dualInnerProdLag(
+				samples,
+				tc.base,
+				tc.length,
+				tc.lagA,
+				tc.lagB,
+			)
+			assert.Equal(t, float32(wantA), gotA)
+			assert.Equal(t, float32(wantB), gotB)
+		})
+	}
+}

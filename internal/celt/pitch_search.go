@@ -268,11 +268,15 @@ func innerProdLag(x []float32, base, n, lag int) float32 {
 }
 
 func dualInnerProdLag(x []float32, base, n, lagA, lagB int) (a, b float32) {
+	current := x[base : base+n]
+	lagASamples := x[base-lagA : base-lagA+n]
+	lagBSamples := x[base-lagB : base-lagB+n]
+
 	var sa, sb float64
-	for j := range n {
-		v := float64(x[base+j])
-		sa += v * float64(x[base+j-lagA])
-		sb += v * float64(x[base+j-lagB])
+	for i, sample := range current {
+		value := float64(sample)
+		sa += value * float64(lagASamples[i])
+		sb += value * float64(lagBSamples[i])
 	}
 
 	return float32(sa), float32(sb)
