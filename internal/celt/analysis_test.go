@@ -624,3 +624,15 @@ func uniformSpreadWeight() [maxBands]int {
 
 	return w
 }
+
+func TestBandSpreadMetricThresholds(t *testing.T) {
+	samples := []float32{0, 0.05, 0.1, 0.2}
+
+	score, hf := bandSpreadMetric(samples, maxBands-1)
+	assert.Equal(t, 3, score)
+	assert.Equal(t, 56, hf)
+
+	score, hf = bandSpreadMetric(samples, maxBands-4)
+	assert.Equal(t, 3, score)
+	assert.Zero(t, hf)
+}
