@@ -4,6 +4,8 @@
 //nolint:gosec // G602: slice indices are bounded by combFilterMinPeriod/MaxPeriod and len(pcm).
 package celt
 
+import "math"
+
 // removeDoubling checks whether the detected pitch period T0 is actually
 // an octave of the true fundamental. For each sub-multiple k in {2..15},
 // it evaluates T1 = (2*T0 + offset) / (2*k) and switches if the normalized
@@ -147,11 +149,7 @@ func measureEnergy(buf []float32, start, n int) float64 {
 	var sum float64
 	end := min(start+n, len(buf))
 	for i := start; i < end; i++ {
-		value := buf[i]
-		if value < 0 {
-			value = -value
-		}
-		sum += float64(value)
+		sum += math.Abs(float64(buf[i]))
 	}
 
 	return sum

@@ -430,3 +430,31 @@ func BenchmarkCeltPitchXcorr(b *testing.B) {
 		celtPitchXcorr(x, y, xcorr, length, maxPitch)
 	}
 }
+
+func TestMeasureEnergyMatchesBranchingReference(t *testing.T) {
+	samples := []float32{-3.5, -1, -0.25, 0, 0.125, 1, 4.5}
+	cases := []struct {
+		name          string
+		start, length int
+	}{
+		{name: "full", start: 0, length: len(samples)},
+		{name: "range", start: 2, length: 3},
+		{name: "clamps end", start: 4, length: 100},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var want float64
+			end := min(tc.start+tc.length, len(samples))
+			for i := tc.start; i < end; i++ {
+				value := samples[i]
+				if value < 0 {
+					value = -value
+				}
+				want += float64(value)
+			}
+
+			assert.Equal(t, want, measureEnergy(samples, tc.start, tc.length))
+		})
+	}
+}
