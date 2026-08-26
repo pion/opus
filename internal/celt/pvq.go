@@ -155,13 +155,20 @@ func expRotation(x []float32, length int, direction int, stride int, pulses int,
 // pvqSearch finds the nearest PVQ lattice point to x with k pulses and writes
 // it into yScratch[:n]. I clear y before the greedy loop because the scratch
 // slice is reused across frames and stale values from a wider band would
-// corrupt the pulse counts. All three scratch slices must have cap >= n.
-func pvqSearch(x []float32, n, k int, yScratch []int, absXScratch, signScratch []float32) []int {
+// corrupt the pulse counts. All scratch slices must have cap >= n.
+func pvqSearch(
+	x []float32,
+	n, k int,
+	yScratch []int,
+	yFloatScratch, absXScratch, signScratch []float32,
+) []int {
 	y := yScratch[:n:n]
+	yf := yFloatScratch[:n:n]
 	absX := absXScratch[:n:n]
 	sign := signScratch[:n:n]
 	clear(y)
 	for i := range n {
+		yf[i] = 1
 		if x[i] >= 0 {
 			absX[i] = x[i]
 			sign[i] = 1
@@ -177,16 +184,17 @@ func pvqSearch(x []float32, n, k int, yScratch []int, absXScratch, signScratch [
 		bestIdx := 0
 		for i := range n {
 			newDot := dot + absX[i]
-			newEner := ener + float32(2*y[i]+1)
+			newEner := ener + yf[i]
 			score := (newDot * newDot) / newEner
 			if score > bestScore {
 				bestScore = score
 				bestIdx = i
 			}
 		}
-		y[bestIdx]++
 		dot += absX[bestIdx]
-		ener += float32(2*y[bestIdx] - 1)
+		ener += yf[bestIdx]
+		yf[bestIdx] += 2
+		y[bestIdx]++
 	}
 
 	for i := range n {
@@ -208,12 +216,12 @@ func algQuant(
 	rangeEncoder *rangecoding.Encoder,
 	gain float32,
 	yScratch []int,
-	absXScratch, signScratch []float32,
+	yFloatScratch, absXScratch, signScratch []float32,
 	cwrsScratch []uint32,
 ) uint {
 	expRotation(x, n, 1, blocks, k, spread)
 
-	iy := pvqSearch(x, n, k, yScratch, absXScratch, signScratch)
+	iy := pvqSearch(x, n, k, yScratch, yFloatScratch, absXScratch, signScratch)
 	encodePulses(iy, n, k, rangeEncoder, cwrsScratch)
 
 	energy := 0

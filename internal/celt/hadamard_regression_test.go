@@ -91,7 +91,7 @@ func quantBandMonoCorrelation(t *testing.T, band, n, bandBits, blocks, tfChange 
 		quantBandMono(
 			band, shape, n, bandBits, spreadNormal, blocks, tfChange,
 			lowband, &remainingBits, maxLM, nil, 0, 1, make([]float32, n), (1<<blocks)-1, &state,
-			make([]int, n+3), make([]float32, n+3), make([]float32, n+3),
+			make([]int, n+3), make([]float32, n+3), make([]float32, n+3), make([]float32, n+3),
 			make([]uint32, cwrsMaxPulseCount+2),
 		)
 

@@ -56,9 +56,10 @@ func TestPVQSearchBasic(t *testing.T) {
 	// Target with energy in first few dimensions
 	x := []float32{3, 2, 1, 0}
 	yScratch := make([]int, len(x))
+	yFloat := make([]float32, len(x))
 	absX := make([]float32, len(x))
 	sign := make([]float32, len(x))
-	iy := pvqSearch(x, len(x), 3, yScratch, absX, sign)
+	iy := pvqSearch(x, len(x), 3, yScratch, yFloat, absX, sign)
 
 	pulses := 0
 	for _, v := range iy {
@@ -78,9 +79,10 @@ func TestPVQSearchBasic(t *testing.T) {
 func TestPVQSearchZeroPulses(t *testing.T) {
 	x := []float32{1, 2, 3}
 	yScratch := make([]int, len(x))
+	yFloat := make([]float32, len(x))
 	absX := make([]float32, len(x))
 	sign := make([]float32, len(x))
-	iy := pvqSearch(x, len(x), 0, yScratch, absX, sign)
+	iy := pvqSearch(x, len(x), 0, yScratch, yFloat, absX, sign)
 	for _, v := range iy {
 		assert.Equal(t, 0, v)
 	}
@@ -101,10 +103,11 @@ func TestAlgQuantRoundTrip(t *testing.T) {
 	xEnc := make([]float32, n)
 	copy(xEnc, original)
 	yScratch := make([]int, n)
+	yFloat := make([]float32, n)
 	absX := make([]float32, n)
 	sign := make([]float32, n)
 	cwrsScratch := make([]uint32, cwrsMaxPulseCount+2)
-	mask := algQuant(xEnc, n, pulseCount, spread, 1, &enc, gain, yScratch, absX, sign, cwrsScratch)
+	mask := algQuant(xEnc, n, pulseCount, spread, 1, &enc, gain, yScratch, yFloat, absX, sign, cwrsScratch)
 	assert.NotZero(t, mask)
 
 	bits := enc.Done()
@@ -135,6 +138,41 @@ func TestStereoMerge(t *testing.T) {
 	assert.InDelta(t, 1, vectorEnergy(y), 0.000001)
 }
 
+func TestPVQSearchMatchesScalarReference(t *testing.T) {
+	wide := make([]float32, 48)
+	for i := range wide {
+		wide[i] = float32(i%9-4) / 4
+	}
+
+	cases := []struct {
+		name       string
+		input      []float32
+		pulseCount int
+	}{
+		{name: "zero pulses", input: []float32{1, -2, 3}, pulseCount: 0},
+		{name: "mixed signs", input: []float32{3, -2, 1, -0.5}, pulseCount: 5},
+		{name: "repeated pulse", input: []float32{8, 1, -0.5, 0.25}, pulseCount: 12},
+		{name: "wide band", input: wide, pulseCount: 48},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			n := len(tc.input)
+			got := pvqSearch(
+				tc.input,
+				n,
+				tc.pulseCount,
+				make([]int, n),
+				make([]float32, n),
+				make([]float32, n),
+				make([]float32, n),
+			)
+			want := pvqSearchScalarReference(tc.input, n, tc.pulseCount)
+			assert.Equal(t, want, got)
+		})
+	}
+}
+
 func vectorEnergy(x []float32) float64 {
 	energy := float64(0)
 	for _, value := range x {
@@ -142,4 +180,44 @@ func vectorEnergy(x []float32) float64 {
 	}
 
 	return energy
+}
+
+func pvqSearchScalarReference(input []float32, n, pulseCount int) []int {
+	vector := make([]int, n)
+	absX := make([]float32, n)
+	sign := make([]float32, n)
+	for i := range n {
+		if input[i] >= 0 {
+			absX[i] = input[i]
+			sign[i] = 1
+		} else {
+			absX[i] = -input[i]
+			sign[i] = -1
+		}
+	}
+
+	var dot, ener float32
+	for range pulseCount {
+		bestScore := float32(-1)
+		bestIdx := 0
+		for i := range n {
+			newDot := dot + absX[i]
+			newEner := ener + float32(2*vector[i]+1)
+			score := (newDot * newDot) / newEner
+			if score > bestScore {
+				bestScore = score
+				bestIdx = i
+			}
+		}
+		vector[bestIdx]++
+		dot += absX[bestIdx]
+		ener += float32(2*vector[bestIdx] - 1)
+	}
+	for i := range n {
+		if sign[i] < 0 {
+			vector[i] = -vector[i]
+		}
+	}
+
+	return vector
 }

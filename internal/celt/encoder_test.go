@@ -219,6 +219,7 @@ func TestQuantBandStereoN1(t *testing.T) {
 		[2][]int{make([]int, 1), make([]int, 1)},
 		[2][]float32{make([]float32, 1), make([]float32, 1)},
 		[2][]float32{make([]float32, 1), make([]float32, 1)},
+		[2][]float32{make([]float32, 1), make([]float32, 1)},
 		make([]uint32, cwrsMaxPulseCount+2),
 		0,
 	)
@@ -239,6 +240,7 @@ func TestQuantBandStereoN2(t *testing.T) {
 		spreadNormal, 1, maxBands, 0, nil,
 		&remaining, 3, 1.0, make([]float32, 4), 1, &state,
 		[2][]int{make([]int, 2), make([]int, 2)},
+		[2][]float32{make([]float32, 2), make([]float32, 2)},
 		[2][]float32{make([]float32, 2), make([]float32, 2)},
 		[2][]float32{make([]float32, 2), make([]float32, 2)},
 		make([]uint32, cwrsMaxPulseCount+2),
