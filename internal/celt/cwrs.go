@@ -4,7 +4,11 @@
 //nolint:varnamelen // CWRS notation follows RFC/reference vector names.
 package celt
 
-import "github.com/pion/opus/internal/rangecoding"
+import (
+	"math/bits"
+
+	"github.com/pion/opus/internal/rangecoding"
+)
 
 // The static CELT pulse cache tops out at getPulses(40) == 128.
 const cwrsMaxPulseCount = 128
@@ -325,9 +329,8 @@ func cwrsEncode(y []int, n, k int, scratch []uint32) uint32 {
 
 	for j := range n {
 		magnitude := y[j]
-		if magnitude < 0 {
-			magnitude = -magnitude
-		}
+		sign := magnitude >> (bits.UintSize - 1)
+		magnitude = (magnitude ^ sign) - sign
 		if magnitude > k {
 			return 0
 		}
