@@ -15,6 +15,17 @@ const (
 	duration20Ms = "20ms"
 	duration40Ms = "40ms"
 	duration60Ms = "60ms"
+
+	// Guards for TestEncodeSILKTracksTargetRate. The ratio and the SNR floor
+	// are deliberately loose: they are there to catch a quantizer that has
+	// stopped predicting, not to pin encoder quality, which
+	// TestEncoderQuality tracks against a baseline.
+	silkRateTestBitrate     = 24000
+	silkRateTestComplexity  = 5
+	silkRateTestSeconds     = 1
+	silkRateTestMaxOverrun  = 2.0  // emitted rate, as a multiple of the target
+	silkRateTestPeakCeiling = 0.99 // decoded peak, 1.0 being full scale
+	silkRateTestMinSNRDB    = 6.0
 )
 
 // TestEncodeSILKRoundTrip encodes a SILK frame with the public encoder and
@@ -335,4 +346,100 @@ func TestSILKDCBlockMultiFrameState(t *testing.T) {
 	splitOut := append(append([]int16(nil), out1...), out2...)
 
 	assert.Equal(t, fullOut, splitOut)
+}
+
+// silkRateMeasurement is what runSILKRateProbe reports for one bandwidth.
+type silkRateMeasurement struct {
+	bitrate float64 // emitted bits per second
+	peak    float64 // largest absolute decoded sample, 1.0 being full scale
+	snrDB   float64 // round-trip signal to noise ratio
+}
+
+// silkSpeechLike generates count samples of voiced-speech-like audio at the
+// given rate: a 180 Hz five-harmonic series under a slow amplitude envelope,
+// so the LPC analysis, the pitch predictor and the gain control all have
+// something to work with.
+func silkSpeechLike(count, sampleRate int) []int16 {
+	pcm := make([]int16, count)
+	for i := range pcm {
+		sec := float64(i) / float64(sampleRate)
+		var sum float64
+		for harmonic := 1; harmonic <= 5; harmonic++ {
+			sum += math.Sin(2*math.Pi*180*float64(harmonic)*sec) / float64(harmonic)
+		}
+		env := 0.6 + 0.4*math.Sin(2*math.Pi*3*sec)
+		pcm[i] = int16(env * 9000 * sum / harmonicsPeakAmplitude)
+	}
+
+	return pcm
+}
+
+// runSILKRateProbe encodes silkRateTestSeconds of speech-like audio one 20 ms
+// coding unit at a time and decodes it with a single stateful decoder,
+// reporting the emitted bitrate, the decoded peak, and the round-trip SNR.
+func runSILKRateProbe(t *testing.T, bandwidth Bandwidth, bitrate int) silkRateMeasurement {
+	t.Helper()
+
+	encoder, err := NewEncoder(WithBitrate(bitrate), WithComplexity(silkRateTestComplexity))
+	require.NoErrorf(t, err, "bandwidth %d", bandwidth)
+
+	decoder, err := NewDecoderWithOutput(bandwidth.SampleRate(), 1)
+	require.NoErrorf(t, err, "bandwidth %d", bandwidth)
+
+	sampleRate := bandwidth.SampleRate()
+	unit := sampleRate / 50 // one 20 ms coding unit
+	pcm := silkSpeechLike(sampleRate*silkRateTestSeconds, sampleRate)
+
+	packet := make([]byte, maxOpusFrameSize)
+	decoded := make([]float32, 0, len(pcm))
+	payloadBytes := 0
+	for offset := 0; offset+unit <= len(pcm); offset += unit {
+		size, encErr := encoder.EncodeSILK(pcm[offset:offset+unit], bandwidth, packet)
+		require.NoErrorf(t, encErr, "bandwidth %d, sample %d", bandwidth, offset)
+		payloadBytes += size
+
+		out := make([]float32, unit)
+		got, decErr := decoder.DecodeToFloat32(packet[:size], out)
+		require.NoErrorf(t, decErr, "bandwidth %d, sample %d", bandwidth, offset)
+		decoded = append(decoded, out[:got]...)
+	}
+
+	original := make([]float32, len(pcm))
+	for i, sample := range pcm {
+		original[i] = float32(sample) / 32768
+	}
+
+	peak := 0.0
+	for _, sample := range decoded {
+		peak = max(peak, math.Abs(float64(sample)))
+	}
+
+	return silkRateMeasurement{
+		bitrate: float64(payloadBytes*8) / silkRateTestSeconds,
+		peak:    peak,
+		snrDB:   computeSNR(original, decoded),
+	}
+}
+
+// TestEncodeSILKTracksTargetRate encodes speech-like audio at a 24 kb/s target
+// for every SILK bandwidth and checks three things the round-trip tests above
+// cannot: the emitted rate stays near the requested target, the decode stays
+// below full scale, and the round-trip error stays well under the signal.
+// A noise shaping quantizer predicting through a broken filter still produces
+// non-silent output, so it passes every energy check while spending several
+// times the target and clipping the decode.
+func TestEncodeSILKTracksTargetRate(t *testing.T) {
+	for _, bandwidth := range []Bandwidth{BandwidthNarrowband, BandwidthMediumband, BandwidthWideband} {
+		got := runSILKRateProbe(t, bandwidth, silkRateTestBitrate)
+		t.Logf("bandwidth %d: %.2f kb/s for a %d kb/s target, peak %.3f of full scale, SNR %.1f dB",
+			bandwidth, got.bitrate/1000, silkRateTestBitrate/1000, got.peak, got.snrDB)
+
+		assert.LessOrEqualf(t, got.bitrate, silkRateTestMaxOverrun*silkRateTestBitrate,
+			"bandwidth %d: emitted %.2f kb/s for a %d kb/s target",
+			bandwidth, got.bitrate/1000, silkRateTestBitrate/1000)
+		assert.Lessf(t, got.peak, silkRateTestPeakCeiling,
+			"bandwidth %d: decoded peak %.3f is at full scale", bandwidth, got.peak)
+		assert.GreaterOrEqualf(t, got.snrDB, silkRateTestMinSNRDB,
+			"bandwidth %d: round-trip SNR %.1f dB", bandwidth, got.snrDB)
+	}
 }

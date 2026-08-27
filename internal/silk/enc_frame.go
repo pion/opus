@@ -215,9 +215,14 @@ func (e *Encoder) encodeSILKFrame(
 		interpolateNLSF(nlsf0, e.prevNLSFq, quantNLSF, nlsfInterpQ2, order)
 		predCoefQ12Half0 = nlsfToLPCQ12(nlsf0, bandwidth) // interpolated first half
 	}
-	predCoef2 := make([]int16, 2*maxLPCOrder)
+	// Pack the two halves at the prediction order, the stride the noise
+	// shaping quantizer indexes them with. This matches libopus, where the
+	// state is PredCoef_Q12[2][MAX_LPC_ORDER] (structs.h) with MAX_LPC_ORDER
+	// 16 (define.h); maxLPCOrder (24) is the analysis order and is not the
+	// layout of this array.
+	predCoef2 := make([]int16, 2*maxPredictLPCOrder)
 	copy(predCoef2, predCoefQ12Half0)
-	copy(predCoef2[maxLPCOrder:], predCoefQ12)
+	copy(predCoef2[maxPredictLPCOrder:], predCoefQ12)
 	copy(e.prevNLSFq, quantNLSF)
 
 	// Residual energy per subframe from the quantized LPC (gain soft-limit).
