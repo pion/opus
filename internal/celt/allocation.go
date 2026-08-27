@@ -1034,7 +1034,7 @@ func dynallocAnalysis(
 	}
 	for band := startBand; band < endBand; band++ {
 		importance[band] = int(math.Floor(0.5 +
-			13*math.Pow(2, float64(minFloat32(combined[band], 4)))))
+			13*math.Exp2(float64(minFloat32(combined[band], 4)))))
 	}
 
 	// CBR and constrained VBR halve the dynalloc contribution on a steady
