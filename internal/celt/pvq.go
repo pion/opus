@@ -234,6 +234,7 @@ func algQuant(
 	return extractCollapseMask(iy, n, blocks)
 }
 
+//nolint:cyclop // The unrolled forward and backward hot paths stay adjacent.
 func expRotation1(x []float32, length int, stride int, c float32, s float32) {
 	if length <= stride {
 		return
@@ -241,11 +242,28 @@ func expRotation1(x []float32, length int, stride int, c float32, s float32) {
 
 	lower := x[:length-stride]
 	upper := x[stride:length]
-	for i := range lower {
-		x1 := lower[i]
-		x2 := upper[i]
-		upper[i] = c*x2 + s*x1
-		lower[i] = c*x1 - s*x2
+	if stride >= 4 {
+		n := len(lower)
+		i := 0
+		for ; i+4 <= n; i += 4 {
+			l0, l1, l2, l3 := lower[i], lower[i+1], lower[i+2], lower[i+3]
+			u0, u1, u2, u3 := upper[i], upper[i+1], upper[i+2], upper[i+3]
+			upper[i], upper[i+1], upper[i+2], upper[i+3] = c*u0+s*l0, c*u1+s*l1, c*u2+s*l2, c*u3+s*l3
+			lower[i], lower[i+1], lower[i+2], lower[i+3] = c*l0-s*u0, c*l1-s*u1, c*l2-s*u2, c*l3-s*u3
+		}
+		for ; i < n; i++ {
+			x1 := lower[i]
+			x2 := upper[i]
+			upper[i] = c*x2 + s*x1
+			lower[i] = c*x1 - s*x2
+		}
+	} else {
+		for i := range lower {
+			x1 := lower[i]
+			x2 := upper[i]
+			upper[i] = c*x2 + s*x1
+			lower[i] = c*x1 - s*x2
+		}
 	}
 
 	backwardLength := len(lower) - stride
@@ -256,10 +274,32 @@ func expRotation1(x []float32, length int, stride int, c float32, s float32) {
 	backwardUpper := upper[:backwardLength]
 	// slices.Backward adds iterator overhead in this hot loop.
 	//nolint:modernize
-	for i := backwardLength - 1; i >= 0; i-- {
-		x1 := backwardLower[i]
-		x2 := backwardUpper[i]
-		backwardUpper[i] = c*x2 + s*x1
-		backwardLower[i] = c*x1 - s*x2
+	if stride >= 4 {
+		i := backwardLength - 1
+		for ; i >= 3; i -= 4 {
+			l0, l1, l2, l3 := backwardLower[i], backwardLower[i-1], backwardLower[i-2], backwardLower[i-3]
+			u0, u1, u2, u3 := backwardUpper[i], backwardUpper[i-1], backwardUpper[i-2], backwardUpper[i-3]
+			backwardUpper[i] = c*u0 + s*l0
+			backwardUpper[i-1] = c*u1 + s*l1
+			backwardUpper[i-2] = c*u2 + s*l2
+			backwardUpper[i-3] = c*u3 + s*l3
+			backwardLower[i] = c*l0 - s*u0
+			backwardLower[i-1] = c*l1 - s*u1
+			backwardLower[i-2] = c*l2 - s*u2
+			backwardLower[i-3] = c*l3 - s*u3
+		}
+		for ; i >= 0; i-- {
+			x1 := backwardLower[i]
+			x2 := backwardUpper[i]
+			backwardUpper[i] = c*x2 + s*x1
+			backwardLower[i] = c*x1 - s*x2
+		}
+	} else {
+		for i := backwardLength - 1; i >= 0; i-- {
+			x1 := backwardLower[i]
+			x2 := backwardUpper[i]
+			backwardUpper[i] = c*x2 + s*x1
+			backwardLower[i] = c*x1 - s*x2
+		}
 	}
 }

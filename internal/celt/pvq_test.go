@@ -40,6 +40,52 @@ func TestPVQRotation(t *testing.T) {
 	assert.InDelta(t, 30, vectorEnergy(x), 0.0001)
 }
 
+func TestExpRotation1BlockOfFour(t *testing.T) {
+	for _, test := range []struct {
+		length int
+		stride int
+	}{
+		{length: 8, stride: 4},
+		{length: 13, stride: 4},
+		{length: 18, stride: 5},
+		{length: 20, stride: 7},
+	} {
+		got := make([]float32, test.length)
+		for i := range got {
+			got[i] = float32(i) - 10
+		}
+		want := make([]float32, len(got))
+		copy(want, got)
+
+		expRotation1Scalar(want, test.length, test.stride, 0.9, 0.4)
+		expRotation1(got, test.length, test.stride, 0.9, 0.4)
+
+		assert.Equal(t, want, got)
+	}
+}
+
+func expRotation1Scalar(x []float32, length int, stride int, cosine float32, sine float32) {
+	lower := x[:length-stride]
+	upper := x[stride:length]
+	for i := range lower {
+		x1 := lower[i]
+		x2 := upper[i]
+		upper[i] = cosine*x2 + sine*x1
+		lower[i] = cosine*x1 - sine*x2
+	}
+
+	backwardLength := len(lower) - stride
+	if backwardLength <= 0 {
+		return
+	}
+	for i := backwardLength - 1; i >= 0; i-- {
+		x1 := lower[i]
+		x2 := upper[i]
+		upper[i] = cosine*x2 + sine*x1
+		lower[i] = cosine*x1 - sine*x2
+	}
+}
+
 func TestAlgUnquant(t *testing.T) {
 	decoder := rangeDecoderWithCDFSymbol(0, cwrsUrow(4, 2)[2]+cwrsUrow(4, 2)[3])
 	state := bandDecodeState{}
