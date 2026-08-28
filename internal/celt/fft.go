@@ -157,7 +157,18 @@ func fftRadix2(in []complex32, plan *fftPlan) {
 		}
 	}
 
-	for stage, length := 0, 2; length <= n; stage, length = stage+1, length<<1 {
+	// Stage 0 always multiplies by the identity twiddle {1, 0}.
+	for i := 0; i < n; i += 2 {
+		pair := in[i : i+2]
+		ar := pair[0].r
+		ai := pair[0].i
+		br := pair[1].r
+		bi := pair[1].i
+		pair[0] = complex32{r: ar + br, i: ai + bi}
+		pair[1] = complex32{r: ar - br, i: ai - bi}
+	}
+
+	for stage, length := 1, 4; length <= n; stage, length = stage+1, length<<1 {
 		halfLen := length >> 1
 		twiddles := plan.stageTwiddles[stage]
 		for i := 0; i < n; i += length {
