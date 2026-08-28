@@ -8,6 +8,8 @@ import (
 	"math/rand"
 	"strconv"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestFFTRoundTrip(t *testing.T) {
@@ -79,6 +81,20 @@ func TestFFTPureRadix2Sizes(t *testing.T) {
 			assertComplexSliceClose(t, expected, actual, tolerance)
 		})
 	}
+}
+
+func TestFFTRadix2StageZero(t *testing.T) {
+	input := []complex32{
+		{r: 1.5, i: -2},
+		{r: -3.5, i: 4},
+	}
+
+	fftRadix2(input, fftPlanForLength(2))
+
+	assert.Equal(t, []complex32{
+		{r: -2, i: 2},
+		{r: 5, i: -6},
+	}, input)
 }
 
 func TestInverseFFTMatchesNaive(t *testing.T) {
