@@ -149,3 +149,31 @@ func TestCWRSRowFromScratchLargeK(t *testing.T) {
 	row := cwrsRowFromScratch(scratch, cwrsMaxPulseCount+1)
 	assert.Len(t, row, cwrsMaxPulseCount+3)
 }
+
+func TestCwrsEncodeRowMatchesEncode(t *testing.T) {
+	for _, tc := range []struct {
+		n, k int
+		y    []int
+	}{
+		{2, 3, []int{2, 1}},
+		{2, 3, []int{-2, 1}},
+		{3, 5, []int{3, 1, 1}},
+		{4, 8, []int{4, 2, 1, 1}},
+		{6, 12, []int{6, 3, 2, 1, 0, 0}},
+	} {
+		scratchA := make([]uint32, tc.k+2)
+		scratchB := make([]uint32, tc.k+2)
+
+		indexA := cwrsEncode(tc.y, tc.n, tc.k, scratchA)
+
+		u := cwrsRowFromScratch(scratchB, tc.k)
+		cwrsUrowInto(u, tc.n)
+		indexB := cwrsEncodeRow(tc.y, tc.n, tc.k, u)
+
+		assert.Equal(t, indexA, indexB)
+	}
+
+	assert.Zero(t, cwrsEncodeRow(nil, 0, 1, nil))
+	assert.Zero(t, cwrsEncodeRow(nil, 1, 0, nil))
+	assert.Zero(t, cwrsEncodeRow([]int{2, 0}, 2, 1, cwrsUrow(2, 1)))
+}

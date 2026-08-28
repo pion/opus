@@ -307,12 +307,10 @@ func encodePulses(y []int, n, k int, rangeEncoder *rangecoding.Encoder, scratch 
 	if k <= 0 {
 		return
 	}
-	index := cwrsEncode(y, n, k, scratch)
-	// cwrsEncode walks scratch backward via cwrsPreviousRow, so I have to
-	// reinitialise it before reading u[k]+u[k+1] for the uniform-coder total.
 	u := cwrsRowFromScratch(scratch, k)
 	cwrsUrowInto(u, n)
 	total := u[k] + u[k+1]
+	index := cwrsEncodeRow(y, n, k, u)
 	rangeEncoder.EncodeUniform(total, index)
 }
 
@@ -325,10 +323,22 @@ func cwrsEncode(y []int, n, k int, scratch []uint32) uint32 {
 
 	u := cwrsRowFromScratch(scratch, k)
 	cwrsUrowInto(u, n)
-	var index uint32
 
+	return cwrsEncodeRow(y, n, k, u)
+}
+
+// cwrsEncodeRow maps a PVQ pulse vector to its unique CWRS codeword index
+// using a pre-computed recurrence row. It is identical to cwrsEncode but
+// avoids the O(n*k) cwrsUrowInto call when the caller already has the row.
+func cwrsEncodeRow(y []int, n, k int, u []uint32) uint32 {
+	if n <= 0 || k <= 0 {
+		return 0
+	}
+
+	var index uint32
 	for j := range n {
-		magnitude := y[j]
+		pulse := y[j : j+1]
+		magnitude := pulse[0]
 		sign := magnitude >> (bits.UintSize - 1)
 		magnitude = (magnitude ^ sign) - sign
 		if magnitude > k {
@@ -337,7 +347,7 @@ func cwrsEncode(y []int, n, k int, scratch []uint32) uint32 {
 
 		remaining := k - magnitude
 		index += u[remaining]
-		if y[j] < 0 {
+		if pulse[0] < 0 {
 			index += u[k+1]
 		}
 
