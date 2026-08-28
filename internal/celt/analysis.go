@@ -637,9 +637,11 @@ func spreadingDecision(
 func applyDCBlock(pcm []float32, sampleRate int, mem *float32) {
 	coef := 6.3 * dcBlockCutoffHz / float32(sampleRate)
 	coef2 := float32(1) - coef
+	m := *mem
 	for i := range pcm {
 		x := pcm[i]
-		pcm[i] = x - *mem
-		*mem = coef*x + coef2**mem
+		pcm[i] = x - m
+		m = coef*x + coef2*m
 	}
+	*mem = m
 }
