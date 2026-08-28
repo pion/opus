@@ -151,6 +151,21 @@ func TestFFTZero(t *testing.T) {
 	}
 }
 
+func TestDFT15MatchesDirectDFT(t *testing.T) {
+	plan := newFFTPlan(15)
+
+	for seed := int64(1); seed <= 100; seed++ {
+		input := randomComplex(15, seed)
+		want := make([]complex32, 15)
+		got := make([]complex32, 15)
+
+		directDFTScalar(input, want, plan.directTwiddles, 15)
+		directDFT(input, got, plan.directTwiddles, 15)
+
+		assertComplexSliceClose(t, want, got, 5e-6)
+	}
+}
+
 func naiveComplexDFT(in []complex32) []complex32 {
 	n := len(in)
 	out := make([]complex32, n)
@@ -205,4 +220,17 @@ func cloneComplex(in []complex32) []complex32 {
 	copy(out, in)
 
 	return out
+}
+
+func directDFTScalar(in, out, twiddles []complex32, n int) {
+	for k := range n {
+		var sumR, sumI float32
+		rowOffset := k * n
+		for m, value := range in {
+			twiddle := twiddles[rowOffset+m]
+			sumR += value.r*twiddle.r - value.i*twiddle.i
+			sumI += value.r*twiddle.i + value.i*twiddle.r
+		}
+		out[k] = complex32{r: sumR, i: sumI}
+	}
 }

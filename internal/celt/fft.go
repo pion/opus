@@ -197,9 +197,15 @@ func bitReverse(x int, n int) int {
 	return rev
 }
 
-// directDFT computes the O(N²) DFT directly for the small odd factor of the
-// mixed-radix decomposition. The twiddle matrix is precomputed once per size.
+// directDFT computes the odd factor of the mixed-radix FFT. CELT uses an odd
+// factor of 15, which can be decomposed into smaller radix-5 and radix-3 DFTs.
 func directDFT(in, out, twiddles []complex32, n int) {
+	if n == 15 {
+		dft15(in, out, twiddles)
+
+		return
+	}
+
 	for k := range n {
 		var sumR, sumI float32
 		rowOffset := k * n
@@ -209,5 +215,104 @@ func directDFT(in, out, twiddles []complex32, n int) {
 			sumI += val.r*twiddle.i + val.i*twiddle.r
 		}
 		out[k] = complex32{r: sumR, i: sumI}
+	}
+}
+
+// dft15 computes a 15-point DFT as three radix-5 transforms followed by five
+// radix-3 transforms. The intermediate twiddles preserve the usual DFT order.
+func dft15(in, out, twiddles []complex32) {
+	var work [15]complex32
+
+	for row := range 3 {
+		dft5(
+			in[row],
+			in[row+3],
+			in[row+6],
+			in[row+9],
+			in[row+12],
+			work[row*5:row*5+5],
+		)
+	}
+
+	for column := range 5 {
+		a := work[column]
+		b := mulComplex(work[5+column], twiddles[column*15+1])
+		c := mulComplex(work[10+column], twiddles[column*15+2])
+
+		var values [3]complex32
+		dft3(a, b, c, values[:])
+
+		out[column] = values[0]
+		out[5+column] = values[1]
+		out[10+column] = values[2]
+	}
+}
+
+func dft3(a, b, c complex32, out []complex32) {
+	sum := addComplex(b, c)
+	diff := subComplex(b, c)
+	base := subComplex(a, scaleComplex(sum, 0.5))
+	imaginary := complex32{r: diff.i * 0.8660254, i: -diff.r * 0.8660254}
+
+	out[0] = addComplex(a, sum)
+	out[1] = addComplex(base, imaginary)
+	out[2] = subComplex(base, imaginary)
+}
+
+//nolint:varnamelen // Butterfly notation follows the five DFT inputs.
+func dft5(a, b, c, d, e complex32, out []complex32) {
+	sum14 := addComplex(b, e)
+	sum23 := addComplex(c, d)
+	diff14 := subComplex(b, e)
+	diff23 := subComplex(c, d)
+
+	out[0] = addComplex(a, addComplex(sum14, sum23))
+
+	base1 := addComplex(
+		a,
+		addComplex(
+			scaleComplex(sum14, 0.30901699),
+			scaleComplex(sum23, -0.80901699),
+		),
+	)
+
+	imaginary1 := addComplex(
+		scaleComplex(complex32{r: diff14.i, i: -diff14.r}, 0.95105654),
+		scaleComplex(complex32{r: diff23.i, i: -diff23.r}, 0.58778524),
+	)
+	out[1] = addComplex(base1, imaginary1)
+	out[4] = subComplex(base1, imaginary1)
+
+	base2 := addComplex(
+		a,
+		addComplex(
+			scaleComplex(sum14, -0.80901699),
+			scaleComplex(sum23, 0.30901699),
+		),
+	)
+	imaginary2 := subComplex(
+		scaleComplex(complex32{r: diff14.i, i: -diff14.r}, 0.58778524),
+		scaleComplex(complex32{r: diff23.i, i: -diff23.r}, 0.95105654),
+	)
+	out[2] = addComplex(base2, imaginary2)
+	out[3] = subComplex(base2, imaginary2)
+}
+
+func addComplex(a, b complex32) complex32 {
+	return complex32{r: a.r + b.r, i: a.i + b.i}
+}
+
+func subComplex(a, b complex32) complex32 {
+	return complex32{r: a.r - b.r, i: a.i - b.i}
+}
+
+func scaleComplex(value complex32, scale float32) complex32 {
+	return complex32{r: value.r * scale, i: value.i * scale}
+}
+
+func mulComplex(a, b complex32) complex32 {
+	return complex32{
+		r: a.r*b.r - a.i*b.i,
+		i: a.r*b.i + a.i*b.r,
 	}
 }
