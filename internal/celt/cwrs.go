@@ -337,7 +337,8 @@ func cwrsEncodeRow(y []int, n, k int, u []uint32) uint32 {
 
 	var index uint32
 	for j := range n {
-		magnitude := y[j]
+		pulse := y[j : j+1]
+		magnitude := pulse[0]
 		sign := magnitude >> (bits.UintSize - 1)
 		magnitude = (magnitude ^ sign) - sign
 		if magnitude > k {
@@ -346,7 +347,7 @@ func cwrsEncodeRow(y []int, n, k int, u []uint32) uint32 {
 
 		remaining := k - magnitude
 		index += u[remaining]
-		if y[j] < 0 {
+		if pulse[0] < 0 {
 			index += u[k+1]
 		}
 

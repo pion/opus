@@ -156,6 +156,7 @@ func TestCwrsEncodeRowMatchesEncode(t *testing.T) {
 		y    []int
 	}{
 		{2, 3, []int{2, 1}},
+		{2, 3, []int{-2, 1}},
 		{3, 5, []int{3, 1, 1}},
 		{4, 8, []int{4, 2, 1, 1}},
 		{6, 12, []int{6, 3, 2, 1, 0, 0}},
@@ -171,4 +172,8 @@ func TestCwrsEncodeRowMatchesEncode(t *testing.T) {
 
 		assert.Equal(t, indexA, indexB)
 	}
+
+	assert.Zero(t, cwrsEncodeRow(nil, 0, 1, nil))
+	assert.Zero(t, cwrsEncodeRow(nil, 1, 0, nil))
+	assert.Zero(t, cwrsEncodeRow([]int{2, 0}, 2, 1, cwrsUrow(2, 1)))
 }
