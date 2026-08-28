@@ -361,6 +361,33 @@ func TestDCBlockMultiFrameState(t *testing.T) {
 	}
 }
 
+func TestDCBlockMatchesScalarReference(t *testing.T) {
+	pcm := make([]float32, 960)
+	for i := range pcm {
+		pcm[i] = float32(math.Sin(2 * math.Pi * 440 * float64(i) / float64(sampleRate)))
+	}
+	want := append([]float32(nil), pcm...)
+	got := append([]float32(nil), pcm...)
+	memWant := float32(0.1)
+	memGot := memWant
+
+	applyDCBlockScalar(want, sampleRate, &memWant)
+	applyDCBlock(got, sampleRate, &memGot)
+
+	assert.Equal(t, want, got)
+	assert.Equal(t, memWant, memGot)
+}
+
+func applyDCBlockScalar(pcm []float32, sampleRate int, mem *float32) {
+	coef := 6.3 * dcBlockCutoffHz / float32(sampleRate)
+	coef2 := float32(1) - coef
+	for i := range pcm {
+		x := pcm[i]
+		pcm[i] = x - *mem
+		*mem = coef*x + coef2**mem
+	}
+}
+
 func TestAnalyzeFrameAppliesDCBlock(t *testing.T) {
 	// A sine with DC offset must produce a different bitstream than the clean sine.
 	enc1 := NewEncoder()
