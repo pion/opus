@@ -269,6 +269,63 @@ func TestDecodePLCFrameSizeValidation(t *testing.T) {
 	assert.ErrorIs(t, err, errInvalidPLCFrameSize)
 }
 
+func TestDecodePLCConcealsOneAtomicLongSILKPacket(t *testing.T) {
+	const sampleRate = 16000
+
+	for _, duration := range []int{2, 3} {
+		t.Run(fmt.Sprintf("%dms", duration*20), func(t *testing.T) {
+			encoder, err := NewEncoder()
+			require.NoError(t, err)
+
+			input := make([]int16, duration*sampleRate/50)
+			for i := range input {
+				input[i] = int16((i%80)*400 - 16000)
+			}
+			packet := make([]byte, maxOpusFrameSize)
+			written, err := encoder.EncodeSILK(input, BandwidthWideband, packet)
+			require.NoError(t, err)
+
+			decoder, err := NewDecoderWithOutput(sampleRate, 1)
+			require.NoError(t, err)
+			decoded := make([]int16, len(input))
+			samples, err := decoder.DecodeToInt16(packet[:written], decoded)
+			require.NoError(t, err)
+			require.Equal(t, len(input), samples)
+
+			plc := make([]int16, len(input))
+			require.NoError(t, decoder.DecodePLC(plc))
+			assert.NotEqual(t, make([]int16, len(plc)), plc)
+
+			decoded = make([]int16, len(input))
+			samples, err = decoder.DecodeToInt16(packet[:written], decoded)
+			require.NoError(t, err)
+			require.Equal(t, len(input), samples)
+		})
+	}
+}
+
+func TestDecodePLCRejectsLongOutputForNonSILKModes(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		mode       configurationMode
+		redundancy bool
+	}{
+		{name: "Hybrid", mode: configurationModeHybrid},
+		{name: "CELT", mode: configurationModeCELTOnly},
+		{name: "SILK redundancy", mode: configurationModeSilkOnly, redundancy: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			decoder, err := NewDecoderWithOutput(16000, 1)
+			require.NoError(t, err)
+			decoder.previousMode = test.mode
+			decoder.previousRedundancy = test.redundancy
+
+			err = decoder.DecodePLC(make([]int16, 960))
+			assert.ErrorIs(t, err, errInvalidPLCFrameSize)
+		})
+	}
+}
+
 func TestDecodePLCStateValidation(t *testing.T) {
 	var uninitialized Decoder
 	assert.ErrorIs(t, uninitialized.DecodePLC(nil), errInvalidSampleRate)

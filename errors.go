@@ -30,7 +30,7 @@ var (
 
 	errInvalidFrameByteBudget = errors.New("invalid frame byte budget")
 
-	errInvalidPLCFrameSize = errors.New("PLC output must contain exactly 20 ms of interleaved samples")
+	errInvalidPLCFrameSize = errors.New("PLC output has an unsupported duration for the previous packet mode")
 
 	errInvalidApplication = errors.New("invalid application")
 
