@@ -68,6 +68,26 @@ func NewEncoder() Encoder {
 	return e
 }
 
+// Clone returns an independent copy of the persistent encoder state. The
+// range coder is deliberately reset instead of copied: Encode initializes it
+// at the start of every packet, and sharing its backing buffers would let a
+// speculative encode modify the original encoder.
+func (e *Encoder) Clone() Encoder {
+	clone := *e
+	clone.rangeEncoder = rangecoding.Encoder{}
+	clone.prevNLSFq = append([]int16(nil), e.prevNLSFq...)
+	clone.xBuf = append([]float32(nil), e.xBuf...)
+	if e.nsq != nil {
+		nsqClone := *e.nsq
+		nsqClone.xq = append([]int16(nil), e.nsq.xq...)
+		nsqClone.sLTPShpQ14 = append([]int32(nil), e.nsq.sLTPShpQ14...)
+		nsqClone.sLPCQ14 = append([]int32(nil), e.nsq.sLPCQ14...)
+		clone.nsq = &nsqClone
+	}
+
+	return clone
+}
+
 // SetUseInterpolatedNLSFs enables or disables the NLSF interpolation search
 // in findLPCNLSF, mirroring libopus's complexity-tier setting
 // (silk_setup_complexity: enabled for encoder complexity >= 4).
