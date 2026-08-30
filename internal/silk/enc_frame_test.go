@@ -165,37 +165,70 @@ func TestEncodeSILKFrameVoicedHighOffset(t *testing.T) {
 	require.Equal(t, dataRange, dec.rangeDecoder.FinalRange(), "second frame range coder desync")
 }
 
-// TestEncodeSILKFrameLowVADVoicedHeader verifies that a periodic frame which
-// pitch analysis promotes to voiced remains decodable even when the earlier
-// VAD threshold classified it as inactive. The packet header and frame-type
-// entropy table must use the same final activity decision.
-func TestEncodeSILKFrameLowVADVoicedHeader(t *testing.T) {
+// TestEncodeSILKFrameFirstAfterResetSkipsPitch is pinned to libopus 1.6.1
+// (22244de5a79bd1d6d623c32e72bf1954b56235be): an active first frame is
+// unvoiced, with pitch/LTP state cleared, until first_frame_after_reset is
+// consumed. Encoder and decoder must still finish at the same range state.
+func TestEncodeSILKFrameFirstAfterResetSkipsPitch(t *testing.T) {
 	bandwidth := BandwidthWideband
 	fsKHz := silkInternalRate(bandwidth)
 	frameLength := 20 * fsKHz
-	first := make([]int16, frameLength)
-	for i := range first {
-		first[i] = int16(6000 * math.Sin(2*math.Pi*float64(i)/50))
+	input := make([]int16, frameLength)
+	for i := range input {
+		input[i] = int16(6000 * math.Sin(2*math.Pi*float64(i)/50))
 	}
-	quiet := make([]int16, frameLength)
-	for i := range quiet {
-		quiet[i] = int16(1024 * math.Sin(2*math.Pi*float64(i)/32))
+
+	enc := NewEncoder()
+	packet := enc.Encode(input, bandwidth, 24000)
+	require.NotEmpty(t, packet)
+	assert.True(t, enc.vadFlags[0], "libopus vector is VAD-active")
+	assert.False(t, enc.isPreviousFrameVoiced, "first frame after reset must not run pitch search")
+	assert.Zero(t, enc.ltpCorr, "skipped pitch search must clear LTP correlation")
+	assert.Zero(t, enc.nsq.lagPrev, "inactive pitch path must give NSQ zero lags")
+
+	dec := NewDecoder()
+	out := make([]float32, frameLength)
+	require.NoError(t, dec.Decode(packet, out, false, nanoseconds20Ms, bandwidth))
+	assert.Equal(t, enc.rangeEncoder.FinalRange(), dec.rangeDecoder.FinalRange())
+}
+
+// TestEncodeSILKFrameInactivePeriodicInputClearsPitch follows the libopus
+// 1.6.1 low-activity lead: after a loud periodic frame and a long quiet
+// periodic tail, VAD eventually becomes inactive. Pitch must not promote an
+// inactive frame back to voiced; lag/LTP state is cleared and the range stream
+// remains synchronized for every packet.
+func TestEncodeSILKFrameInactivePeriodicInputClearsPitch(t *testing.T) {
+	bandwidth := BandwidthWideband
+	fsKHz := silkInternalRate(bandwidth)
+	frameLength := 20 * fsKHz
+	makePeriodic := func(amplitude, period float64) []int16 {
+		input := make([]int16, frameLength)
+		for i := range input {
+			input[i] = int16(amplitude * math.Sin(2*math.Pi*float64(i)/period))
+		}
+
+		return input
 	}
 
 	enc := NewEncoder()
 	dec := NewDecoder()
 	out := make([]float32, frameLength)
-	firstPacket := enc.Encode(first, bandwidth, 0)
-	firstRange := enc.rangeEncoder.FinalRange()
-	require.NoError(t, dec.Decode(firstPacket, out, false, nanoseconds20Ms, bandwidth))
-	require.Equal(t, firstRange, dec.rangeDecoder.FinalRange(), "first frame range coder desync")
-	for repeat := 1; repeat <= 10; repeat++ {
-		packet := enc.Encode(quiet, bandwidth, 0)
-		require.NoErrorf(t, dec.Decode(packet, out, false, nanoseconds20Ms, bandwidth),
-			"low-VAD voiced packet failed to decode at repeat %d", repeat)
-		require.Equalf(t, enc.rangeEncoder.FinalRange(), dec.rangeDecoder.FinalRange(),
-			"low-VAD voiced packet desynchronized the range coder at repeat %d", repeat)
+
+	inputs := [][]int16{makePeriodic(6000, 50)}
+	for range 20 {
+		inputs = append(inputs, makePeriodic(16, 32))
 	}
+	for frame, input := range inputs {
+		packet := enc.Encode(input, bandwidth, 24000)
+		require.NotEmptyf(t, packet, "frame %d", frame)
+		require.NoErrorf(t, dec.Decode(packet, out, false, nanoseconds20Ms, bandwidth), "frame %d", frame)
+		require.Equalf(t, enc.rangeEncoder.FinalRange(), dec.rangeDecoder.FinalRange(), "frame %d", frame)
+	}
+
+	assert.False(t, enc.vadFlags[0], "quiet tail must converge to VAD-inactive")
+	assert.False(t, enc.isPreviousFrameVoiced, "inactive frame must not be promoted by pitch")
+	assert.Zero(t, enc.ltpCorr, "inactive frame must clear LTP correlation")
+	assert.Zero(t, enc.nsq.lagPrev, "inactive frame must clear NSQ pitch lag")
 }
 
 // TestEncode checks the public Encode wrapper: it must Init the range coder,
