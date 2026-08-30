@@ -4,6 +4,7 @@
 package silk
 
 import (
+	"encoding/hex"
 	"math"
 	"testing"
 
@@ -288,6 +289,45 @@ func TestEncodeSILKPacketHeaderReservesInactiveVAD(t *testing.T) {
 		assert.Equalf(t, make([]bool, frameCount), vadFlags, "frame count %d", frameCount)
 		assert.Falsef(t, lbrr, "frame count %d", frameCount)
 		assert.Equalf(t, encRange, dec.rangeDecoder.FinalRange(), "frame count %d", frameCount)
+	}
+}
+
+// TestLibopus161VADPolicyVectors pins the VAD header decisions produced by
+// libopus 1.6.1 at exact source commit 22244de5a79bd1d6d623c32e72bf1954b56235be.
+// Both packets are 20 ms, 16 kHz, mono, restricted SILK:
+// the first is a loud periodic first frame, while the second follows one loud
+// frame and twenty quiet periodic frames (amplitude 16, period 32).
+func TestLibopus161VADPolicyVectors(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		hex    string
+		active bool
+	}{
+		{
+			name: "first frame remains active while pitch is reset-gated",
+			hex: "4881A7B7022A8729FA0637420C88CB4371F6B65F9E802E8FD52CF5FAD21127A8103DC8044DD3CF02C9" +
+				"B24EBD74E782311962A0696744E9332E2BE8EE390D92F050558E46807036514940E156E1AA74A7E5DF83EC349870EC" +
+				"9D87638B19D111841A02973DC0",
+			active: true,
+		},
+		{
+			name:   "quiet periodic tail is inactive",
+			hex:    "4808AFB2CC0E9461B3D062D308E498AC2604A212E71EB821DF6A4CDEAE902D1CC6621841C87E23E8A378",
+			active: false,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			packet, err := hex.DecodeString(test.hex)
+			require.NoError(t, err)
+			require.Equal(t, byte(0x48), packet[0], "20 ms mono wideband SILK TOC")
+
+			dec := NewDecoder()
+			dec.rangeDecoder.Init(packet[1:])
+			vadFlags, lbrr := dec.decodeHeaderBitsInto(nil, 1)
+
+			require.Equal(t, []bool{test.active}, vadFlags)
+			assert.False(t, lbrr)
+		})
 	}
 }
 

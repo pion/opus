@@ -34,7 +34,7 @@ func TestNoiseShapeAnalysisAndProcessGainsVoiced(t *testing.T) {
 
 	enc := NewEncoder()
 	enc.ltpCorr = 0.6
-	voiced, pitchL, _, _, res, predGain := enc.findPitchLags(analysisBuf, fsKHz, nbSubfr, 200, 0)
+	voiced, pitchL, _, _, res, predGain := enc.findPitchLags(analysisBuf, fsKHz, nbSubfr, 200, 0, true)
 	require.True(t, voiced, "periodic signal should be voiced")
 
 	shapeBuf := make([]float32, frameLength+2*laShape)

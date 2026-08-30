@@ -30,7 +30,7 @@ func TestFindPitchLagsVoiced(t *testing.T) {
 	}
 
 	enc := NewEncoder()
-	voiced, pitchL, lagIndex, contourIndex, res, predGain := enc.findPitchLags(buf, fsKHz, nbSubfr, 200, 0)
+	voiced, pitchL, lagIndex, contourIndex, res, predGain := enc.findPitchLags(buf, fsKHz, nbSubfr, 200, 0, true)
 
 	require.True(t, voiced, "periodic signal should be voiced")
 	require.Len(t, res, ltpMemLength+frameLength)
@@ -67,6 +67,6 @@ func TestFindPitchLagsUnvoiced(t *testing.T) {
 
 	enc := NewEncoder()
 	// Not asserting hard (noise can occasionally correlate) — just that it runs.
-	_, _, _, _, res, _ := enc.findPitchLags(buf, fsKHz, 4, 50, 0) //nolint:dogsled // only the residual is under test
+	_, _, _, _, res, _ := enc.findPitchLags(buf, fsKHz, 4, 50, 0, true) //nolint:dogsled // only the residual is under test
 	require.Len(t, res, ltpMemLength+frameLength)
 }

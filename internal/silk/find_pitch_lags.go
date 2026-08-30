@@ -19,7 +19,7 @@ const (
 // whether the frame is voiced, the per-subframe pitch lags, the lag/contour
 // indices, and the whitening residual (reused by the LTP analysis).
 func (e *Encoder) findPitchLags(
-	analysisBuf []float32, fsKHz, nbSubfr, speechActivityQ8 int, inputTiltQ15 int32,
+	analysisBuf []float32, fsKHz, nbSubfr, speechActivityQ8 int, inputTiltQ15 int32, searchPitch bool,
 ) (voiced bool, pitchL []int, lagIndex int16, contourIndex int8, res []float32, predGain float32) {
 	bufLen := len(analysisBuf)
 	laPitch := laPitchMS * fsKHz
@@ -47,6 +47,13 @@ func (e *Encoder) findPitchLags(
 	res = make([]float32, bufLen)
 	lpcAnalysisFilterFLP(res, a, analysisBuf, bufLen, pitchEstLPCOrder)
 
+	pitchL = make([]int, nbSubfr)
+	if !searchPitch {
+		e.ltpCorr = 0
+
+		return false, pitchL, 0, 0, res, predGain
+	}
+
 	// Voicing threshold (search_thres2).
 	prevVoiced := float32(0)
 	if e.isPreviousFrameVoiced {
@@ -58,7 +65,6 @@ func (e *Encoder) findPitchLags(
 		0.15*prevVoiced -
 		0.1*float32(inputTiltQ15)*(1.0/32768.0)
 
-	pitchL = make([]int, nbSubfr)
 	prevLag := 0
 	if e.isPreviousFrameVoiced {
 		prevLag = e.previousLag
