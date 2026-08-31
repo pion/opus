@@ -50,6 +50,7 @@ func (e *Encoder) findPitchLags(
 	pitchL = make([]int, nbSubfr)
 	if !searchPitch {
 		e.ltpCorr = 0
+		e.previousLag = 0
 
 		return false, pitchL, 0, 0, res, predGain
 	}

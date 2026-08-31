@@ -185,6 +185,7 @@ func TestEncodeSILKFrameFirstAfterResetSkipsPitch(t *testing.T) {
 	assert.True(t, enc.vadFlags[0], "libopus vector is VAD-active")
 	assert.False(t, enc.isPreviousFrameVoiced, "first frame after reset must not run pitch search")
 	assert.Zero(t, enc.ltpCorr, "skipped pitch search must clear LTP correlation")
+	assert.Zero(t, enc.previousLag, "skipped pitch search must clear the stored previous lag")
 	assert.Zero(t, enc.nsq.lagPrev, "inactive pitch path must give NSQ zero lags")
 
 	dec := NewDecoder()
@@ -229,7 +230,16 @@ func TestEncodeSILKFrameInactivePeriodicInputClearsPitch(t *testing.T) {
 	assert.False(t, enc.vadFlags[0], "quiet tail must converge to VAD-inactive")
 	assert.False(t, enc.isPreviousFrameVoiced, "inactive frame must not be promoted by pitch")
 	assert.Zero(t, enc.ltpCorr, "inactive frame must clear LTP correlation")
+	assert.Zero(t, enc.previousLag, "inactive frame must clear the stored previous lag")
 	assert.Zero(t, enc.nsq.lagPrev, "inactive frame must clear NSQ pitch lag")
+}
+
+// TestSILKVADThresholdBoundaryIsActive pins silk_encode_do_VAD_FLP's strict
+// inactive comparison: speech activity is inactive only below the threshold,
+// so SILK_FIX_CONST(0.05, 8) == 13 remains active.
+func TestSILKVADThresholdBoundaryIsActive(t *testing.T) {
+	assert.False(t, silkVADActive(silkVADThreshold-1))
+	assert.True(t, silkVADActive(silkVADThreshold))
 }
 
 // TestEncode checks the public Encode wrapper: it must Init the range coder,

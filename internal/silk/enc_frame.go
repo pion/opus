@@ -13,6 +13,10 @@ package silk
 // SILK_FIX_CONST does in libopus 1.6.1.
 const silkVADThreshold = 13
 
+func silkVADActive(speechActivityQ8 int) bool {
+	return speechActivityQ8 >= silkVADThreshold
+}
+
 // silkInternalRate returns the SILK internal sample rate in kHz.
 func silkInternalRate(bandwidth Bandwidth) int {
 	switch bandwidth {
@@ -115,7 +119,7 @@ func (e *Encoder) encodeSILKFrame(
 	// Voice activity initializes signalType before pitch analysis, matching
 	// silk_encode_do_VAD_FLP. Inactive frames never enter the pitch search.
 	saQ8, tiltQ15, quality := e.vad.getSpeechActivityQ8(input, frameLength, fsKHz)
-	active := saQ8 > silkVADThreshold
+	active := silkVADActive(saQ8)
 
 	// Pitch analysis on the whitening residual (with LTP-memory history).
 	if len(e.xBuf) != ltpMemLength {
