@@ -9,10 +9,13 @@ package silk
 // interpolation. The delayed-decision NSQ, stereo, and the rate-control loop
 // are follow-up refinements.
 
-// silkVADThreshold is the current Pion speech_activity_Q8 cutoff. Its value
-// 100 is a legacy encoder heuristic, not libopus's Q8 threshold 13. Pitch
-// analysis may still promote a periodic unit to active below it.
-const silkVADThreshold = 100
+// silkVADThreshold is SPEECH_ACTIVITY_DTX_THRES (0.05) in Q8, rounded as
+// SILK_FIX_CONST does in libopus 1.6.1.
+const silkVADThreshold = 13
+
+func silkVADActive(speechActivityQ8 int) bool {
+	return speechActivityQ8 >= silkVADThreshold
+}
 
 // silkInternalRate returns the SILK internal sample rate in kHz.
 func silkInternalRate(bandwidth Bandwidth) int {
@@ -113,11 +116,10 @@ func (e *Encoder) encodeSILKFrame(
 	frameLength := subfrCount * subfrLength
 	ltpMemLength := 20 * fsKHz
 
-	// Voice activity. Pitch analysis below may promote a periodic frame to
-	// active, so the packet-header flag is recorded only after signal type is
-	// finalized.
+	// Voice activity initializes signalType before pitch analysis, matching
+	// silk_encode_do_VAD_FLP. Inactive frames never enter the pitch search.
 	saQ8, tiltQ15, quality := e.vad.getSpeechActivityQ8(input, frameLength, fsKHz)
-	active := saQ8 > silkVADThreshold
+	active := silkVADActive(saQ8)
 
 	// Pitch analysis on the whitening residual (with LTP-memory history).
 	if len(e.xBuf) != ltpMemLength {
@@ -129,7 +131,9 @@ func (e *Encoder) encodeSILKFrame(
 		analysis[ltpMemLength+i] = float32(input[i])
 	}
 	voiced, pitchL, lagIndex, contourIndex, res, predGain := e.findPitchLags(
-		analysis[:ltpMemLength+frameLength], fsKHz, subfrCount, saQ8, tiltQ15)
+		analysis[:ltpMemLength+frameLength], fsKHz, subfrCount, saQ8, tiltQ15,
+		active && !e.firstFrameAfterReset,
+	)
 	// Keep a few zero samples of headroom after the residual for find_LTP.
 	res = append(res, make([]float32, ltpOrder)...)
 
@@ -137,7 +141,6 @@ func (e *Encoder) encodeSILKFrame(
 	switch {
 	case voiced:
 		signalType = frameSignalTypeVoiced
-		active = true
 	case active:
 		signalType = frameSignalTypeUnvoiced
 	}

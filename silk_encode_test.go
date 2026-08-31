@@ -5,6 +5,7 @@ package opus
 
 import (
 	"bytes"
+	"encoding/hex"
 	"math"
 	"testing"
 
@@ -28,6 +29,28 @@ const (
 	silkRateTestPeakCeiling = 0.99 // decoded peak, 1.0 being full scale
 	silkRateTestMinSNRDB    = 6.0
 )
+
+// TestDecodeLibopus161FirstFrameVector pins the public packet boundary against
+// libopus 1.6.1 at exact source commit
+// 22244de5a79bd1d6d623c32e72bf1954b56235be. The input is one 20 ms, 16 kHz,
+// mono periodic frame encoded in SILK-only wideband mode.
+func TestDecodeLibopus161FirstFrameVector(t *testing.T) {
+	packet, err := hex.DecodeString(
+		"4881A7B7022A8729FA0637420C88CB4371F6B65F9E802E8FD52CF5FAD21127A8103DC8044DD3CF02C9" +
+			"B24EBD74E782311962A0696744E9332E2BE8EE390D92F050558E46807036514940E156E1AA74A7E5DF83EC349870EC" +
+			"9D87638B19D111841A02973DC0",
+	)
+	require.NoError(t, err)
+	require.Equal(t, byte(0x48), packet[0], "20 ms mono wideband SILK TOC")
+
+	dec, err := NewDecoderWithOutput(16000, 1)
+	require.NoError(t, err)
+	out := make([]float32, 320)
+	got, err := dec.DecodeToFloat32(packet, out)
+	require.NoError(t, err)
+	require.Equal(t, 320, got)
+	assert.Equal(t, uint32(0x49cf8000), dec.rangeFinal)
+}
 
 // TestEncodeSILKRoundTrip encodes a SILK frame with the public encoder and
 // decodes the resulting Opus packet with the public decoder, for every
