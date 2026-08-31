@@ -1214,7 +1214,7 @@ func (d *Decoder) decodePLCToFloat32(out []float32) error {
 	if d.previousRedundancy {
 		mode = configurationModeCELTOnly
 	}
-	samplesPerChannel := d.sampleRate / 50
+	samplesPerChannel := len(out) / d.channels
 	var err error
 	switch mode {
 	case configurationModeSilkOnly:
@@ -1240,11 +1240,18 @@ func (d *Decoder) validatePLCOutput(sampleCount int) error {
 		return errInvalidSampleRate
 	case d.channels == 0:
 		return errInvalidChannelCount
-	case sampleCount != d.sampleRate/50*d.channels:
-		return errInvalidPLCFrameSize
-	default:
+	}
+
+	twentyMilliseconds := d.sampleRate / 50 * d.channels
+	if sampleCount == twentyMilliseconds {
 		return nil
 	}
+	if d.previousMode == configurationModeSilkOnly && !d.previousRedundancy &&
+		(sampleCount == 2*twentyMilliseconds || sampleCount == 3*twentyMilliseconds) {
+		return nil
+	}
+
+	return errInvalidPLCFrameSize
 }
 
 func (d *Decoder) decodeCeltPLCFrame(out []float32, samplesPerChannel int, hybrid bool) error {
@@ -1580,7 +1587,9 @@ func (d *Decoder) DecodeToInt16(in []byte, out []int16) (int, error) {
 	return sampleCount, nil
 }
 
-// DecodePLC recovers one missing 20 ms packet into signed 16-bit PCM.
+// DecodePLC recovers one missing packet into signed 16-bit PCM. SILK-only
+// packets may be concealed atomically for 20, 40, or 60 ms according to the
+// output length. CELT and Hybrid concealment currently support 20 ms.
 func (d *Decoder) DecodePLC(out []int16) error {
 	d.floatBuffer = resizeFloat32Buffer(&d.floatBuffer, len(out))
 	if err := d.decodePLCToFloat32(d.floatBuffer); err != nil {
