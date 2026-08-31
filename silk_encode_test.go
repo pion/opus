@@ -4,6 +4,7 @@
 package opus
 
 import (
+	"bytes"
 	"math"
 	"testing"
 
@@ -277,13 +278,74 @@ func TestEncodeSILKInvalidBandwidth(t *testing.T) {
 	}
 }
 
-func TestEncodeSILKOutBufferTooSmall(t *testing.T) {
-	enc, err := NewEncoder()
-	require.NoError(t, err)
+// TestEncodeSILKOutBufferTooSmallDoesNotAdvanceState checks that a rejected
+// packet is transactional: retrying with enough output space must produce the
+// exact packet an encoder that never saw the rejected call would produce.
+// Cover both fresh and established prediction state at every supported SILK
+// packet duration.
+func TestEncodeSILKOutBufferTooSmallDoesNotAdvanceState(t *testing.T) {
+	durations := []struct {
+		name  string
+		units int
+	}{
+		{duration20Ms, 1},
+		{duration40Ms, 2},
+		{duration60Ms, 3},
+	}
 
-	pcm := make([]int16, BandwidthWideband.SampleRate()/50)
-	_, err = enc.EncodeSILK(pcm, BandwidthWideband, make([]byte, 1))
-	require.Error(t, err)
+	makePCM := func(samples, offset int) []int16 {
+		pcm := make([]int16, samples)
+		for i := range pcm {
+			phase := float64(i + offset)
+			pcm[i] = int16(5000*math.Sin(2*math.Pi*phase/48) + 1200*math.Sin(2*math.Pi*phase/11))
+		}
+
+		return pcm
+	}
+
+	unit := BandwidthWideband.SampleRate() / 50
+	for _, duration := range durations {
+		for _, warmed := range []bool{false, true} {
+			state := "fresh"
+			if warmed {
+				state = "warmed"
+			}
+
+			t.Run(duration.name+"/"+state, func(t *testing.T) {
+				retryEncoder, err := NewEncoder(WithComplexity(8))
+				require.NoError(t, err)
+				referenceEncoder, err := NewEncoder(WithComplexity(8))
+				require.NoError(t, err)
+
+				if warmed {
+					warmup := makePCM(unit, 0)
+					for _, encoder := range []*Encoder{retryEncoder, referenceEncoder} {
+						_, err = encoder.EncodeSILK(warmup, BandwidthWideband, make([]byte, maxOpusFrameSize))
+						require.NoError(t, err)
+					}
+				}
+
+				pcm := makePCM(duration.units*unit, 37)
+				shortOut := []byte{0xa5}
+				n, err := retryEncoder.EncodeSILK(pcm, BandwidthWideband, shortOut)
+				assert.Zero(t, n)
+				assert.ErrorIs(t, err, errOutBufferTooSmall)
+				assert.Equal(t, []byte{0xa5}, shortOut, "rejected call must not modify output")
+
+				retryPacket := make([]byte, maxOpusFrameSize)
+				retryN, err := retryEncoder.EncodeSILK(pcm, BandwidthWideband, retryPacket)
+				require.NoError(t, err)
+
+				referencePacket := make([]byte, maxOpusFrameSize)
+				referenceN, err := referenceEncoder.EncodeSILK(pcm, BandwidthWideband, referencePacket)
+				require.NoError(t, err)
+
+				require.Equal(t, referenceN, retryN)
+				assert.True(t, bytes.Equal(referencePacket[:referenceN], retryPacket[:retryN]),
+					"retry packet differs from untouched reference")
+			})
+		}
+	}
 }
 
 // TestSILKDCBlockRemovesConstantOffset mirrors celt's TestDCBlockRemovesConstantOffset:

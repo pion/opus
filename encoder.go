@@ -490,19 +490,26 @@ func (e *Encoder) EncodeSILK(pcm []int16, bandwidth Bandwidth, out []byte) (int,
 	// 20/40/60 ms), so the duration offset is frameCount-1, not (frameCount-1)*2.
 	config += frameCount - 1
 
-	filtered := applySILKDCBlock(pcm, bandwidth.SampleRate(), &e.silkDCBlockMem)
+	// Encode against an independent candidate so a short output buffer cannot
+	// advance the DC blocker, VAD, prediction, or noise-shaping state. Commit
+	// the candidate only after the complete payload is known to fit.
+	nextDCBlockMem := e.silkDCBlockMem
+	filtered := applySILKDCBlock(pcm, bandwidth.SampleRate(), &nextDCBlockMem)
+	nextSILKEncoder := e.silkEncoder.Clone()
 	// The SILK encoder keeps its prediction state (NLSF interpolation, pitch
 	// lag, gain, LCG seed) across packets so consecutive 60 ms frames stay in
 	// sync with the decoder's stateful stream. Only the range coder is
 	// re-initialized per packet, so each packet is a self-contained bitstream
 	// that the decoder can start reading from scratch.
-	payload := e.silkEncoder.Encode(filtered, silk.Bandwidth(bandwidth), e.bitrate)
+	payload := nextSILKEncoder.Encode(filtered, silk.Bandwidth(bandwidth), e.bitrate)
 	if len(out) < len(payload)+1 {
 		return 0, errOutBufferTooSmall
 	}
 
 	out[0] = byte(config<<3) | byte(frameCodeOneFrame) // mono, one frame
 	n := copy(out[1:], payload)
+	e.silkDCBlockMem = nextDCBlockMem
+	e.silkEncoder = nextSILKEncoder
 
 	return n + 1, nil
 }
