@@ -842,6 +842,44 @@ func (d *Decoder) deemphasisAndInterleave(
 	if outputSampleRate == 0 {
 		outputSampleRate = sampleRate
 	}
+	// Mono output needs no interleaving. Round the sum and feedback product
+	// separately to float32 before carrying filter memory into the next sample.
+	if channelCount == 1 && outputSampleRate == sampleRate {
+		samples := timeX[:frameSampleCount]
+		output := out[:frameSampleCount]
+		memory := d.preemphasisMem[0]
+		for i, sample := range samples {
+			left := float32(sample + memory)
+			memory = float32(0.85000610 * left)
+			output[i] = left / 32768
+		}
+		d.preemphasisMem[0] = memory
+
+		return
+	}
+	// Emit even-indexed samples; discarded odd samples still advance the
+	// filter recurrence. Pairing them avoids a per-sample modulo.
+	if channelCount == 1 && outputSampleRate == sampleRate/2 {
+		samples := timeX[:frameSampleCount]
+		output := out[:frameSampleCount/2]
+		memory := d.preemphasisMem[0]
+		for i := range output {
+			left := float32(samples[2*i] + memory)
+			memory = float32(0.85000610 * left)
+			output[i] = left / 32768
+			left = float32(samples[2*i+1] + memory)
+			memory = float32(0.85000610 * left)
+		}
+		if frameSampleCount%2 != 0 {
+			// With an odd count, the last input index is even and must be emitted.
+			left := float32(samples[frameSampleCount-1] + memory)
+			memory = float32(0.85000610 * left)
+			out[frameSampleCount/2] = left / 32768
+		}
+		d.preemphasisMem[0] = memory
+
+		return
+	}
 	downsample := sampleRate / outputSampleRate
 	outputSample := 0
 	for sample := range frameSampleCount {

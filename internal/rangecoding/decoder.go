@@ -132,6 +132,27 @@ func (r *Decoder) DecodeSymbolWithICDF(cumulativeDistributionTable []uint) uint3
 	total := uint32(cumulativeDistributionTable[0]) //nolint:gosec // G115
 	cumulativeDistributionTable = cumulativeDistributionTable[1:]
 
+	// For SILK's total-256 tables, scaled interval comparisons avoid division.
+	// These guards ensure a nonzero scale and uint32-safe interval boundaries.
+	if total == 256 && r.rangeSize >= total && r.highAndCodedDifference < r.rangeSize {
+		scale := r.rangeSize >> 8
+		symbolIndex := uint32(0)
+		high := uint32(cumulativeDistributionTable[symbolIndex]) //nolint:gosec // G115
+		// Zero cumulative entries have no probability. Bound high before
+		// subtracting it from total to avoid unsigned underflow.
+		for high == 0 || (high < total && r.highAndCodedDifference < scale*(total-high)) {
+			symbolIndex++
+			high = uint32(cumulativeDistributionTable[symbolIndex]) //nolint:gosec // G115
+		}
+		low := uint32(0)
+		if symbolIndex != 0 {
+			low = uint32(cumulativeDistributionTable[symbolIndex-1]) //nolint:gosec // G115
+		}
+		r.update(scale, low, high, total)
+
+		return symbolIndex
+	}
+
 	scale := r.rangeSize / total
 	symbol := r.highAndCodedDifference/scale + 1
 	symbol = total - uint32(localMin(uint(symbol), uint(total))) //nolint:gosec // G115

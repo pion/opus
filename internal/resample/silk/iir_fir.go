@@ -29,7 +29,9 @@ func (r *Resampler) resamplerPrivateIIRFIR(out, in []int16) {
 	}
 }
 
-func resamplerPrivateIIRFIRInterpolate(out, buf []int16, maxIndexQ16, indexIncrementQ16 int32) int {
+// resamplerPrivateIIRFIRInterpolateGeneric uses bounds-checked Go indexing.
+// The eight-tap sum wraps at int32 before rounding and int16 saturation.
+func resamplerPrivateIIRFIRInterpolateGeneric(out, buf []int16, maxIndexQ16, indexIncrementQ16 int32) int {
 	outIndex := 0
 	for indexQ16 := int32(0); indexQ16 < maxIndexQ16; indexQ16 += indexIncrementQ16 {
 		tableIndex := silkSMULWB(int32(uint32(indexQ16)&0xffff), 12)

@@ -6,8 +6,9 @@ package silkresample
 import "math"
 
 func silkSMULWB(a32, b32 int32) int32 {
-	return ((a32 >> 16) * int32(int16(b32))) + // #nosec G115
-		int32((int64(int32(uint32(a32)&0xffff))*int64(int32(int16(b32))))>>16) // #nosec G115
+	// Only b's signed low 16 bits participate. The widened product fits in
+	// int64, and the arithmetic shift rounds toward negative infinity.
+	return int32((int64(a32) * int64(int16(b32))) >> 16) // #nosec G115
 }
 
 func silkSMLAWB(a32, b32, c32 int32) int32 {
@@ -23,7 +24,9 @@ func silkSMLABB(a32, b32, c32 int32) int32 {
 }
 
 func silkSMULWW(a32, b32 int32) int32 {
-	return silkSMULWB(a32, b32) + (a32 * silkRShiftRound(b32, 16))
+	// Shift the full int64 product before narrowing: Q16 multiplication
+	// rounds toward negative infinity and wraps the result to int32.
+	return int32((int64(a32) * int64(b32)) >> 16) // #nosec G115
 }
 
 func silkRShiftRound(a32 int32, shift int) int32 {
