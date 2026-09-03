@@ -414,13 +414,36 @@ func transientMaskMetric(signal, scratch []float32) int {
 	tmp := scratch[:n]
 
 	var mem0, mem1 float32
-	for i, x := range signal {
+	i := 0
+	for ; i+4 <= n; i += 4 {
+		x0 := signal[i]
+		x1 := signal[i+1]
+		x2 := signal[i+2]
+		x3 := signal[i+3]
+
+		u0 := mem0
+		v0 := mem1
+		u1 := u0 - x0 + 0.5*v0
+		u2 := 0.5*u0 + 0.5*v0 - 0.5*x0 - x1
+		u3 := 0.25*v0 - 0.5*x1 - x2
+
+		tmp[i] = u0 + x0
+		tmp[i+1] = u1 + x1
+		tmp[i+2] = u2 + x2
+		tmp[i+3] = u3 + x3
+
+		mem0 = -0.25*u0 + 0.25*x0 - 0.5*x2 - x3
+		mem1 = x3 - 0.25*v0 + 0.5*x1 + x2
+	}
+	for ; i < n; i++ {
+		x := signal[i]
 		y := mem0 + x
 		prevMem0 := mem0
 		mem0 = mem0 - x + 0.5*mem1
 		mem1 = x - prevMem0
 		tmp[i] = y
 	}
+
 	// The first few samples are unreliable since the filter memory hasn't
 	// propagated yet.
 	clear(tmp[:min(12, n)])
@@ -484,7 +507,7 @@ func computeBandLogAmp(freq []float32, lm int, startBand int, endBand int) [maxB
 		bandStart := scale * int(bandEdges[band])
 		bandEnd := scale * int(bandEdges[band+1])
 
-		energy := float64(1e-27)
+		energy := 1e-27
 		for i := bandStart; i < bandEnd; i++ {
 			value := float64(freq[i])
 			energy += value * value
@@ -636,12 +659,34 @@ func spreadingDecision(
 // pre-processing (libopus dc_reject, src/opus_encoder.c:479-507).
 func applyDCBlock(pcm []float32, sampleRate int, mem *float32) {
 	coef := 6.3 * dcBlockCutoffHz / float32(sampleRate)
-	coef2 := float32(1) - coef
-	m := *mem
-	for i := range pcm {
-		x := pcm[i]
-		pcm[i] = x - m
-		m = coef*x + coef2*m
+	decay := float32(1) - coef
+	decay2 := decay * decay
+	decay3 := decay2 * decay
+	decay4 := decay2 * decay2
+
+	memory := *mem
+	i := 0
+	for ; i+4 <= len(pcm); i += 4 {
+		x0 := pcm[i]
+		x1 := pcm[i+1]
+		x2 := pcm[i+2]
+		x3 := pcm[i+3]
+
+		m1 := coef*x0 + decay*memory
+		m2 := coef*(decay*x0+x1) + decay2*memory
+		m3 := coef*(decay2*x0+decay*x1+x2) + decay3*memory
+		m4 := coef*(decay3*x0+decay2*x1+decay*x2+x3) + decay4*memory
+
+		pcm[i] = x0 - memory
+		pcm[i+1] = x1 - m1
+		pcm[i+2] = x2 - m2
+		pcm[i+3] = x3 - m3
+		memory = m4
 	}
-	*mem = m
+	for ; i < len(pcm); i++ {
+		x := pcm[i]
+		pcm[i] = x - memory
+		memory = coef*x + decay*memory
+	}
+	*mem = memory
 }
