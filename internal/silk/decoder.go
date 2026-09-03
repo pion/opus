@@ -951,8 +951,8 @@ func (d *Decoder) decodeExcitationLSB(eRaw []int32, lsbcounts []uint8) {
 	}
 }
 
-// After decoding the pulse locations and the LSBs, the decoder knows
-// the magnitude of each coefficient in the excitation.
+// decodeExcitationSign assigns signs to the nonzero excitation magnitudes
+// decoded from the pulse locations and LSBs. Zero coefficients consume no sign.
 //
 // https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8.5
 //
@@ -963,21 +963,22 @@ func (d *Decoder) decodeExcitationSign(
 	quantizationOffsetType frameQuantizationOffsetType,
 	pulsecounts []uint8,
 ) {
-	for i := range eRaw {
-		// It then decodes a sign for all coefficients
-		// with a non-zero magnitude
-		//
-		// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8.5
-		if eRaw[i] == 0 {
+	// The sign PDF is shared by a 16-sample shell block. Its context depends
+	// on the frame type, quantization offset, and the block's pulse count.
+	for blockStart := 0; blockStart < len(eRaw); blockStart += pulsecountLargestPartitionSize {
+		block := eRaw[blockStart:min(blockStart+pulsecountLargestPartitionSize, len(eRaw))]
+		// Skip leading zeros; an all-zero block needs no sign context.
+		for len(block) != 0 && block[0] == 0 {
+			block = block[1:]
+		}
+		if len(block) == 0 {
 			continue
 		}
 
 		var icdf []uint
-		pulsecount := pulsecounts[i/pulsecountLargestPartitionSize]
+		pulsecount := pulsecounts[blockStart/pulsecountLargestPartitionSize]
 
-		// using one of the PDFs from Table 52.
-		//
-		// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.8.5
+		// Select this block's sign PDF from RFC 6716 Table 52.
 		switch signalType {
 		case frameSignalTypeInactive:
 			switch quantizationOffsetType {
@@ -1093,10 +1094,16 @@ func (d *Decoder) decodeExcitationSign(
 			}
 		}
 
+		// The same context applies to every nonzero coefficient in the block.
 		// If the value decoded is 0, then the coefficient magnitude is negated.
 		// Otherwise, it remains positive.
-		if d.rangeDecoder.DecodeSymbolWithICDF(icdf) == 0 {
-			eRaw[i] *= -1
+		for i, pulse := range block {
+			if pulse == 0 {
+				continue
+			}
+			if d.rangeDecoder.DecodeSymbolWithICDF(icdf) == 0 {
+				block[i] = -pulse
+			}
 		}
 	}
 }
@@ -1189,12 +1196,14 @@ func (d *Decoder) decodeExcitation(
 		// e_Q23[i] value may require more than 16 bits per sample, but it will
 		// not require more than 23, including the sign.
 
-		eQ23[i] = (eRaw[i] << 8) - int32(sign(int(eRaw[i])))*20 + offsetQ23 //nolint:gosec // g115
+		pulse := eRaw[i]
+		excitation := (pulse << 8) - int32(sign(int(pulse)))*20 + offsetQ23 //nolint:gosec // g115
 		seed = (196314165*seed + 907633515) & 0xFFFFFFFF
-		if seed&0x80000000 != 0 {
-			eQ23[i] *= -1
-		}
-		seed = (seed + uint32(eRaw[i])) & 0xFFFFFFFF //nolint:gosec // g115
+		// A 0/-1 mask applies the random sign without an unpredictable branch:
+		// (x ^ mask) - mask yields x or -x with int32 wrapping.
+		signMask := int32(seed) >> 31 //nolint:gosec // G115: reinterpret the random seed's sign bit.
+		eQ23[i] = (excitation ^ signMask) - signMask
+		seed = (seed + uint32(pulse)) & 0xFFFFFFFF //nolint:gosec // g115
 	}
 
 	return eQ23
@@ -1711,11 +1720,11 @@ func (d *Decoder) ltpSynthesis(
 	wQ2 int16,
 	aQ12, gainQ16, res, resLag []float32,
 ) {
-	// If this is the third or fourth subframe of a 20 ms SILK frame and the LSF
-	// interpolation factor, w_Q2 (see Section 4.2.7.5.5), is less than 4,
-	// then let out_end be set to (j - (s-2)*n) and let LTP_scale_Q14 be set
-	// to 16384.  Otherwise, set out_end to (j - s*n) and set LTP_scale_Q14
-	// to the Q14 LTP scaling value from Section 4.2.7.6.3.
+	// outEnd is the rewhitening boundary relative to j. When the frame uses
+	// LSF interpolation (wQ2 < 4), subframes 2 and 3 of a 20 ms frame use the
+	// frame-absolute boundary 2*n and unity Q14 scaling (16384). Otherwise
+	// the boundary is frame index 0 and the decoded LTP scale applies.
+	// Add j to outEnd for frame indices (RFC 6716 Section 4.2.7.9.1).
 	var outEnd int
 	if s < 2 || wQ2 == 4 {
 		outEnd = -s * n
@@ -1724,127 +1733,141 @@ func (d *Decoder) ltpSynthesis(
 		ltpScaleQ14 = 16384.0
 	}
 
-	// out[i] and lpc[i] are initially cleared to all zeros. Then, for i
-	// such that (j - pitch_lags[s] - 2) <= i < out_end, out[i] is
-	// rewhitened into an LPC residual, res[i], via
+	// Rewhiten output history for j-pitchLags[s]-2 <= i < j+outEnd:
 	//
-	//              4.0*LTP_scale_Q14
-	//     res[i] = ----------------- * clamp(-1.0,
-	//                 gain_Q16[s]
-	//                                        d_LPC-1
-	//                                          __              a_Q12[k]
-	//                                 out[i] - \  out[i-k-1] * --------, 1.0)
-	//                                          /_               4096.0
-	//                                          k=0
-	for i := (-pitchLags[s]) - 2; i < outEnd; i++ {
-		index := i + j
+	//   R(i) = rewhitenScale * clamp(O(i) - sum(k=0..dLPC-1,
+	//                              O(i-k-1)*lpcWeights[k]), -1, 1)
+	//
+	// O(i) reads out[i] for i >= 0, or finalOutValues[len(finalOutValues)+i]
+	// for i < 0. R(i) is written to res[i] or resLag[len(resLag)+i] respectively.
+	// Clamp the prediction error before scaling. Coefficients and gain are
+	// constant within the subframe; LPC order is 10 for NB/MB and 16 for WB.
+	var lpcWeights [16]float32
+	for k := range dLPC {
+		lpcWeights[k] = aQ12[k] / 4096.0
+	}
+	rewhitenScale := (4.0 * ltpScaleQ14) / gainQ16[s]
+	lag := pitchLags[s]
+	start := j - lag - 2
+	end := min(j+outEnd, len(res))
 
-		var (
-			resVal     float32
-			resIndex   int
-			writeToLag bool
-		)
-
-		switch {
-		case index >= len(res):
-			continue
-		case index >= 0:
-			resVal = out[index]
-			resIndex = index
-		default:
-			resIndex = len(resLag) + index
-			resVal = d.finalOutValues[len(d.finalOutValues)+index]
-			writeToLag = true
+	// Previous-frame and current-frame history each form a contiguous span.
+	// Only the first dLPC current-frame samples have taps in both histories.
+	if start < 0 {
+		// Negative frame indices read the previous frame and write resLag.
+		// Include dLPC extra history samples for the analysis filter's taps.
+		negativeEnd := min(end, 0)
+		if start < negativeEnd {
+			rewhitenLTPHistory(
+				resLag[len(resLag)+start:len(resLag)+negativeEnd],
+				d.finalOutValues[len(d.finalOutValues)+start-dLPC:len(d.finalOutValues)+negativeEnd],
+				dLPC,
+				lpcWeights,
+				rewhitenScale,
+			)
 		}
-
+		start = 0
+	}
+	// These windows cross the frame boundary, so each tap selects its history.
+	boundaryEnd := min(end, dLPC)
+	for ; start < boundaryEnd; start++ {
+		value := out[start]
 		for k := range dLPC {
-			var outVal float32
-			if outIndex := index - k - 1; outIndex >= 0 {
-				outVal = out[outIndex]
+			var previous float32
+			if index := start - k - 1; index >= 0 {
+				previous = out[index]
 			} else {
-				outVal = d.finalOutValues[len(d.finalOutValues)+outIndex]
+				previous = d.finalOutValues[len(d.finalOutValues)+index]
 			}
-
-			resVal -= outVal * (aQ12[k] / 4096.0)
+			value -= previous * lpcWeights[k]
 		}
-
-		resVal = clampNegativeOneToOne(resVal)
-		resVal *= (4.0 * ltpScaleQ14) / gainQ16[s]
-
-		if !writeToLag {
-			res[resIndex] = resVal
-		} else {
-			resLag[resIndex] = resVal
-		}
+		res[start] = clampNegativeOneToOne(value) * rewhitenScale
+	}
+	if start < end {
+		// Every tap in this span lies in the current frame.
+		rewhitenLTPHistory(res[start:end], out[start-dLPC:end], dLPC, lpcWeights, rewhitenScale)
 	}
 
-	// Then, for i such that
-	// out_end <= i < j, lpc[i] is rewhitened into an LPC residual, res[i],
-	// via
+	// For j+outEnd <= i < j, the LPC coefficients are unchanged and the
+	// stored residuals are normalized to the preceding subframe's gain.
+	// Rewhitening at the current gain therefore requires only:
 	//
-	//                                      d_LPC-1
-	//                  65536.0               __              a_Q12[k]
-	//       res[i] = ----------- * (lpc[i] - \  lpc[i-k-1] * --------)
-	//                gain_Q16[s]             /_               4096.0
-	//                                        k=0
+	//   R(i) *= gainQ16[s-1] / gainQ16[s]
 	//
-	// This requires storage to buffer up to 256 values of lpc[i] from
-	// previous subframes (240 from the current SILK frame and 16 from the
-	// previous SILK frame).  This corresponds to WB with up to three
-	// previous subframes in the current SILK frame, plus 16 samples for
-	// d_LPC.
-
-	// The astute reader will notice that, given the definition of
-	// lpc[i] in Section 4.2.7.9.2, the output of this latter equation is
-	// merely a scaled version of the values of res[i] from previous
-	// subframes.
+	// This is the gain adjustment in RFC 6716 Section 4.2.7.9.1; the stored
+	// residuals supply the LPC analysis result without recomputing its taps.
 	if s > 0 {
 		scaledGain := gainQ16[s-1] / gainQ16[s]
-		for i := outEnd; i < 0; i++ {
-			index := j + i
-			if index < 0 {
+		scaleStart := j + outEnd
+		if scaleStart < 0 {
+			negativeEnd := min(j, 0)
+			for index := scaleStart; index < negativeEnd; index++ {
 				resLag[len(resLag)+index] *= scaledGain
-			} else {
-				res[index] *= scaledGain
 			}
+			scaleStart = 0
+		}
+		for index := scaleStart; index < j; index++ {
+			res[index] *= scaledGain
 		}
 	}
 
-	// Let e_Q23[i] for j <= i < (j + n) be the excitation for the current
-	// subframe, and b_Q7[k] for 0 <= k < 5 be the coefficients of the LTP
-	// filter taken from the codebook entry in one of Tables 39 through 41
-	// corresponding to the index decoded for the current subframe in
-	// Section 4.2.7.6.2.  Then for i such that j <= i < (j + n), the LPC
-	// residual is
+	// Subframe s uses one five-tap Q7 pitch filter from RFC 6716 Tables 39-41,
+	// selected as described in Section 4.2.7.6.2. Normalize its coefficients once.
+	taps := bQ7[s]
+	weights := [5]float32{
+		float32(taps[0]) / 128.0,
+		float32(taps[1]) / 128.0,
+		float32(taps[2]) / 128.0,
+		float32(taps[3]) / 128.0,
+		float32(taps[4]) / 128.0,
+	}
 
-	//                          4
-	//              e_Q23[i]   __                                  b_Q7[k]
-	//    res[i] = --------- + \  res[i - pitch_lags[s] + 2 - k] * -------
-	//              2.0**23    /_                                   128.0
-	//                         k=0
-
-	var resSum, resVal float32
-	for i := j; i < (j + n); i++ {
-		resSum = res[i]
-		for k := 0; k <= 4; k++ {
-			if resIndex := i - pitchLags[s] + 2 - k; resIndex < 0 {
-				resVal = resLag[len(resLag)+resIndex]
+	// silkFrameReconstruction initializes res[j:j+n] with eQ23/2^23.
+	// Add pitch prediction for each i in [j, j+n):
+	//
+	//   res[i] += sum(k=0..4, R(i-lag+2-k)*weights[k])
+	//
+	// weights[k] is bQ7[s][k]/128 and lag is pitchLags[s]. R(q) reads res[q]
+	// for q >= 0, or resLag[len(resLag)+q] for q < 0. Results can feed later
+	// predictions, so process samples in increasing order (RFC 6716 Section 4.2.7.9.1).
+	// At most four windows have taps on both sides of the frame boundary.
+	current := j
+	limit := j + n
+	negativeEnd := min(limit, lag-2)
+	if current < negativeEnd {
+		// Even the newest tap precedes this frame: all five reads use resLag.
+		synthesizeLTPTaps(
+			res[current:negativeEnd],
+			resLag[len(resLag)+current-lag-2:len(resLag)+negativeEnd-lag+2],
+			weights,
+		)
+		current = negativeEnd
+	}
+	// From lag-2 through lag+1 the five taps straddle the frame boundary.
+	boundaryEnd = min(limit, lag+2)
+	for ; current < boundaryEnd; current++ {
+		value := res[current]
+		for k := range 5 {
+			var previous float32
+			if index := current - lag + 2 - k; index < 0 {
+				previous = resLag[len(resLag)+index]
 			} else {
-				resVal = res[resIndex]
+				previous = res[index]
 			}
-
-			resSum += resVal * (float32(bQ7[s][k]) / 128.0)
+			value += previous * weights[k]
 		}
-
-		res[i] = resSum
+		res[current] = value
+	}
+	if current < limit {
+		// All taps now use this frame's residuals. The slices may overlap;
+		// each output must be written before the next sample reads its taps.
+		synthesizeLTPTaps(res[current:limit], res[current-lag-2:limit-lag+2], weights)
 	}
 }
 
-// LPC synthesis uses the short-term LPC filter to predict the next
-// output coefficient.  For i such that (j - d_LPC) <= i < j, let lpc[i]
-// be the result of LPC synthesis from the last d_LPC samples of the
-// previous subframe or zeros in the first subframe for this channel
-// after either
+// lpcSynthesis reconstructs subframe s from its residuals and unclipped LPC
+// history. The first subframe uses previousFrameLPCValues, with zeros for any
+// unavailable samples; subsequent subframes use the shared lpc buffer.
 //
 // https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9.2
 func (d *Decoder) lpcSynthesis(
@@ -1852,15 +1875,16 @@ func (d *Decoder) lpcSynthesis(
 	n, s, dLPC int, //nolint:varnamelen
 	aQ12, res, gainQ16, lpc []float32,
 ) {
-	// Then, for i such that j <= i < (j + n), the result of LPC synthesis
-	// for the current subframe is
+	// For frame index i in [j, j+n), where j = n*s:
 	//
-	//                                     d_LPC-1
-	//                gain_Q16[i]            __              a_Q12[k]
-	//       lpc[i] = ----------- * res[i] + \  lpc[i-k-1] * --------
-	//                  65536.0              /_               4096.0
-	//                                       k=0
+	//   lpc[i] = gainQ16[s]/65536 * res[i]
+	//          + sum(k=0..dLPC-1, H(i-k-1)*aQ12[k]/4096)
+	//   out[i-j] = clamp(lpc[i], -1, 1)
 	//
+	// H(q) reads lpc[q] for q >= 0. For q < 0, it reads
+	// previousFrameLPCValues[len(previousFrameLPCValues)+q], or zero when
+	// that index is negative. Only output is clamped; prediction feeds back
+	// the unclipped LPC values.
 	normalizedAQ12, reversedAQ12 := normalizedLPCWeights(aQ12, dLPC)
 	gain := gainQ16[s] / 65536.0
 	subframeOffset := n * s
@@ -1895,25 +1919,6 @@ func normalizedLPCWeights(aQ12 []float32, dLPC int) (normalizedAQ12, reversedAQ1
 	return normalizedAQ12, reversedAQ12
 }
 
-func lpcSynthesisSteadyState(
-	out []float32,
-	dLPC int,
-	reversedAQ12 [16]float32,
-	subframeRes, subframeLPC, historyAndOutput []float32,
-	gain float32,
-) {
-	for sampleIndex := range out {
-		lpcVal := gain * subframeRes[sampleIndex]
-		history := historyAndOutput[sampleIndex : sampleIndex+dLPC]
-		for coefficientIndex := range dLPC {
-			lpcVal += history[coefficientIndex] * reversedAQ12[coefficientIndex]
-		}
-
-		subframeLPC[sampleIndex] = lpcVal
-		out[sampleIndex] = clampNegativeOneToOne(lpcVal)
-	}
-}
-
 func (d *Decoder) lpcSynthesisFirstSubframe(
 	out []float32,
 	dLPC int,
@@ -1921,8 +1926,16 @@ func (d *Decoder) lpcSynthesisFirstSubframe(
 	subframeRes, subframeLPC []float32,
 	gain float32,
 ) {
+	// Only the first dLPC samples can reference previous-frame LPC state
+	// (or zero history after reset). Once warmed up, order-10/16 prediction
+	// uses a contiguous current-subframe window with no history-selection
+	// branches. Short subframes and other orders stay entirely scalar.
+	warmupSamples := len(out)
+	if dLPC == 10 || dLPC == 16 {
+		warmupSamples = min(dLPC, len(out))
+	}
 	var currentLPCVal float32
-	for sampleIndex := range out {
+	for sampleIndex := range warmupSamples {
 		lpcVal := gain * subframeRes[sampleIndex]
 
 		for coefficientIndex := range dLPC {
@@ -1940,18 +1953,18 @@ func (d *Decoder) lpcSynthesisFirstSubframe(
 		subframeLPC[sampleIndex] = lpcVal
 		out[sampleIndex] = clampNegativeOneToOne(lpcVal)
 	}
+	if warmupSamples < len(out) {
+		// The warm-up wrote the unclipped LPC history needed by this tail;
+		// clipped output samples must never feed the prediction recurrence.
+		lpcSynthesisFirstSubframeTail(out, dLPC, normalizedAQ12, subframeRes, subframeLPC, gain)
+	}
 }
 
 func (d *Decoder) savePreviousFrameLPCValues(lpc, out []float32, n, dLPC int) { //nolint:varnamelen
-	//  The decoder saves the final d_LPC values, i.e., lpc[i] such that
-	// (j + n - d_LPC) <= i < (j + n), to feed into the LPC synthesis of the
-	// next subframe.  This requires storage for up to 16 values of lpc[i]
-	// (for WB frames).
-	// The final d_LPC synthesized samples become the history for the next
-	// subframe. RFC 6716 section 4.2.7.9 describes that continuity
-	// requirement, and decode_frame.c preserves this state even for the
-	// first decoded frame. The old haveDecoded guard skipped that initial
-	// handoff and left the next frame with an all-zero LPC history.
+	// out is the remaining frame suffix, so len(out) == n marks the final
+	// subframe. Save its last dLPC unclipped samples for the next frame,
+	// including after the first decoded frame. Earlier subframes use the
+	// shared lpc buffer directly (RFC 6716 Section 4.2.7.9.2).
 	if len(out) != n {
 		return
 	}
@@ -1990,13 +2003,12 @@ func (d *Decoder) silkFrameReconstruction(
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9
 	n := d.samplesInSubframe(bandwidth)
 
-	// let lpc[i] be the result of LPC synthesis from the last d_LPC samples of the
-	//  previous subframe or zeros in the first subframe for this channel
+	// Current-frame LPC samples are shared across subframes. Previous-frame
+	// history is held separately in previousFrameLPCValues.
 	lpc := slicetools.ResizeZero(&d.lpc, n*subframeCount)
 
-	// For unvoiced frames (see Section 4.2.7.3), the LPC residual for i
-	// such that j <= i < (j + n) is simply a normalized copy of the
-	// excitation signal, i.e.,
+	// Every frame starts with normalized excitation in res. Unvoiced frames
+	// use it directly; voiced frames add pitch prediction through ltpSynthesis.
 	//
 	//               e_Q23[i]
 	//     res[i] = ---------
@@ -2007,8 +2019,7 @@ func (d *Decoder) silkFrameReconstruction(
 		res[i] = float32(eQ23[i]) / 8388608.0
 	}
 
-	// subFrame be the index of the current subframe in this SILK frame
-	// (0 or 1 for 10 ms frames, or 0 to 3 for 20 ms frames)
+	// A 10 ms frame has two subframes; a 20 ms frame has four.
 	for subFrame := range subframeCount {
 		// For 20 ms SILK frames, the first half of the frame (i.e., the first
 		// two subframes) may use normalized LSF coefficients that are
