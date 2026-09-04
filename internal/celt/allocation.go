@@ -1071,7 +1071,7 @@ func dynallocAnalysis(
 		if combined[band] > 4.0 {
 			combined[band] = 4.0
 		}
-		width := channelCount * (int(bandEdges[band+1] - bandEdges[band])) << lm
+		width := channelCount * int(bandEdges[band+1]-bandEdges[band]) << lm
 
 		var boost int
 		var boostBits int

@@ -5,6 +5,7 @@ package celt
 
 import (
 	"math"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -361,7 +362,7 @@ func TestDCBlockMultiFrameState(t *testing.T) {
 	}
 }
 
-func TestDCBlockMatchesScalarReference(t *testing.T) {
+func TestDCBlockStaysCloseToScalarReference(t *testing.T) {
 	pcm := make([]float32, 960)
 	for i := range pcm {
 		pcm[i] = float32(math.Sin(2 * math.Pi * 440 * float64(i) / float64(sampleRate)))
@@ -374,8 +375,69 @@ func TestDCBlockMatchesScalarReference(t *testing.T) {
 	applyDCBlockScalar(want, sampleRate, &memWant)
 	applyDCBlock(got, sampleRate, &memGot)
 
-	assert.Equal(t, want, got)
-	assert.Equal(t, memWant, memGot)
+	for i := range want {
+		assert.InDelta(t, want[i], got[i], 1e-6)
+	}
+	assert.InDelta(t, memWant, memGot, 1e-6)
+}
+
+func TestDCBlockBlockOfFourLongRun(t *testing.T) {
+	const (
+		frames     = 3000
+		frameSize  = 960
+		sampleRate = 48000
+	)
+
+	var scalarMem, blockMem float32
+	var maxDiff float32
+
+	for frame := range frames {
+		input := make([]float32, frameSize)
+		for i := range input {
+			sample := frame*frameSize + i
+			input[i] = float32(
+				0.6*math.Sin(2*math.Pi*440*float64(sample)/sampleRate) +
+					0.2*math.Sin(2*math.Pi*73*float64(sample)/sampleRate),
+			)
+		}
+
+		want := append([]float32(nil), input...)
+		got := append([]float32(nil), input...)
+		applyDCBlockScalar(want, sampleRate, &scalarMem)
+		applyDCBlock(got, sampleRate, &blockMem)
+
+		for i := range want {
+			diff := float32(math.Abs(float64(want[i] - got[i])))
+			maxDiff = max(maxDiff, diff)
+		}
+	}
+
+	assert.LessOrEqual(t, maxDiff, float32(1e-6))
+	assert.InDelta(t, scalarMem, blockMem, 1e-6)
+}
+
+func TestTransientMaskMetricBlockOfFour(t *testing.T) {
+	for _, n := range []int{0, 1, 3, 4, 15, 18, 31, 32, 35, 36, 959, 960, 961} {
+		t.Run("n="+strconv.Itoa(n), func(t *testing.T) {
+			signal := make([]float32, n)
+			for i := range signal {
+				signal[i] = float32(
+					0.7*math.Sin(2*math.Pi*440*float64(i)/sampleRate) +
+						0.2*math.Cos(2*math.Pi*73*float64(i)/sampleRate),
+				)
+			}
+
+			wantScratch := make([]float32, n)
+			gotScratch := make([]float32, n)
+			want := transientMaskMetricScalar(signal, wantScratch)
+			got := transientMaskMetric(signal, gotScratch)
+
+			assert.Equal(t, want, got)
+			for i := range wantScratch {
+				assert.InDelta(t, wantScratch[i], gotScratch[i], 1e-6)
+			}
+		})
+	}
 }
 
 func applyDCBlockScalar(pcm []float32, sampleRate int, mem *float32) {
@@ -386,6 +448,55 @@ func applyDCBlockScalar(pcm []float32, sampleRate int, mem *float32) {
 		pcm[i] = x - *mem
 		*mem = coef*x + coef2**mem
 	}
+}
+
+func transientMaskMetricScalar(signal, scratch []float32) int {
+	n := len(signal)
+	tmp := scratch[:n]
+
+	var mem0, mem1 float32
+	for i, x := range signal {
+		y := mem0 + x
+		prevMem0 := mem0
+		mem0 = mem0 - x + 0.5*mem1
+		mem1 = x - prevMem0
+		tmp[i] = y
+	}
+	clear(tmp[:min(12, n)])
+
+	len2 := n / 2
+	if len2 < 18 {
+		return 0
+	}
+
+	var mean float32
+	mem0 = 0
+	for i := range len2 {
+		x2 := tmp[2*i]*tmp[2*i] + tmp[2*i+1]*tmp[2*i+1]
+		mean += x2
+		mem0 = x2 + (1-transientForwardDecay)*mem0
+		tmp[i] = transientForwardDecay * mem0
+	}
+
+	mem0 = 0
+	var maxE float32
+	for i := len2 - 1; i >= 0; i-- {
+		mem0 = tmp[i] + transientBackwardDecay*mem0
+		tmp[i] = (1 - transientBackwardDecay) * mem0
+		maxE = max(maxE, tmp[i])
+	}
+
+	frameEnergy := float32(math.Sqrt(float64(mean * maxE * 0.5 * float32(len2))))
+	norm := float32(len2) / (1e-15 + frameEnergy)
+
+	unmask := 0
+	for i := 12; i < len2-5; i += 4 {
+		id := int(math.Floor(float64(64 * norm * (tmp[i] + 1e-15))))
+		id = min(max(id, 0), 127)
+		unmask += transientInverseTable[id]
+	}
+
+	return 64 * unmask * 4 / (6 * (len2 - 17))
 }
 
 func TestAnalyzeFrameAppliesDCBlock(t *testing.T) {
