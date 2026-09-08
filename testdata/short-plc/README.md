@@ -84,6 +84,11 @@ and four two-channel energy histories from the reference.
 pitch selection, windowed 24-lag autocorrelation, and LPC on six mono/stereo
 signals. These isolate float64 accumulation in Go from float32 in generic C;
 they do not substitute for the public PCM quality gate.
+The exactly periodic square-wave primitive can select different harmonic
+aliases under ARM floating-point arithmetic. Its test requires both selected
+periods to reproduce the entire input exactly; other cases require the same
+pitch. LPC coefficients allow 0.00002 absolute numerical difference. Public
+PCM RMSE thresholds and state-trace tolerances are unchanged.
 
 **Matching decoder policy:** libopus 1.6.1 disables intensity-stereo phase
 inversion for mono output by default (`celt_decoder.c` initialization).
@@ -133,8 +138,17 @@ on the base commit. Comparing base and current on ARM64 gives zero changed
 pre-loss/no-loss hashes, zero per-step regressions, and passes the same halved
 periodic-error gate. ARM64 tests select this baseline, keeping exact hash
 checks rather than tolerating differences or changing production rounding.
+`baseline-arm64-race.json.gz` is the same base built on macOS/arm64 with
+Go 1.25.14 and `-race`, from the successful before/after job in
+[run 34266406211](https://github.com/pion/opus/actions/runs/34266406211).
+Race instrumentation changes floating-point code generation on ARM64 too,
+so race builds select this measurement. Neither snapshot contains new-code
+output; both preserve the exact no-loss equality gate. The extra CI comparison
+also rebuilds the base with the current runner/compiler instead of trusting
+only the recorded hashes.
 
-Reproduce baseline in that clean source tree, adding the test file only:
+Reproduce baseline in that clean source tree, adding only the corpus test and
+its two `decoder_plc_*race_test.go` build-flag files:
 
 ```sh
 PLC_CORPUS_PATH=/path/to/current/testdata/short-plc/corpus.json.gz \

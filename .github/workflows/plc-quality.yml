@@ -35,7 +35,7 @@ jobs:
           PLC_CORPUS_PATH: ${{ github.workspace }}/current/testdata/short-plc/corpus.json.gz
           PLC_BASELINE_OUTPUT: ${{ runner.temp }}/plc-baseline.json
         run: |
-          cp ../current/decoder_plc_corpus_test.go .
+          cp ../current/decoder_plc_corpus_test.go ../current/decoder_plc_race_test.go ../current/decoder_plc_norace_test.go .
           go test -race -run '^TestPLCCorpus$' -count=1 .
       - name: Require exact no-loss PCM and loss/recovery improvement
         working-directory: current

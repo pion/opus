@@ -41,6 +41,34 @@ type plcMeasurement struct {
 	Hash     string
 }
 
+func readPLCBaseline(t *testing.T) [][]plcMeasurement {
+	t.Helper()
+	baselinePath := "testdata/short-plc/baseline.json"
+	compressed := runtime.GOARCH == "arm64"
+	if compressed {
+		baselinePath = "testdata/short-plc/baseline-arm64.json.gz"
+	}
+	if compressed && plcBaselineRace {
+		baselinePath = "testdata/short-plc/baseline-arm64-race.json.gz"
+	}
+	if path := os.Getenv("PLC_BASELINE_PATH"); path != "" {
+		baselinePath, compressed = path, false
+	}
+	data, err := os.ReadFile(baselinePath) //nolint:gosec // Explicit offline same-build baseline for CI comparison.
+	require.NoError(t, err)
+	var baseline [][]plcMeasurement
+	if compressed {
+		reader, err := gzip.NewReader(bytes.NewReader(data))
+		require.NoError(t, err)
+		require.NoError(t, json.NewDecoder(reader).Decode(&baseline))
+		require.NoError(t, reader.Close())
+	} else {
+		require.NoError(t, json.Unmarshal(data, &baseline))
+	}
+
+	return baseline
+}
+
 func TestPLCCorpus(t *testing.T) {
 	path := os.Getenv("PLC_CORPUS_PATH")
 	if path == "" {
@@ -58,24 +86,7 @@ func TestPLCCorpus(t *testing.T) {
 	var baseline [][]plcMeasurement
 	record := os.Getenv("PLC_BASELINE_OUTPUT")
 	if record == "" {
-		baselinePath := "testdata/short-plc/baseline.json"
-		compressed := runtime.GOARCH == "arm64"
-		if runtime.GOARCH == "arm64" {
-			baselinePath = "testdata/short-plc/baseline-arm64.json.gz"
-		}
-		if path := os.Getenv("PLC_BASELINE_PATH"); path != "" {
-			baselinePath, compressed = path, false
-		}
-		data, err := os.ReadFile(baselinePath) //nolint:gosec // Explicit offline same-build baseline for CI comparison.
-		require.NoError(t, err)
-		if compressed {
-			z, err := gzip.NewReader(bytes.NewReader(data))
-			require.NoError(t, err)
-			require.NoError(t, json.NewDecoder(z).Decode(&baseline))
-			require.NoError(t, z.Close())
-		} else {
-			require.NoError(t, json.Unmarshal(data, &baseline))
-		}
+		baseline = readPLCBaseline(t)
 		require.Len(t, baseline, len(corpus.Cases))
 	}
 	results := make([][]plcMeasurement, len(corpus.Cases))

@@ -95,3 +95,49 @@ func TestCELTPLCWarmAllocations(t *testing.T) {
 		require.Zero(t, testing.AllocsPerRun(100, cycle))
 	}
 }
+
+func TestCELTPLCResetAndDecoderIsolation(t *testing.T) {
+	for _, channels := range []int{1, 2} {
+		packets := plcBenchmarkPackets(t, channels)
+		for _, losses := range []int{1, 7} {
+			t.Run(fmt.Sprintf("%dch/%dlosses", channels, losses), func(t *testing.T) {
+				decoder, err := NewDecoderWithOutput(48000, channels)
+				require.NoError(t, err)
+				control, err := NewDecoderWithOutput(48000, channels)
+				require.NoError(t, err)
+				unrelated, err := NewDecoderWithOutput(48000, channels)
+				require.NoError(t, err)
+				actual, expected, other := make([]int16, 960*channels), make([]int16, 960*channels), make([]int16, 960*channels)
+				for _, packet := range packets {
+					_, err = decoder.DecodeToInt16(packet, actual)
+					require.NoError(t, err)
+					_, err = unrelated.DecodeToInt16(packet, other)
+					require.NoError(t, err)
+				}
+				for range losses {
+					require.NoError(t, decoder.DecodePLC(actual))
+				}
+				// Init calls the CELT core's Reset, including periodic history,
+				// LPC, background energy, pending overlap and noise skip state.
+				require.NoError(t, decoder.Init(48000, channels))
+				for step := range 20 {
+					// Interleave another live decoder to expose shared scratch/state.
+					require.NoError(t, unrelated.DecodePLC(other))
+					if step >= 3 && step < 10 {
+						require.NoError(t, decoder.DecodePLC(actual))
+						require.NoError(t, control.DecodePLC(expected))
+					} else {
+						clear(actual)
+						clear(expected)
+						_, err = decoder.DecodeToInt16(packets[step%len(packets)], actual)
+						require.NoError(t, err)
+						_, err = control.DecodeToInt16(packets[step%len(packets)], expected)
+						require.NoError(t, err)
+					}
+					require.Equal(t, expected, actual, "step %d", step)
+					require.Equal(t, control.rangeFinal, decoder.rangeFinal)
+				}
+			})
+		}
+	}
+}
