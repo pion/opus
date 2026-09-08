@@ -80,6 +80,8 @@ func celtLPC(ac []float32, p int, lpc []float32) []float32 {
 
 // pitchDownsample decimates the channels by factor into xLP, sums them, then
 // whitens the result with a 4th-order LPC filter plus a fixed zero.
+//
+//nolint:unparam // Retain the reference primitive's explicit decimation factor.
 func pitchDownsample(x [][]float32, xLP []float32, length, factor int, scratch *pitchScratch) {
 	offset := factor / 2
 	for i := 1; i < length; i++ {

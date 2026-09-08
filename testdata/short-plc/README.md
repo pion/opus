@@ -80,6 +80,10 @@ SILK-to-CELT, CELT-to-SILK and Hybrid. The encoder advances even for lost frames
 `corpus.json.gz` contains the public API reference PCM and packets.
 `corpus-state.jsonl.gz` contains per-step type, loss duration, skip flag, pitch,
 and four two-channel energy histories from the reference.
+`primitives.c` / `primitives.json.gz` independently exercise downsampling,
+pitch selection, windowed 24-lag autocorrelation, and LPC on six mono/stereo
+signals. These isolate float64 accumulation in Go from float32 in generic C;
+they do not substitute for the public PCM quality gate.
 
 **Matching decoder policy:** libopus 1.6.1 disables intensity-stereo phase
 inversion for mono output by default (`celt_decoder.c` initialization).
@@ -150,7 +154,11 @@ gzip -n -c /tmp/plc-base-arm64.json > /path/to/baseline-arm64.json.gz
 For a measurement report on current code, write to a **different** output file
 with `PLC_BASELINE_OUTPUT` and pass that path to
 `node testdata/short-plc/summarize.mjs /path/to/current.json`.
-Never set the recording environment variable in acceptance tests or CI.
+Never set the recording environment variable in current-code acceptance tests.
+The PLC quality workflow records the unchanged base in a separate checkout,
+then runs the current-code acceptance test with `PLC_BASELINE_PATH` pointing
+to that measurement. Both builds use the same compiler, architecture, and
+race mode; the current-code test retains every quality and exact-hash gate.
 
 Weighted RMSE in int16 units across the 502-case corpus, Go 1.26.1 Linux/amd64:
 

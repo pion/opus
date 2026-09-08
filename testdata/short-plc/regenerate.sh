@@ -20,6 +20,9 @@ for generator in generate corpus; do
     cmp "$work/$generator-plain.json" "$work/$generator-trace.json"
 done
 cmp "$work/generate-plain.json" "$fixtures/libopus.json"
+cc -O2 -DHAVE_CONFIG_H -I. -Iinclude -Icelt "$fixtures/primitives.c" .libs/libopus.a -lm -o "$work/primitives"
+"$work/primitives" > "$work/primitives.json"
+gzip -n -c "$work/primitives.json" > "$fixtures/primitives.json.gz"
 gzip -n -c "$work/corpus-plain.json" > "$fixtures/corpus.json.gz"
 gzip -n -c "$work/corpus-state.jsonl" > "$fixtures/corpus-state.jsonl.gz"
 sha256sum "$work/"*-plain.json "$fixtures/corpus.json.gz" "$fixtures/corpus-state.jsonl.gz"
