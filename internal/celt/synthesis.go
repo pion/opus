@@ -37,6 +37,7 @@ type decoderScratch struct {
 	collapseMasks [2 * maxBands]byte
 	channels      [2]channelScratch
 	postfilter    [2][postfilterHistorySampleCount + maxFrameSampleCount]float32
+	plc           plcScratch
 }
 
 type channelScratch struct {
@@ -180,6 +181,7 @@ func (d *Decoder) denormaliseAndSynthesize(
 
 	timeX := d.inverseTransformChannel(freqX, 0, info)
 	d.applyPostfilter(info, timeX, 0)
+	d.rememberPLC(timeX, 0)
 	if info.outputChannelCount == 1 {
 		d.updatePostfilterState(info)
 		d.deemphasisAndInterleave(timeX, nil, out, frameSampleCount, 1, info.outputSampleRate)
@@ -188,6 +190,7 @@ func (d *Decoder) denormaliseAndSynthesize(
 	}
 	timeY := d.inverseTransformChannel(freqY, 1, info)
 	d.applyPostfilter(info, timeY, 1)
+	d.rememberPLC(timeY, 1)
 	d.updatePostfilterState(info)
 	d.deemphasisAndInterleave(timeX, timeY, out, frameSampleCount, 2, info.outputSampleRate)
 }
@@ -440,6 +443,9 @@ func limitOutputBandwidth(info *frameSideInfo, freq []float32) {
 // inverseTransformChannel performs the RFC 6716 Section 4.3.7 IMDCT path for
 // one channel and carries the weighted overlap-add tail into the next frame.
 func (d *Decoder) inverseTransformChannel(freq []float32, channel int, info *frameSideInfo) []float32 {
+	if d.plc.fold {
+		d.foldPLCOverlap(channel)
+	}
 	channelScratch := &d.scratchBuffer().channels[channel]
 	frameSampleCount := len(freq)
 	accumulated := channelScratch.accumulated[:frameSampleCount+shortBlockSampleCount]
