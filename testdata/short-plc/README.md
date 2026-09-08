@@ -122,11 +122,29 @@ each periodic-signal scenario. They do not weaken this gate for transitions.
 Core state tests require exact mode/duration/skip, energy agreement within
 0.001 log2 units, and pitch within one sample (floating-point interpolation).
 
+`baseline-arm64.json.gz` records the **same unchanged base commit** compiled
+for Linux/arm64 with Go 1.26.1, run under QEMU 8.2.2. ARM64 floating-point
+code generation already changes 280 pre-loss/no-loss hashes relative to amd64
+on the base commit. Comparing base and current on ARM64 gives zero changed
+pre-loss/no-loss hashes, zero per-step regressions, and passes the same halved
+periodic-error gate. ARM64 tests select this baseline, keeping exact hash
+checks rather than tolerating differences or changing production rounding.
+
 Reproduce baseline in that clean source tree, adding the test file only:
 
 ```sh
 PLC_CORPUS_PATH=/path/to/current/testdata/short-plc/corpus.json.gz \
 PLC_BASELINE_OUTPUT=/path/to/baseline.json go test -run '^TestPLCCorpus$' -count=1 .
+```
+
+For the ARM64 baseline, in the same unchanged base source plus test file:
+
+```sh
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go test -c -o /tmp/plc-base-arm64.test .
+PLC_CORPUS_PATH=/path/to/current/testdata/short-plc/corpus.json.gz \
+PLC_BASELINE_OUTPUT=/tmp/plc-base-arm64.json \
+qemu-aarch64 /tmp/plc-base-arm64.test -test.run='^TestPLCCorpus$' -test.count=1
+gzip -n -c /tmp/plc-base-arm64.json > /path/to/baseline-arm64.json.gz
 ```
 
 For a measurement report on current code, write to a **different** output file

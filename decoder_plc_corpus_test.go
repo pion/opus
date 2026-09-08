@@ -5,6 +5,7 @@
 package opus
 
 import (
+	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/binary"
@@ -13,6 +14,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -56,9 +58,20 @@ func TestPLCCorpus(t *testing.T) {
 	var baseline [][]plcMeasurement
 	record := os.Getenv("PLC_BASELINE_OUTPUT")
 	if record == "" {
-		data, err := os.ReadFile("testdata/short-plc/baseline.json")
+		baselinePath := "testdata/short-plc/baseline.json"
+		if runtime.GOARCH == "arm64" {
+			baselinePath = "testdata/short-plc/baseline-arm64.json.gz"
+		}
+		data, err := os.ReadFile(baselinePath)
 		require.NoError(t, err)
-		require.NoError(t, json.Unmarshal(data, &baseline))
+		if runtime.GOARCH == "arm64" {
+			z, err := gzip.NewReader(bytes.NewReader(data))
+			require.NoError(t, err)
+			require.NoError(t, json.NewDecoder(z).Decode(&baseline))
+			require.NoError(t, z.Close())
+		} else {
+			require.NoError(t, json.Unmarshal(data, &baseline))
+		}
 		require.Len(t, baseline, len(corpus.Cases))
 	}
 	results := make([][]plcMeasurement, len(corpus.Cases))
