@@ -451,13 +451,13 @@ func (e *Encoder) choosePrefilter(
 
 	pitchLen := (combFilterMaxPeriod + frameSampleCount) >> 1
 	buf := slicetools.Resize(&e.pitchBuf, pitchLen)
-	pitchDownsample(pitchInput, buf, pitchLen, 2, &e.scratch)
+	pitchDownsample(pitchInput, buf, pitchLen, 2, &e.scratch.pitchScratch)
 
 	// The top 1.5 octave of the range is skipped: short-term correlation there
 	// produces too many false positives.
 	pitchPeriod := pitchSearch(
 		buf[combFilterMaxPeriod>>1:], buf,
-		frameSampleCount, combFilterMaxPeriod-3*combFilterMinPeriod, &e.scratch,
+		frameSampleCount, combFilterMaxPeriod-3*combFilterMinPeriod, &e.scratch.pitchScratch,
 	)
 	pitchPeriod = combFilterMaxPeriod - pitchPeriod
 
