@@ -1243,12 +1243,23 @@ func (d *Decoder) validatePLCOutput(sampleCount int) error {
 	}
 
 	twentyMilliseconds := d.sampleRate / 50 * d.channels
-	if sampleCount == twentyMilliseconds {
-		return nil
+	// Redundancy ends in CELT state even when the main packet was SILK or
+	// Hybrid, matching the mode selected by decodePLCToFloat32.
+	mode := d.previousMode
+	if mode != 0 && d.previousRedundancy {
+		mode = configurationModeCELTOnly
 	}
-	if d.previousMode == configurationModeSilkOnly && !d.previousRedundancy &&
-		(sampleCount == 2*twentyMilliseconds || sampleCount == 3*twentyMilliseconds) {
+	switch sampleCount {
+	case twentyMilliseconds:
 		return nil
+	case twentyMilliseconds / 8, twentyMilliseconds / 4, twentyMilliseconds / 2:
+		if mode == configurationModeCELTOnly {
+			return nil
+		}
+	case 2 * twentyMilliseconds, 3 * twentyMilliseconds:
+		if mode == configurationModeSilkOnly {
+			return nil
+		}
 	}
 
 	return errInvalidPLCFrameSize
@@ -1589,8 +1600,16 @@ func (d *Decoder) DecodeToInt16(in []byte, out []int16) (int, error) {
 
 // DecodePLC recovers one missing packet into signed 16-bit PCM. SILK-only
 // packets may be concealed atomically for 20, 40, or 60 ms according to the
-// output length. CELT and Hybrid concealment currently support 20 ms.
+// output length. CELT concealment supports 2.5, 5, 10, or 20 ms, including
+// after a packet ending in CELT redundancy. Hybrid otherwise supports 20 ms.
+// The output length counts interleaved samples at the configured output rate
+// and channel count and must match the missing audio duration. Before the
+// first packet, only 20 ms is accepted and produces silence. Unsupported
+// lengths leave the output and decoder unchanged.
 func (d *Decoder) DecodePLC(out []int16) error {
+	if err := d.validatePLCOutput(len(out)); err != nil {
+		return err
+	}
 	d.floatBuffer = resizeFloat32Buffer(&d.floatBuffer, len(out))
 	if err := d.decodePLCToFloat32(d.floatBuffer); err != nil {
 		return err
