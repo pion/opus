@@ -196,24 +196,24 @@ func TestDecodePLCShortUnprimed(t *testing.T) {
 	}
 }
 
-// The reference fixture measures PCM differences, not bit-identical PLC:
-// Pion uses noise synthesis whereas libopus can use pitch-based concealment.
+// The reference fixture measures PCM differences, not bit-identical PLC.
+// Both decoders now implement periodic and noise-based concealment.
 // Range equality on valid recovery packets checks bitstream decoding; it does
 // not imply that synthesis history or recovery PCM are identical.
 func TestDecodePLCShortLibopus(t *testing.T) {
 	// Measured before the periodic PLC change, at c0d7ee63cecdc35aa81b83cbde40c70148da9e74.
 	baseline := [11][5]float64{
-		{411.123,598.648,930.163,1123.253,741.343},
-		{907.655,1089.174,1008.213,1023.022,747.966},
-		{1322.234,1372.677,1002.722,1013.598,744.928},
-		{1363.665,1329.767,1241.183,1111.643,743.134},
-		{1921.019,1953.856,1564.685,1652.217,947.452},
-		{2583.418,1812.759,1528.360,1387.674,867.552},
-		{2158.892,2029.657,1226.874,1250.920,813.806},
-		{2356.166,1818.070,1468.578,1225.252,780.990},
-		{1609.671,2054.622,1152.518,1196.385,1321.388},
-		{2020.477,2030.038,906.738,1196.104,1341.551},
-		{2199.725,1915.222,1210.131,1203.665,1340.951},
+		{411.123, 598.648, 930.163, 1123.253, 741.343},
+		{907.655, 1089.174, 1008.213, 1023.022, 747.966},
+		{1322.234, 1372.677, 1002.722, 1013.598, 744.928},
+		{1363.665, 1329.767, 1241.183, 1111.643, 743.134},
+		{1921.019, 1953.856, 1564.685, 1652.217, 947.452},
+		{2583.418, 1812.759, 1528.360, 1387.674, 867.552},
+		{2158.892, 2029.657, 1226.874, 1250.920, 813.806},
+		{2356.166, 1818.070, 1468.578, 1225.252, 780.990},
+		{1609.671, 2054.622, 1152.518, 1196.385, 1321.388},
+		{2020.477, 2030.038, 906.738, 1196.104, 1341.551},
+		{2199.725, 1915.222, 1210.131, 1203.665, 1340.951},
 	}
 	var fixture struct {
 		Pin   string `json:"pin"`
@@ -277,7 +277,7 @@ func TestDecodePLCShortLibopus(t *testing.T) {
 					prior := baseline[caseIndex][index-3]
 					require.LessOrEqual(t, math.Sqrt(squared/float64(len(out))), prior+1)
 					totalError += squared
-					baselineError += prior*prior*float64(len(out))
+					baselineError += prior * prior * float64(len(out))
 				}
 			}
 			if !test.Transition {
