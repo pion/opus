@@ -3,6 +3,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "opus.h"
+#ifdef PLC_TRACE
+#include "trace.h"
+#endif
 
 static void check(int result) {
     if (result < 0) {
@@ -46,6 +49,9 @@ static void run_case(int channels, int divisor, int transition) {
         if (!transition && (packet[0] >> 3) < 16) exit(2);
         int decoded = opus_decode(decoder, lost ? NULL : packet, lost ? 0 : bytes, output, samples / 3, 0);
         check(decoded);
+#ifdef PLC_TRACE
+        trace_plc(decoder);
+#endif
         if (decoded != samples / 3) exit(3);
         opus_uint32 final_range;
         check(opus_decoder_ctl(decoder, OPUS_GET_FINAL_RANGE(&final_range)));
