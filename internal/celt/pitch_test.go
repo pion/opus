@@ -30,11 +30,11 @@ func runPitchPipeline(pcm []float32) (int, float32) {
 	pitchLen := (combFilterMaxPeriod + frameSampleCount) >> 1
 	buf := make([]float32, pitchLen)
 	var scratch encoderScratch
-	pitchDownsample([][]float32{pcm}, buf, pitchLen, 2, &scratch)
+	pitchDownsample([][]float32{pcm}, buf, pitchLen, 2, &scratch.pitchScratch)
 
 	period := pitchSearch(
 		buf[combFilterMaxPeriod>>1:], buf,
-		frameSampleCount, combFilterMaxPeriod-3*combFilterMinPeriod, &scratch,
+		frameSampleCount, combFilterMaxPeriod-3*combFilterMinPeriod, &scratch.pitchScratch,
 	)
 	period = combFilterMaxPeriod - period
 	gain := removeDoubling(

@@ -96,6 +96,7 @@ func (d *Decoder) decodeFrameSideInfo(
 	d.decodeTransientFlag(&info)
 	d.decodeIntraEnergyFlag(&info)
 	d.prepareCoarseEnergyHistory(&info)
+	d.prepareRecoveryEnergy(&info)
 	d.decodeCoarseEnergy(&info)
 	d.decodeAllocationHeader(&info)
 	d.decodeAllocationAndFineEnergy(&info)

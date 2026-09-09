@@ -82,7 +82,9 @@ func TestDecodeLostFrameBypassesSilenceSideInfo(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, float32(2.5), decoder.previousLogE[0][0])
-	assert.Equal(t, float32(2.5), decoder.previousLogE[1][0])
+	// Noise PLC only updates the synthesis channels, unlike a decoded mono
+	// frame: the second prediction history remains available on recovery.
+	assert.Zero(t, decoder.previousLogE[1][0])
 	assert.NotZero(t, vectorEnergy(out))
 	assert.Zero(t, decoder.FinalRange())
 	assert.Equal(t, 1, decoder.lossCount)

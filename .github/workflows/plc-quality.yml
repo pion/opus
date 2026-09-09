@@ -1,0 +1,50 @@
+# SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
+# SPDX-License-Identifier: MIT
+name: PLC quality
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  compare:
+    name: Before/after (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: current
+      - uses: actions/checkout@v7
+        with:
+          repository: pion/opus
+          ref: c0d7ee63cecdc35aa81b83cbde40c70148da9e74
+          path: baseline
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.25'
+          cache-dependency-path: current/go.sum
+      - name: Measure unchanged base with the same compiler and race mode
+        working-directory: baseline
+        env:
+          PLC_CORPUS_PATH: ${{ github.workspace }}/current/testdata/short-plc/corpus.json.gz
+          PLC_BASELINE_OUTPUT: ${{ runner.temp }}/plc-baseline.json
+        run: |
+          cp ../current/decoder_plc_corpus_test.go ../current/decoder_plc_race_test.go ../current/decoder_plc_norace_test.go .
+          go test -race -run '^TestPLCCorpus$' -count=1 .
+      - name: Require exact no-loss PCM and loss/recovery improvement
+        working-directory: current
+        env:
+          PLC_BASELINE_PATH: ${{ runner.temp }}/plc-baseline.json
+        run: go test -race -run '^TestPLCCorpus$' -count=1 .
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: plc-baseline-${{ matrix.os }}
+          path: ${{ runner.temp }}/plc-baseline.json
+          if-no-files-found: error

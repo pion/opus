@@ -19,6 +19,8 @@ type Decoder struct {
 	preemphasisMem [2]float32
 	rng            uint32
 	lossCount      int
+	lossDuration   int
+	plc            plcState
 	scratch        *decoderScratch
 	cwrsRows       map[cwrsRowKey][]uint32
 }
@@ -47,6 +49,11 @@ func (d *Decoder) Reset() {
 	d.postfilter = postFilterState{}
 	d.rng = 0
 	d.lossCount = 0
+	d.lossDuration = 0
+	// OPUS_RESET_STATE sets skip_plc even though a brand-new custom CELT
+	// decoder starts it clear. The Opus layer emits silence before its first
+	// packet, so retaining the reset boundary is both exact and observable.
+	d.plc = plcState{skip: true}
 
 	for channelIndex := range d.overlap {
 		if cap(d.overlap[channelIndex]) < shortBlockSampleCount {
@@ -191,6 +198,9 @@ func (d *Decoder) decode(
 	if err != nil {
 		return err
 	}
+	if d.lossDuration == 0 {
+		d.plc.skip = false
+	}
 	if info.silence {
 		x := scratch.x[:frameSampleCount]
 		clear(x)
@@ -206,6 +216,7 @@ func (d *Decoder) decode(
 		}
 		d.denormaliseAndSynthesize(&info, x, y, [2][maxBands]float32{}, out)
 		d.updateLogEHistory(&info)
+		d.finishPLCRecovery(&info)
 		d.resetInactiveBandState(&info)
 		d.rng = d.rangeDecoder.FinalRange()
 		d.lossCount = 0
@@ -250,6 +261,7 @@ func (d *Decoder) decode(
 	bandEnergy := d.log2Amp(&info)
 	d.denormaliseAndSynthesize(&info, x, y, bandEnergy, out)
 	d.updateLogEHistory(&info)
+	d.finishPLCRecovery(&info)
 	d.resetInactiveBandState(&info)
 	d.rng = d.rangeDecoder.FinalRange()
 	d.lossCount = 0
@@ -271,19 +283,24 @@ func (d *Decoder) cwrsRowCache() map[cwrsRowKey][]uint32 {
 }
 
 func (d *Decoder) decodeLostFrame(info *frameSideInfo, out []float32) {
+	info.channelCount = info.outputChannelCount
+	if d.lossDuration < 40 && info.startBand == 0 && !d.plc.skip {
+		d.decodePeriodicPLC(info, out)
+		d.rangeDecoder = rangecoding.Decoder{}
+		d.lossCount = min(10000, d.lossCount+1)
+		d.lossDuration = min(10000, d.lossDuration+(1<<info.lm))
+
+		return
+	}
 	decay := float32(1.5)
 	if d.lossCount > 0 {
 		decay = 0.5
 	}
 	for channel := range info.channelCount {
 		for band := info.startBand; band < info.endBand; band++ {
-			d.previousLogE[channel][band] -= decay
+			d.previousLogE[channel][band] = max(d.plc.background[channel][band], d.previousLogE[channel][band]-decay)
 		}
 	}
-	if info.channelCount == 1 {
-		copy(d.previousLogE[1][:], d.previousLogE[0][:])
-	}
-
 	info.postFilter = postFilter{
 		enabled: d.postfilter.gain != 0,
 		period:  d.postfilter.period,
@@ -299,9 +316,6 @@ func (d *Decoder) decodeLostFrame(info *frameSideInfo, out []float32) {
 		clear(y)
 	}
 	seed := d.rng
-	if seed == 0 {
-		seed = 0x4A3B2C1D
-	}
 	channels := [2][]float32{x, y}
 	for channel := range info.channelCount {
 		for band := info.startBand; band < info.endBand; band++ {
@@ -318,7 +332,11 @@ func (d *Decoder) decodeLostFrame(info *frameSideInfo, out []float32) {
 	d.denormaliseAndSynthesize(info, x, y, d.log2Amp(info), out)
 	d.resetInactiveBandState(info)
 	d.rangeDecoder = rangecoding.Decoder{}
-	d.lossCount++
+	d.lossCount = min(10000, d.lossCount+1)
+	d.lossDuration = min(10000, d.lossDuration+(1<<info.lm))
+	d.plc.periodic = false
+	d.plc.skip = true
+	d.plc.fold = false
 }
 
 func infoFrameSampleCount(info *frameSideInfo) int {
