@@ -34,11 +34,9 @@ type plcCorpus struct {
 	}
 }
 type plcMeasurement struct {
-	RMSE     float64
-	Peak     int
-	Energy   float64
-	Boundary int
-	Hash     string
+	RMSE float64
+	Peak int
+	Hash string
 }
 
 func readPLCBaseline(t *testing.T) [][]plcMeasurement {
@@ -97,7 +95,6 @@ func TestPLCCorpus(t *testing.T) {
 			d, err := NewDecoderWithOutput(c.Rate, c.OutputChannels)
 			require.NoError(t, err)
 			var currentError, oldError float64
-			var previous int
 			results[ci] = make([]plcMeasurement, len(c.Steps))
 			for si, s := range c.Steps {
 				out := make([]int16, s.Samples*c.OutputChannels)
@@ -112,20 +109,18 @@ func TestPLCCorpus(t *testing.T) {
 				}
 				require.Equal(t, s.Range, d.rangeFinal, "step %d", si)
 				require.Len(t, s.PCM, len(out))
-				m := plcMeasurement{Boundary: int(out[0]) - previous}
+				m := plcMeasurement{}
 				var squared float64
 				bytes := make([]byte, 2*len(out))
 				for i, v := range out {
 					delta := int(v) - int(s.PCM[i])
-					squared += float64(delta * delta)
+					squared += float64(delta) * float64(delta)
 					m.Peak = max(m.Peak, int(math.Abs(float64(delta))))
-					m.Energy += float64(v) * float64(v)
 					binary.LittleEndian.PutUint16(bytes[i*2:], uint16(v))
 				}
 				hash := sha256.Sum256(bytes)
 				m.Hash = hex.EncodeToString(hash[:])
 				m.RMSE = math.Sqrt(squared / float64(len(out)))
-				previous = int(out[len(out)-c.OutputChannels])
 				results[ci][si] = m
 				if record == "" {
 					b := baseline[ci][si]

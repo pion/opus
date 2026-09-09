@@ -157,7 +157,11 @@ func (d *Decoder) decodePeriodicPLC(info *frameSideInfo, out []float32) {
 }
 
 // foldPLCOverlap translates libopus's folded half-window into this decoder's
-// full weighted overlap-add tail. It runs only on leaving periodic synthesis.
+// weighted overlap-add representation. libopus keeps an unwindowed decode_mem
+// tail and applies opposite window halves in the next MDCT; overlap stores the
+// already-folded value, so both contributions are combined here. The unused
+// second half is intentionally left clear. It runs only on leaving periodic
+// synthesis.
 func (d *Decoder) foldPLCOverlap(channel int) {
 	mem := d.plc.history[channel][:]
 	tmp := d.scratchBuffer().plc.fold[:]

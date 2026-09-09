@@ -50,6 +50,9 @@ func (d *Decoder) Reset() {
 	d.rng = 0
 	d.lossCount = 0
 	d.lossDuration = 0
+	// OPUS_RESET_STATE sets skip_plc even though a brand-new custom CELT
+	// decoder starts it clear. The Opus layer emits silence before its first
+	// packet, so retaining the reset boundary is both exact and observable.
 	d.plc = plcState{skip: true}
 
 	for channelIndex := range d.overlap {

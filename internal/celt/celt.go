@@ -38,7 +38,8 @@ type pitchScratch struct {
 	autocorr [pitchLPCOrder + 1]float32
 	lpc      [pitchLPCOrder]float32
 	// pitchSearch decimates by a further 2, so its buffers are a quarter of the
-	// window it is handed.
+	// window it is handed. PLC is the binding caller at 487 entries; encoder
+	// analysis reaches at most 484.
 	pitchX  [plcHistorySize >> 2]float32
 	pitchY  [plcHistorySize >> 2]float32
 	pitchXC [combFilterMaxPeriod >> 1]float32
