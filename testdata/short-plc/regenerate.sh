@@ -4,6 +4,12 @@
 set -euo pipefail
 # Argument: prepared, floating-point static build of the README's exact pin.
 src=$(realpath "${1:?provide the pinned libopus build directory}")
+expected_pin=22244de5a79bd1d6d623c32e72bf1954b56235be
+actual_pin=$(git -C "$src" rev-parse HEAD)
+if [[ "$actual_pin" != "$expected_pin" ]] || ! git -C "$src" diff --quiet HEAD --; then
+    echo "reference checkout must be clean at $expected_pin (got $actual_pin)" >&2
+    exit 1
+fi
 fixtures=$(cd "$(dirname "$0")" && pwd)
 work=$(mktemp -d)
 cd "$src"
