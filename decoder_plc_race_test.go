@@ -5,4 +5,7 @@
 
 package opus
 
-const plcBaselineRace = true
+const (
+	plcBaselineRace      = true
+	runPLCBitExactCorpus = false
+)

@@ -4,6 +4,7 @@
 package opus
 
 import (
+	"compress/gzip"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -91,6 +92,38 @@ func TestDecodePLCShortCELT(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestDecodePLCSplitsAtLastCELTFrameDuration(t *testing.T) {
+	file, err := os.Open("testdata/short-plc/corpus.json.gz")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, file.Close()) })
+	reader, err := gzip.NewReader(file)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reader.Close()) })
+	var corpus plcCorpus
+	require.NoError(t, json.NewDecoder(reader).Decode(&corpus))
+	packet, err := hex.DecodeString(corpus.Cases[3].Steps[14].Packet)
+	require.NoError(t, err)
+
+	aggregated, err := NewDecoderWithOutput(8000, 1)
+	require.NoError(t, err)
+	segmented, err := NewDecoderWithOutput(8000, 1)
+	require.NoError(t, err)
+	for _, decoder := range []*Decoder{&aggregated, &segmented} {
+		count, decodeErr := decoder.DecodeToInt16(packet, make([]int16, 80))
+		require.NoError(t, decodeErr)
+		require.Equal(t, 80, count)
+		require.Equal(t, 80, decoder.lastPacketFrameSamples)
+	}
+
+	actual := make([]int16, 160)
+	require.NoError(t, aggregated.DecodePLC(actual))
+	expected := make([]int16, 160)
+	require.NoError(t, segmented.DecodePLC(expected[:80]))
+	require.NoError(t, segmented.DecodePLC(expected[80:]))
+	require.Equal(t, expected, actual)
+	require.True(t, reflect.DeepEqual(segmented.celtDecoder, aggregated.celtDecoder))
 }
 
 func TestDecodePLCShortCELTInvalidLengthPreservesState(t *testing.T) {

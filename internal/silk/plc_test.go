@@ -4,88 +4,49 @@
 package silk
 
 import (
-	"math"
+	"encoding/json"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestDecodePLC(t *testing.T) {
+func TestDecodePLCReference(t *testing.T) {
+	data, err := os.ReadFile("../../testdata/short-plc/silk-direct-plc.json")
+	require.NoError(t, err)
+	var reference struct {
+		Pin    string
+		Frames [][]int16
+	}
+	require.NoError(t, json.Unmarshal(data, &reference))
+	require.Equal(t, "22244de5a79bd1d6d623c32e72bf1954b56235be", reference.Pin)
+	require.Len(t, reference.Frames, 4)
+
 	decoder := NewDecoder()
 	initialPLC := make([]float32, 320)
 	require.NoError(t, decoder.DecodePLC(initialPLC, false, 1, nanoseconds20Ms, BandwidthWideband))
-	assert.Zero(t, signalEnergy(initialPLC))
+	require.Zero(t, signalEnergy(initialPLC))
 
-	decoded := make([]float32, 320)
-	require.NoError(t, decoder.Decode(testSilkFrame(), decoded, false, nanoseconds20Ms, BandwidthWideband))
-
-	firstPLC := make([]float32, 320)
-	require.NoError(t, decoder.DecodePLC(firstPLC, false, 1, nanoseconds20Ms, BandwidthWideband))
-	firstEnergy := signalEnergy(firstPLC)
-	for _, sample := range firstPLC {
-		assert.False(t, math.IsNaN(float64(sample)))
-		assert.False(t, math.IsInf(float64(sample), 0))
+	frames := [][]byte{
+		testSilkFrame(),
+		{0x07, 0xc9, 0x72, 0x27, 0xe1, 0x44, 0xea, 0x50},
 	}
-	assert.Equal(t, 1, decoder.plcLossCount)
-
-	secondPLC := make([]float32, 320)
-	require.NoError(t, decoder.DecodePLC(secondPLC, false, 1, nanoseconds20Ms, BandwidthWideband))
-	assert.LessOrEqual(t, signalEnergy(secondPLC), firstEnergy)
-
-	recovered := make([]float32, 320)
-	require.NoError(t, decoder.Decode(testSilkFrame(), recovered, false, nanoseconds20Ms, BandwidthWideband))
-	for _, sample := range recovered {
-		assert.False(t, math.IsNaN(float64(sample)))
-		assert.False(t, math.IsInf(float64(sample), 0))
+	for step, expected := range reference.Frames {
+		actual := make([]float32, len(expected))
+		switch step {
+		case 0:
+			require.NoError(t, decoder.Decode(frames[0], actual, false, nanoseconds20Ms, BandwidthWideband))
+		case 1, 2:
+			require.NoError(t, decoder.DecodePLC(actual, false, 1, nanoseconds20Ms, BandwidthWideband))
+		case 3:
+			require.NoError(t, decoder.Decode(frames[1], actual, false, nanoseconds20Ms, BandwidthWideband))
+		}
+		for i, sample := range actual {
+			require.Equal(t, expected[i], int16(sample*32768), "step %d sample %d", step, i)
+		}
 	}
-	assert.Zero(t, decoder.plcLossCount)
-}
-
-func TestDecodePLCStereoToMono(t *testing.T) {
-	decoder := NewDecoder()
-	decoder.haveDecoded = true
-	decoder.sideDecoder.haveDecoded = true
-	for i := range decoder.finalOutValues {
-		decoder.finalOutValues[i] = float32(i%17) / 17
-		decoder.sideDecoder.finalOutValues[i] = float32(i%11) / 22
-	}
-
-	out := make([]float32, 320)
-	require.NoError(t, decoder.DecodePLC(
-		out,
-		true,
-		1,
-		nanoseconds20Ms,
-		BandwidthWideband,
-	))
-	assert.Positive(t, signalEnergy(out))
-}
-
-func TestDecodePLCVoiced(t *testing.T) {
-	decoder := NewDecoder()
-	decoder.haveDecoded = true
-	decoder.isPreviousFrameVoiced = true
-	decoder.previousLag = 100
-	decoder.pitchLags = []int{100}
-	decoder.n0Q15 = make([]int16, 16)
-	for i := range decoder.finalOutValues {
-		decoder.finalOutValues[i] = float32(i%20-10) / 10
-	}
-
-	firstPLC := make([]float32, 320)
-	require.NoError(t, decoder.DecodePLC(firstPLC, false, 1, nanoseconds20Ms, BandwidthWideband))
-	firstEnergy := signalEnergy(firstPLC)
-	assert.Positive(t, firstEnergy)
-	assert.Equal(t, 101, decoder.previousLag)
-	assert.Len(t, decoder.previousFrameLPCValues, len(decoder.n0Q15))
-
-	decoder.pitchLags = nil
-	secondPLC := make([]float32, 320)
-	require.NoError(t, decoder.DecodePLC(secondPLC, false, 1, nanoseconds20Ms, BandwidthWideband))
-	assert.Less(t, signalEnergy(secondPLC), firstEnergy)
-	assert.Equal(t, 2, decoder.plcLossCount)
-	assert.Equal(t, 102, decoder.previousLag)
+	require.Zero(t, decoder.plcLossCount)
 }
 
 func TestDecodePLCValidation(t *testing.T) {
@@ -96,19 +57,4 @@ func TestDecodePLCValidation(t *testing.T) {
 	assert.ErrorIs(t, decoder.DecodePLC(out, false, 0, nanoseconds20Ms, BandwidthWideband), errOutBufferTooSmall)
 	assert.ErrorIs(t, decoder.DecodePLC(out, false, 1, 0, BandwidthWideband), errUnsupportedSilkFrameDuration)
 	assert.ErrorIs(t, decoder.DecodePLC(out[:319], false, 1, nanoseconds20Ms, BandwidthWideband), errOutBufferTooSmall)
-}
-
-func TestDecodePLCStereoMidOnly(t *testing.T) {
-	decoder := NewDecoder()
-	decoder.haveDecoded = true
-	decoder.sideDecoder = nil
-	decoder.previousDecodeOnlyMid = true
-	for i := range decoder.finalOutValues {
-		decoder.finalOutValues[i] = float32(i%17) / 17
-	}
-
-	out := make([]float32, 640)
-	require.NoError(t, decoder.DecodePLC(out, true, 2, nanoseconds20Ms, BandwidthWideband))
-	assert.NotNil(t, decoder.sideDecoder)
-	assert.Positive(t, signalEnergy(out))
 }

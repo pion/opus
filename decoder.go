@@ -56,6 +56,7 @@ type Decoder struct {
 	channels               int
 	lastPacketBandwidth    Bandwidth
 	lastPacketIsStereo     bool
+	lastPacketFrameSamples int
 }
 
 type silkRedundancyFade struct {
@@ -125,6 +126,7 @@ func (d *Decoder) Init(sampleRate, channels int) error {
 	d.previousRedundancy = false
 	d.lastPacketBandwidth = 0
 	d.lastPacketIsStereo = false
+	d.lastPacketFrameSamples = 0
 
 	return nil
 }
@@ -1234,10 +1236,13 @@ func (d *Decoder) decodeToFloat32(
 	if err != nil {
 		return 0, 0, false, err
 	}
+	frameDuration := tableOfContentsHeader(in[0]).configuration().frameDuration().nanoseconds()
+	d.lastPacketFrameSamples = int(int64(d.sampleRate) * int64(frameDuration) / 1000000000)
 
 	return samplesPerChannel, bandwidth, isStereo, nil
 }
 
+//nolint:cyclop // Explicit mode dispatch and bounded frame segmentation match opus_decode_native.
 func (d *Decoder) decodePLCToFloat32(out []float32) error {
 	if err := d.validatePLCOutput(len(out)); err != nil {
 		return err
@@ -1253,20 +1258,30 @@ func (d *Decoder) decodePLCToFloat32(out []float32) error {
 	if d.previousRedundancy {
 		mode = configurationModeCELTOnly
 	}
-	samplesPerChannel := len(out) / d.channels
-	var err error
-	switch mode {
-	case configurationModeSilkOnly:
-		err = d.decodeSilkPLCFrame(out, samplesPerChannel, d.lastPacketBandwidth, false)
-	case configurationModeCELTOnly:
-		err = d.decodeCeltPLCFrame(out, samplesPerChannel, false)
-	case configurationModeHybrid:
-		err = d.decodeHybridPLCFrame(out, samplesPerChannel)
-	default:
-		err = fmt.Errorf("%w: %d", errUnsupportedConfigurationMode, mode)
+	remaining := len(out) / d.channels
+	frameSamples := min(d.lastPacketFrameSamples, d.sampleRate/50)
+	if frameSamples == 0 {
+		frameSamples = remaining
 	}
-	if err != nil {
-		return err
+	for offset := 0; remaining > 0; {
+		samplesPerChannel := min(remaining, frameSamples)
+		frameOut := out[offset*d.channels : (offset+samplesPerChannel)*d.channels]
+		var err error
+		switch mode {
+		case configurationModeSilkOnly:
+			err = d.decodeSilkPLCFrame(frameOut, samplesPerChannel, d.lastPacketBandwidth, false)
+		case configurationModeCELTOnly:
+			err = d.decodeCeltPLCFrame(frameOut, samplesPerChannel, false)
+		case configurationModeHybrid:
+			err = d.decodeHybridPLCFrame(frameOut, samplesPerChannel)
+		default:
+			err = fmt.Errorf("%w: %d", errUnsupportedConfigurationMode, mode)
+		}
+		if err != nil {
+			return err
+		}
+		offset += samplesPerChannel
+		remaining -= samplesPerChannel
 	}
 	d.rangeFinal = 0
 
@@ -1676,6 +1691,7 @@ func (d *Decoder) DecodePLC(out []int16) error {
 	if err := d.decodePLCToFloat32(d.floatBuffer); err != nil {
 		return err
 	}
+	softClip(d.floatBuffer, d.channels, &d.softClipMem)
 	float32ToInt16(d.floatBuffer, out, len(out))
 
 	return nil

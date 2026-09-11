@@ -89,6 +89,7 @@ type Decoder struct {
 	fixedSLTPQ15          [2 * maxFrameLength]int32
 	fixedResQ14           [maxSubFrameLength]int32
 	fixedSLPCScratch      [maxSubFrameLength + maxPredictLPCOrder]int32
+	fixedExcQ14           [maxFrameLength]int32
 	fixedStateValid       bool
 	fixedStereoMid        [2]int16
 	fixedStereoSide       [2]int16
@@ -96,6 +97,9 @@ type Decoder struct {
 	plcLossCount          int
 	plcRandSeed           uint32
 	plcConcealedEnergy    float64
+	fixedPLC              fixedPLCState
+	fixedCNG              fixedCNGState
+	fixedFirstFrame       bool
 }
 
 // NewDecoder creates a new Silk Decoder.
@@ -106,6 +110,7 @@ func NewDecoder() Decoder {
 		aQ12Sets:         make([][]float32, 0, 2),
 		fixedPrevGainQ16: 65536,
 		fixedStateValid:  true,
+		fixedFirstFrame:  true,
 	}
 }
 
@@ -115,6 +120,7 @@ func newChannelDecoder() *Decoder {
 		aQ12Sets:         make([][]float32, 0, 2),
 		fixedPrevGainQ16: 65536,
 		fixedStateValid:  true,
+		fixedFirstFrame:  true,
 	}
 }
 
@@ -128,7 +134,11 @@ func (d *Decoder) resetPredictionState() {
 	d.fixedPrevGainQ16 = 65536
 	clear(d.fixedSLPCQ14[:])
 	clear(d.fixedOutBuf[:])
+	clear(d.fixedExcQ14[:])
 	d.fixedStateValid = true
+	d.fixedFirstFrame = true
+	d.fixedPLC = fixedPLCState{}
+	d.fixedCNG = fixedCNGState{}
 	d.n0Q15 = nil
 	d.plcLossCount = 0
 	d.plcRandSeed = 0
@@ -2144,6 +2154,14 @@ func (d *Decoder) decodeFrame(
 	aQ12 = d.generateAQ12(n1Q15, bandwidth, aQ12)
 	aQ12 = d.generateAQ12(nlsfQ15, bandwidth, aQ12)
 	d.aQ12Sets = aQ12
+	if d.plcLossCount > 0 {
+		for slot := range aQ12 {
+			bwexpandFixed16(d.aQ12Int[slot], 63570)
+			for i, coefficient := range d.aQ12Int[slot] {
+				aQ12[slot][i] = float32(coefficient)
+			}
+		}
+	}
 
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.6.1
 	lagMax, pitchLags := d.decodePitchLags(signalType, bandwidth, nanoseconds, isFirstSilkFrameInOpusFrame)
@@ -2183,9 +2201,26 @@ func (d *Decoder) decodeFrame(
 		aQ12,
 		gainQ16, out,
 	)
-	d.gluePLCFrame(out)
+	if d.fixedStateValid {
+		for i, excitation := range eQ23 {
+			d.fixedExcQ14[i] = excitation << 6
+		}
+		d.updateFixedPLC(signalType, subframeCount, bandwidth, pitchLags, bQ7, int16(ltpScaleQ14))
+		d.plcLossCount = 0
+		d.applyFixedCNG(d.fixedPCM[:len(out)], signalType, bandwidth, subframeCount, nlsfQ15)
+		d.glueFixedPLC(d.fixedPCM[:len(out)])
+		for i, sample := range d.fixedPCM[:len(out)] {
+			out[i] = float32(sample) / 32768
+		}
+		d.fixedFirstFrame = false
+	} else {
+		d.gluePLCFrame(out)
+	}
 
 	d.isPreviousFrameVoiced = signalType == frameSignalTypeVoiced
+	if signalType != frameSignalTypeVoiced {
+		d.previousLag = 0
+	}
 	d.plcRandSeed = lcgSeed
 
 	// n0Q15 is the LSF coefficients decoded for the prior frame

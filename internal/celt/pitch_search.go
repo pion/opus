@@ -218,6 +218,8 @@ func refineXcorr(xLP, y, xcorr []float32, length, maxPitch int, coarse [2]int) {
 // pitchSearch finds the lag of the strongest correlation between xLP and y.
 // Port of libopus pitch_search: a coarse pass on a further 2x decimation, then
 // a finer pass restricted to the neighborhood of the two best coarse lags.
+//
+//nolint:dupl // PLC has a decoder-specific float32 correlation variant.
 func pitchSearch(xLP, y []float32, length, maxPitch int, scratch *pitchScratch) int {
 	lag := length + maxPitch
 

@@ -81,6 +81,18 @@ func TestPLCCorpus(t *testing.T) {
 	var corpus plcCorpus
 	require.NoError(t, json.NewDecoder(z).Decode(&corpus))
 	require.Equal(t, "22244de5a79bd1d6d623c32e72bf1954b56235be", corpus.Pin)
+	require.Len(t, corpus.Cases, 1300)
+	totalSteps, totalLosses := 0, 0
+	for _, scenario := range corpus.Cases {
+		totalSteps += len(scenario.Steps)
+		for _, frame := range scenario.Steps {
+			if frame.Packet == "" {
+				totalLosses++
+			}
+		}
+	}
+	require.Equal(t, 28_600, totalSteps)
+	require.Equal(t, 10_620, totalLosses)
 	var baseline [][]plcMeasurement
 	record := os.Getenv("PLC_BASELINE_OUTPUT")
 	if record == "" {
@@ -89,6 +101,9 @@ func TestPLCCorpus(t *testing.T) {
 	}
 	results := make([][]plcMeasurement, len(corpus.Cases))
 	for ci, c := range corpus.Cases {
+		if record == "" {
+			require.Len(t, baseline[ci], len(c.Steps), "case %d", ci)
+		}
 		name := fmt.Sprintf("%03d/signal%d/%dto%d/%d/mode%d/sequence%d",
 			ci, c.Signal, c.Channels, c.OutputChannels, c.Rate, c.Mode, c.Sequence)
 		t.Run(name, func(t *testing.T) {
@@ -124,11 +139,7 @@ func TestPLCCorpus(t *testing.T) {
 				results[ci][si] = m
 				if record == "" {
 					b := baseline[ci][si]
-					// Exact received-frame reconstruction changes the state consumed by
-					// the approximate PLC from #246. Bound individual drift while the
-					// aggregate gate below still requires the periodic PLC improvement.
-					limit := max(b.RMSE+1, b.RMSE*1.5)
-					require.LessOrEqual(t, m.RMSE, limit, "step %d: RMSE %.6f vs baseline %.6f", si, m.RMSE, b.RMSE)
+					require.LessOrEqual(t, m.RMSE, b.RMSE+1, "step %d: RMSE %.6f vs baseline %.6f", si, m.RMSE, b.RMSE)
 					if c.Sequence == 2 || si < 4 {
 						require.Zero(t, squared, "reference no-loss PCM mismatch, step %d", si)
 					}
