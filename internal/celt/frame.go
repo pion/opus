@@ -283,11 +283,13 @@ func (d *Decoder) decodeCoarseEnergy(info *frameSideInfo) {
 			qi := d.decodeCoarseEnergyDelta(info, probModel[:], band)
 			q := float32(qi)
 			oldEnergy := max(float32(-9), d.previousLogE[channel][band])
-			energy := coef*oldEnergy + previousBandPrediction[channel] + q
+			energy := decoderRoundedProduct(coef, oldEnergy) + previousBandPrediction[channel]
+			energy += q
 
 			d.previousLogE[channel][band] = energy
 			info.coarseEnergy[channel][band] = energy
-			previousBandPrediction[channel] += q - beta*q
+			previousBandPrediction[channel] += q
+			previousBandPrediction[channel] -= decoderRoundedProduct(beta, q)
 		}
 	}
 	if info.channelCount == 1 {

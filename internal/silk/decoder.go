@@ -80,6 +80,19 @@ type Decoder struct {
 	pitchLags             []int
 	bQ7                   [][]int8
 	bQ7Data               []int8
+	gainQ16Int            []int32
+	fixedPrevGainQ16      int32
+	fixedSLPCQ14          [maxPredictLPCOrder]int32
+	fixedOutBuf           [maxFrameLength + 2*maxSubFrameLength]int16
+	fixedPCM              [maxFrameLength]int16
+	fixedSLTP             [maxFrameLength]int16
+	fixedSLTPQ15          [2 * maxFrameLength]int32
+	fixedResQ14           [maxSubFrameLength]int32
+	fixedSLPCScratch      [maxSubFrameLength + maxPredictLPCOrder]int32
+	fixedStateValid       bool
+	fixedStereoMid        [2]int16
+	fixedStereoSide       [2]int16
+	fixedStereoPredQ13    [2]int32
 	plcLossCount          int
 	plcRandSeed           uint32
 	plcConcealedEnergy    float64
@@ -88,16 +101,20 @@ type Decoder struct {
 // NewDecoder creates a new Silk Decoder.
 func NewDecoder() Decoder {
 	return Decoder{
-		sideDecoder:    newChannelDecoder(),
-		finalOutValues: make([]float32, 306),
-		aQ12Sets:       make([][]float32, 0, 2),
+		sideDecoder:      newChannelDecoder(),
+		finalOutValues:   make([]float32, 306),
+		aQ12Sets:         make([][]float32, 0, 2),
+		fixedPrevGainQ16: 65536,
+		fixedStateValid:  true,
 	}
 }
 
 func newChannelDecoder() *Decoder {
 	return &Decoder{
-		finalOutValues: make([]float32, 306),
-		aQ12Sets:       make([][]float32, 0, 2),
+		finalOutValues:   make([]float32, 306),
+		aQ12Sets:         make([][]float32, 0, 2),
+		fixedPrevGainQ16: 65536,
+		fixedStateValid:  true,
 	}
 }
 
@@ -108,6 +125,10 @@ func (d *Decoder) resetPredictionState() {
 	d.previousLogGain = 10
 	d.previousFrameLPCValues = nil
 	clear(d.finalOutValues)
+	d.fixedPrevGainQ16 = 65536
+	clear(d.fixedSLPCQ14[:])
+	clear(d.fixedOutBuf[:])
+	d.fixedStateValid = true
 	d.n0Q15 = nil
 	d.plcLossCount = 0
 	d.plcRandSeed = 0
@@ -299,6 +320,7 @@ func (d *Decoder) decodeSubframeQuantizations(
 ) (gainQ16 []float32) {
 	var logGain, deltaGainIndex, gainIndex int32
 	gainQ16 = slicetools.ResizeZero(&d.gainQ16, subframeCount)
+	gainQ16Int := slicetools.ResizeZero(&d.gainQ16Int, subframeCount)
 
 	for subframeIndex := range subframeCount {
 		// The subframe gains are either coded independently, or relative to the
@@ -374,7 +396,9 @@ func (d *Decoder) decodeSubframeQuantizations(
 		// between 81920 and 1686110208, inclusive (representing scale factors
 		// of 1.25 to 25728, respectively).
 
-		gainQ16[subframeIndex] = float32((1 << i) + ((-174*f*(128-f)>>16)+f)*((1<<i)>>7))
+		gain := (1 << i) + ((-174*f*(128-f)>>16)+f)*((1<<i)>>7)
+		gainQ16Int[subframeIndex] = gain
+		gainQ16[subframeIndex] = float32(gain)
 	}
 
 	return gainQ16
@@ -1616,9 +1640,13 @@ func (d *Decoder) decodeLTPScalingParameter(
 	//       indicate the previous LBRR frame in the same channel is not
 	//       coded.
 
-	// Frames that do not code the scaling parameter
-	//    use the default factor of 15565 (approximately 0.95).
-	if signalType != frameSignalTypeVoiced || !isFirstSilkFrameInOpusFrame {
+	// Non-first voiced frames use the default factor of 15565
+	// (approximately 0.95). Unvoiced frames clear the decoder-control value;
+	// that zero is observable during voiced-PLC to unvoiced recovery.
+	if signalType != frameSignalTypeVoiced {
+		return 0
+	}
+	if !isFirstSilkFrameInOpusFrame {
 		return 15565.0
 	}
 
@@ -1998,6 +2026,21 @@ func (d *Decoder) silkFrameReconstruction(
 	aQ12 [][]float32,
 	gainQ16, out []float32,
 ) {
+	if d.silkFrameReconstructionFixed(
+		signalType,
+		bandwidth,
+		subframeCount,
+		dLPC,
+		bQ7,
+		pitchLags,
+		eQ23,
+		ltpScaleQ14,
+		wQ2,
+		out,
+	) {
+		return
+	}
+
 	// let n be the number of samples in a subframe
 	//
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9
@@ -2235,6 +2278,8 @@ func (d *Decoder) delayMid(out []float32) {
 	}
 
 	d.previousMidValues = previousMidValues
+	d.fixedStereoMid[0] = int16(previousMidValues[0] * 32768)
+	d.fixedStereoMid[1] = int16(previousMidValues[1] * 32768)
 }
 
 // RFC 6716 Section 4.2.8 applies a one-sample delay to mono output so mono
@@ -2330,6 +2375,10 @@ func (d *Decoder) writeStereoFrame(
 ) {
 	if outputStereo {
 		frameOut := out[frameIndex*frameSampleCount*2 : (frameIndex+1)*frameSampleCount*2]
+		if d.fixedStateValid && d.sideDecoder.fixedStateValid &&
+			d.stereoUnmixFixed(mid, side, frameOut, w0Q13, w1Q13, bandwidth) {
+			return
+		}
 		d.stereoUnmix(mid, side, frameOut, w0Q13, w1Q13, bandwidth)
 
 		return
@@ -2370,6 +2419,8 @@ func (d *Decoder) decodeStereo(
 	if !d.wasStereo {
 		d.previousStereoWeights = [2]int32{}
 		d.previousSideValue = 0
+		d.fixedStereoPredQ13 = [2]int32{}
+		d.fixedStereoSide = [2]int16{}
 		d.sideDecoder = newChannelDecoder()
 		d.resetSideDecoderPrediction()
 		d.previousDecodeOnlyMid = false
