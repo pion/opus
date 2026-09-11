@@ -296,7 +296,7 @@ func quantBand(
 		}
 		for k := range recombine {
 			if lowband != nil {
-				haar1(lowband, n>>k, 1<<k)
+				decoderHaar1(lowband, n>>k, 1<<k)
 			}
 			fill = bitInterleave(fill)
 		}
@@ -304,7 +304,7 @@ func quantBand(
 		nPerBlock <<= recombine
 		for (nPerBlock&1) == 0 && tfChange < 0 {
 			if lowband != nil {
-				haar1(lowband, nPerBlock, blocks)
+				decoderHaar1(lowband, nPerBlock, blocks)
 			}
 			fill |= fill << blocks
 			blocks <<= 1
@@ -410,10 +410,10 @@ func quantBand(
 			collapseMask = quantBand(band, x2, nil, n, midBits, spread, blocks, intensity, tfChange, lowband, remainingBits, lm, lowbandOut, level, gain, lowbandScratch, originalFill, state)
 			y2[0] = -signScale * x2[1]
 			y2[1] = signScale * x2[0]
-			x0 := mid * x[0]
-			x1 := mid * x[1]
-			y0 := side * y[0]
-			y1 := side * y[1]
+			x0 := decoderRoundedProduct(mid, x[0])
+			x1 := decoderRoundedProduct(mid, x[1])
+			y0 := decoderRoundedProduct(side, y[0])
+			y1 := decoderRoundedProduct(side, y[1])
 			x[0] = x0 - y0
 			y[0] = x0 + y0
 			x[1] = x1 - y1
@@ -508,14 +508,14 @@ func quantBand(
 					}
 					collapseMask = fill
 				}
-				renormaliseVector(x, n, gain)
+				decoderRenormaliseVector(x, n, gain)
 			}
 		}
 	}
 
 	if stereo {
 		if n != 2 {
-			stereoMerge(x, y, mid, n)
+			decoderStereoMerge(x, y, mid, n)
 		}
 		if invert {
 			for i := range n {
@@ -533,11 +533,11 @@ func quantBand(
 			blocks >>= 1
 			nPerBlock <<= 1
 			collapseMask |= collapseMask >> blocks
-			haar1(x, nPerBlock, blocks)
+			decoderHaar1(x, nPerBlock, blocks)
 		}
 		for k := range recombine {
 			collapseMask = bitDeinterleave(collapseMask)
-			haar1(x, originalN>>k, 1<<k)
+			decoderHaar1(x, originalN>>k, 1<<k)
 		}
 		blocks <<= recombine
 		if lowbandOut != nil {
