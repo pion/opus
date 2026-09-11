@@ -32,6 +32,9 @@ jobs:
       - name: Require exact soft clipping without race instrumentation
         working-directory: current
         run: go test -run '^TestSoftClipLibopusReference$' -count=1 .
+      - name: Require exact PLC corpus
+        working-directory: current
+        run: go test -run '^TestPLCBitExactCorpus$' -count=1 .
       - name: Measure unchanged base with the same compiler and race mode
         working-directory: baseline
         env:

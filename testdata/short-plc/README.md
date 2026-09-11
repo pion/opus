@@ -1,7 +1,7 @@
 <!-- SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly> -->
 <!-- SPDX-License-Identifier: MIT -->
 
-# Short CELT PLC reference fixture
+# Decoder and PLC reference fixtures
 
 `libopus.json` is generated from synthetic integer PCM by `generate.c`, using
 Xiph libopus commit `22244de5a79bd1d6d623c32e72bf1954b56235be` (1.6.1).
@@ -24,6 +24,9 @@ git checkout --detach 22244de5a79bd1d6d623c32e72bf1954b56235be
 make -j4
 cc -O2 -Iinclude /path/to/pion/opus/testdata/short-plc/generate.c .libs/libopus.a -lm -o generate
 ./generate > /path/to/pion/opus/testdata/short-plc/libopus.json
+bash /path/to/pion/opus/testdata/short-plc/regenerate.sh \
+  /path/to/prepared/libopus \
+  /path/to/rfc8251/opus_newvectors/testvector02.dec
 ```
 
 Recorded with GCC 13.3.0, Linux/amd64; floating-point build, default fast
@@ -72,11 +75,15 @@ At 100 ms consecutive concealment, Hybrid start bands, or when periodic PLC
 is not ready, it uses noise. Noise recovery needs two consecutive received
 frames before periodic PLC is enabled again. No public API or dependencies change.
 
-`corpus.c` supplies 502 deterministic streams: sawtooth, frequency change,
-decay, seeded noise, impulses and silence; all five API rates, mono/stereo and
-channel conversion; short and mixed frames, long bursts through the noise
-threshold, losses after one/two received packets, channel switching,
-SILK-to-CELT, CELT-to-SILK and Hybrid. The encoder advances even for lost frames.
+The first 502 rows from `corpus.c` preserve the #246 deterministic matrix:
+sawtooth, frequency change, decay, seeded noise, impulses and silence; all five
+API rates, mono/stereo and channel conversion; short and mixed frames, long
+bursts through the noise threshold, losses after one/two received packets,
+channel switching, SILK-to-CELT, CELT-to-SILK and Hybrid. The bit-exact follow-up
+extends that matrix to 1300 rows with pure SILK and Hybrid duration/channel
+coverage plus 50 rows generated from RFC 8251 `testvector02.dec`. Its published
+SHA-1 is `48ac1ff1995250a756e1e17bd32acefa8cd2b820`; regeneration checks it before use.
+The encoder advances even for lost frames.
 `corpus.json.gz` contains the public API reference PCM and packets.
 `corpus-state.jsonl.gz` contains per-step type, loss duration, skip flag, pitch,
 and four two-channel energy histories from the reference.
@@ -105,17 +112,21 @@ and observation-only generators and requires byte-identical output before
 writing fixtures. The original short fixture remains byte-identical too.
 
 ```sh
-bash testdata/short-plc/regenerate.sh /path/to/prepared/pinned/libopus
-go test -run 'TestDecodePLCShortLibopus|TestPLCCorpus|TestCELTPLCWarmAllocations' .
+bash testdata/short-plc/regenerate.sh \
+  /path/to/prepared/pinned/libopus \
+  /path/to/rfc8251/opus_newvectors/testvector02.dec
+go test -run 'TestDecodePLCShortLibopus|TestPLCCorpus|TestPLCBitExactCorpus|TestCELTPLCWarmAllocations|TestSILKAndHybridPLCWarmAllocations' .
 go test -run 'TestPLC|TestRecoveryEnergy' ./internal/celt
 ```
 
 Recorded SHA-256:
 
 - Uncompressed corpus, plain **and** traced:
-  `3500d49486124ff7e786e0ce03a1df56e194fcee41bc4898558b935d84776f23`.
+  `673519e90be9ca1e65cd55aa0ee764043baeec3a05a0328d74be41a89b60477c`.
 - `corpus.json.gz`:
-  `7ddc981676df11fb0b01764fed3b63862cf371ccb82ccacabc18142027a17997`.
+  `525df230044aa05e0cb6ea0a99ac9c6d7551464d99d300a3e49153c1c0a09f3e`.
+- `corpus-state.jsonl.gz`:
+  `0a48c63b8b88f5ede45604697496cdc31f33cb5127cb06ee95cecf441270c9d1`.
 - Original `libopus.json`:
   `0e892bfe2ea415efe277d9f063d46d6bd13c244f5c1e3d9da076c90616ddf426`.
 
@@ -218,6 +229,95 @@ The resident-memory tradeoff on amd64 is separate from per-call allocation:
 materializing its scratch therefore retains about 41 KiB more state, primarily
 for bounded PLC history and work buffers.
 
-The periodic synthesis and recovery predictor retain the BSD-2-Clause notices
-of libopus authors alongside Pion's MIT contributions; see the source headers
-and `LICENSES/BSD-2-Clause.txt`.
+### Bit-exact follow-up
+
+The follow-up starts at Pion `9e3044b1a141f594491a2b9abba30d70c2da9d1a`.
+Its reference is libopus `22244de5a79bd1d6d623c32e72bf1954b56235be`,
+generic floating point, fast float approximations enabled, intrinsics/RTCD and
+neural PLC/DRED disabled, with `OPUS_SET_PHASE_INVERSION_DISABLED(0)`.
+
+`TestPLCBitExactCorpus` checks 1300 scenarios, 28,600 decode steps and 10,620
+loss requests. It requires exact sample counts, final ranges and every int16
+sample before loss, during concealment and after recovery. Current result is
+zero unequal samples across CELT, SILK, Hybrid, both forced transition
+directions, all five public output rates, mono/stereo conversion, channel-count
+changes, supported short/mixed/40/60 ms durations, the 100 ms noise boundary,
+recovery and a new loss after received packets. Modes are recorded as 0 CELT,
+1 SILK→CELT, 2 Hybrid, 3 CELT→SILK and 4 SILK. Signal 6 is the RFC 8251 PCM;
+signals 0–5 are the deterministic synthetic classes above.
+
+The first historical CELT mismatch was sample 28 (`-734` versus `-733`), and
+its float values already differed before int16 conversion. Observation-only
+fixtures localize the fixes through PVQ normalization/rotation, decoder-only
+amplitude math, inverse MDCT, synthesis, pitch/LPC and overlap. SILK fixtures
+compare fixed-point excitation, LPC/LTP state, gain, CNG, PRNG, stereo and
+resampling. CELT PLC fixtures compare periodic and noise state, exact pitch,
+autocorrelation, FIR/IIR order, energy history and recovery overlap. The
+high-amplitude RFC rows additionally caught a missing integer-path soft clip;
+all integer entry points now share its inter-frame state while float entry
+points clear it like `opus_decode_float`.
+
+Every diagnostic corpus build is compared byte-for-byte with the plain build
+before a fixture is accepted. Diagnostic observation therefore has zero PCM
+effect. Decoder-specific arithmetic is isolated from encoder helpers.
+
+Decoder float32 products that feed reference-ordered additions use explicit
+rounding barriers. This prevents Go's ARM64 backend from contracting them into
+FMA instructions and keeps the accepted PCM identical to amd64; encoder
+analysis helpers retain their existing arithmetic.
+
+Run the strict and broad gates with:
+
+```sh
+go test . -run '^TestPLCBitExactCorpus$' -count=1
+go test ./... -count=1
+go test -race ./... -count=1
+go vet ./...
+go build ./...
+go mod verify
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.10.1 run
+```
+
+The RFC 6716/8251 conformance test also passes all 120 combinations of 12
+published bitstreams, five output rates and mono/stereo output against
+`opus_compare`. Fuzz runs cover the public decoder, CELT PLC sequences and the
+range coder. This exact result is scoped to the pinned profile and accepted
+corpus; it is not a claim for every libopus build option or neural PLC.
+
+### Current cost
+
+Median of three 200-iteration runs, Windows/amd64, Go 1.26.1, AMD Ryzen 9
+9950X3D. Times are microseconds per operation after fixture setup.
+
+| Mode/path | Mono | Stereo |
+| --- | ---: | ---: |
+| CELT normal | 14.71 | 28.12 |
+| CELT first periodic loss | 64.97 | 109.01 |
+| CELT repeated periodic loss | 23.81 | 57.72 |
+| CELT noise PLC | 8.22 | 14.88 |
+| Hybrid normal | 31.65 | 63.49 |
+| Hybrid first loss | 24.54 | 51.66 |
+| Hybrid repeated loss | 24.89 | 53.21 |
+| SILK normal | 19.59 | 47.56 |
+| SILK first loss | 19.22 | 41.18 |
+| SILK repeated loss | 19.25 | 42.25 |
+
+`AllocsPerRun(100)` is zero for warmed CELT, SILK and Hybrid PLC, including a
+series that reaches noise fallback. The ordinary SILK benchmark currently
+reports 24 B and one allocation per packet; this is recorded rather than
+misstated as a PLC regression. First-loss CELT CPU remains the explicit cost of
+pitch/LPC analysis. CPU benchmarks skip race-instrumented runs because those
+timings are not representative; the same PLC paths remain covered by race
+tests.
+
+### Listening examples
+
+`audio/` contains sample-aligned 48 kHz WAVs for CELT periodic mono, Hybrid RFC
+stereo and SILK RFC stereo. Each has `base-9e3044b`, `reference` and `current`
+versions. Current/reference SHA-256 values are identical for all three; base
+differs. These files permit manual listening but do not turn listening into the
+objective acceptance criterion.
+
+The CELT ports retain BSD-2-Clause notices and the SILK fixed-point ports retain
+BSD-3-Clause notices alongside Pion's MIT contributions; see the source headers
+and `LICENSES/`.

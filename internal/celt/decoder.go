@@ -325,7 +325,7 @@ func (d *Decoder) decodeLostFrame(info *frameSideInfo, out []float32) {
 				seed = lcgRand(seed)
 				channels[channel][i] = float32(int32(seed) >> 20) //nolint:gosec // Matches the CELT PLC noise source.
 			}
-			renormaliseVector(channels[channel][start:end], end-start, normScaling)
+			decoderRenormaliseVector(channels[channel][start:end], end-start, normScaling)
 		}
 	}
 	d.rng = seed
