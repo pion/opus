@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 # SPDX-License-Identifier: MIT
 
-name: RFC 6716 / 8251 conformation
+name: RFC 6716 / 8251 conformance
 
 on:
   pull_request:
@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   conformance:
-    name: test / RFC 6716 / 8251 conformation
+    name: test / RFC 6716 / 8251 conformance
     runs-on: ubuntu-latest
     timeout-minutes: 65
     permissions:
@@ -32,7 +32,6 @@ jobs:
           cache: true
 
       - name: Run conformance test
-        continue-on-error: true
         timeout-minutes: 60
         env:
           OPUS_CONFORMANCE_RESULT: ${{ runner.temp }}/opus-rfc-conformance.md
