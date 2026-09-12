@@ -6,8 +6,8 @@ package opus
 
 import (
 	"fmt"
+	"math"
 
-	"github.com/pion/opus/internal/bitdepth"
 	"github.com/pion/opus/internal/celt"
 	"github.com/pion/opus/internal/rangecoding"
 	silkresample "github.com/pion/opus/internal/resample/silk"
@@ -40,10 +40,12 @@ type Decoder struct {
 	silkResampler          [2]silkresample.Resampler
 	silkResamplerBandwidth Bandwidth
 	silkResamplerChannels  int
+	silkStreamChannels     int
 	hybridSilkResampler    [2]silkresample.Resampler
 	hybridSilkChannels     int
 	hybridSilkBuffer       []float32
 	hybridSilkPCM          []float32
+	hybridSilkTransition   []float32
 	silkRedundancyFades    []silkRedundancyFade
 	silkCeltAdditions      []silkCeltAddition
 	floatBuffer            []float32
@@ -113,6 +115,7 @@ func (d *Decoder) Init(sampleRate, channels int) error {
 	d.silkResampler = [2]silkresample.Resampler{}
 	d.silkResamplerBandwidth = 0
 	d.silkResamplerChannels = 0
+	d.silkStreamChannels = 0
 	d.softClipMem = softClipMemory{}
 	d.hybridSilkResampler = [2]silkresample.Resampler{}
 	d.hybridSilkChannels = 0
@@ -675,6 +678,8 @@ func (d *Decoder) decodeCeltFrames(
 }
 
 // decodeHybridFrames combines the SILK and CELT layers for Hybrid packets.
+//
+//nolint:cyclop // Mirrors the reference mode/channel transition branches.
 func (d *Decoder) decodeHybridFrames(
 	cfg Configuration,
 	tocHeader tableOfContentsHeader,
@@ -694,6 +699,8 @@ func (d *Decoder) decodeHybridFrames(
 	if tocHeader.isStereo() {
 		streamChannelCount = 2
 	}
+	silkStereoToMono := d.channels == 2 && streamChannelCount == 1 && d.silkStreamChannels == 2 &&
+		d.hybridSilkChannels == 2
 	decodedChannelCount = d.channels
 	if decodedChannelCount == 0 {
 		decodedChannelCount = streamChannelCount
@@ -728,10 +735,12 @@ func (d *Decoder) decodeHybridFrames(
 			cfg.frameDuration().nanoseconds(),
 			startBand,
 			endBand,
+			silkStereoToMono && i == 0,
 		); err != nil {
 			return 0, 0, false, 0, 0, err
 		}
 	}
+	d.silkStreamChannels = streamChannelCount
 
 	return cfg.bandwidth(), d.sampleRate, tocHeader.isStereo(), requiredSamples, decodedChannelCount, nil
 }
@@ -763,6 +772,7 @@ func (d *Decoder) decodeHybridFrame(
 	frameNanoseconds int,
 	startBand int,
 	endBand int,
+	silkStereoToMono bool,
 ) error {
 	d.rangeDecoder.Init(encodedFrame)
 
@@ -804,11 +814,21 @@ func (d *Decoder) decodeHybridFrame(
 		return err
 	}
 
-	silkPCM := resizeFloat32Buffer(&d.hybridSilkPCM, outputFrameSampleCount*silkOutputChannelCount)
-	if err = d.resampleHybridSilk(silkInternal, silkPCM, silkOutputChannelCount); err != nil {
+	silkResampleInput := silkInternal
+	silkResampleChannelCount := silkOutputChannelCount
+	if silkStereoToMono {
+		silkResampleChannelCount = 2
+		silkResampleInput = resizeFloat32Buffer(&d.hybridSilkTransition, len(silkInternal)*2)
+		for i := len(silkInternal) - 1; i >= 0; i-- {
+			silkResampleInput[2*i] = silkInternal[i]
+			silkResampleInput[2*i+1] = silkInternal[i]
+		}
+	}
+	silkPCM := resizeFloat32Buffer(&d.hybridSilkPCM, outputFrameSampleCount*silkResampleChannelCount)
+	if err = d.resampleHybridSilk(silkResampleInput, silkPCM, silkResampleChannelCount); err != nil {
 		return err
 	}
-	d.addHybridSilk(out, silkPCM, silkOutputChannelCount, outputChannelCount, outputFrameSampleCount)
+	d.addHybridSilk(out, silkPCM, silkResampleChannelCount, outputChannelCount, outputFrameSampleCount)
 	if redundancy.present && !redundancy.celtToSilk {
 		d.celtDecoder.Reset()
 		clear(d.celtBuffer)
@@ -1027,7 +1047,7 @@ func (d *Decoder) addHybridSilk(
 	samplesPerChannel int,
 ) {
 	for i := range silkPCM {
-		silkPCM[i] = float32(bitdepth.Float32ToSigned16(silkPCM[i])) / 32768
+		silkPCM[i] = float32(decoderFloat32ToSigned16(silkPCM[i])) / 32768
 	}
 	for sample := range samplesPerChannel {
 		silkIndex := sample * streamChannelCount
@@ -1049,7 +1069,7 @@ func (d *Decoder) addHybridSilk(
 // decodeSilkFrames handles ordinary SILK packets plus the redundant CELT side
 // data that RFC 6716 Section 4.5.1 allows on mode transitions.
 //
-//nolint:cyclop
+//nolint:cyclop,gocognit // Mirrors the reference SILK/redundancy transition branches.
 func (d *Decoder) decodeSilkFrames(
 	cfg Configuration,
 	tocHeader tableOfContentsHeader,
@@ -1064,15 +1084,27 @@ func (d *Decoder) decodeSilkFrames(
 	err error,
 ) {
 	frameSamplesPerChannel := cfg.silkFrameSampleCount()
-	decodedChannelCount = silkOutputChannelCount(tocHeader.isStereo(), d.channels)
-	frameSampleCount := frameSamplesPerChannel * decodedChannelCount
+	streamChannelCount := 1
+	if tocHeader.isStereo() {
+		streamChannelCount = 2
+	}
+	decodeChannelCount := silkOutputChannelCount(tocHeader.isStereo(), d.channels)
+	stereoToMono := d.channels == 2 && streamChannelCount == 1 && d.silkStreamChannels == 2 &&
+		d.silkResamplerBandwidth == cfg.bandwidth()
+	decodedChannelCount = decodeChannelCount
+	if stereoToMono {
+		decodedChannelCount = 2
+	}
+	frameSampleCount := frameSamplesPerChannel * decodeChannelCount
 	d.clearSilkRedundancyTransitions()
-	requiredSamples := frameSampleCount * len(encodedFrames)
+	decodedSamples := frameSampleCount * len(encodedFrames)
+	requiredSamples := frameSamplesPerChannel * decodedChannelCount * len(encodedFrames)
 	if cap(out) < requiredSamples {
 		d.silkBuffer = make([]float32, requiredSamples)
 		out = d.silkBuffer
 	}
 	out = out[:requiredSamples]
+	d.silkBuffer = out
 	for i := range out {
 		out[i] = 0
 	}
@@ -1086,7 +1118,7 @@ func (d *Decoder) decodeSilkFrames(
 			&d.rangeDecoder,
 			frameOut,
 			tocHeader.isStereo(),
-			decodedChannelCount,
+			decodeChannelCount,
 			cfg.frameDuration().nanoseconds(),
 			silk.Bandwidth(cfg.bandwidth()),
 		)
@@ -1105,7 +1137,7 @@ func (d *Decoder) decodeSilkFrames(
 			if err = d.decodeHybridRedundantFrame(
 				&redundancy,
 				tocHeader.isStereo(),
-				decodedChannelCount,
+				d.channels,
 				redundancy.endBand,
 			); err != nil {
 				return 0, 0, false, 0, 0, err
@@ -1115,7 +1147,7 @@ func (d *Decoder) decodeSilkFrames(
 				audio:            redundancy.audio,
 				startSample:      i * frameSamplesPerChannel * d.sampleRate / cfg.bandwidth().SampleRate(),
 				frameSampleCount: frameSamplesPerChannel * d.sampleRate / cfg.bandwidth().SampleRate(),
-				channelCount:     decodedChannelCount,
+				channelCount:     d.channels,
 			})
 		}
 		if previousMode == configurationModeHybrid &&
@@ -1125,12 +1157,12 @@ func (d *Decoder) decodeSilkFrames(
 				return 0, 0, false, 0, 0, err
 			}
 			fadeSampleCount := celtFadeSampleCount(d.sampleRate)
-			transitionAudio := make([]float32, fadeSampleCount*decodedChannelCount)
+			transitionAudio := make([]float32, fadeSampleCount*d.channels)
 			if err = d.celtDecoder.DecodeToSampleRate(
 				[]byte{0xff, 0xff},
 				transitionAudio,
 				tocHeader.isStereo(),
-				decodedChannelCount,
+				d.channels,
 				hybridFadeSampleCount,
 				0,
 				endBand,
@@ -1141,7 +1173,7 @@ func (d *Decoder) decodeSilkFrames(
 			d.silkCeltAdditions = append(d.silkCeltAdditions, silkCeltAddition{
 				audio:        transitionAudio,
 				startSample:  i * frameSamplesPerChannel * d.sampleRate / cfg.bandwidth().SampleRate(),
-				channelCount: decodedChannelCount,
+				channelCount: d.channels,
 			})
 		}
 		if len(encodedFrame) <= 1 {
@@ -1152,6 +1184,13 @@ func (d *Decoder) decodeSilkFrames(
 		d.previousMode = configurationModeSilkOnly
 		d.previousRedundancy = redundancy.present && !redundancy.celtToSilk
 	}
+	if stereoToMono {
+		for i := decodedSamples - 1; i >= 0; i-- {
+			out[2*i] = out[i]
+			out[2*i+1] = out[i]
+		}
+	}
+	d.silkStreamChannels = streamChannelCount
 
 	sampleCount = requiredSamples
 
@@ -1391,8 +1430,12 @@ func (d *Decoder) finishDecodeToFloat32(
 		return 0, err
 	}
 	if useResampleBuffer {
-		d.applySilkRedundancyFades(decodedChannelCount)
+		d.applySilkTransitions(d.resampleBuffer, decodedChannelCount)
 		d.copyResampledSamples(out, decodedChannelCount)
+		if decodedChannelCount != d.channels {
+			d.applySilkTransitions(out[:samplesPerChannel*d.channels], d.channels)
+		}
+		d.clearSilkRedundancyTransitions()
 	}
 
 	return samplesPerChannel, nil
@@ -1450,25 +1493,26 @@ func (d *Decoder) writeDecodedOutput(
 	}
 }
 
-// applySilkRedundancyFades applies the leading/trailing 2.5 ms cross-laps from
-// RFC 6716 Section 4.5.1.4 after SILK output has been resampled to 48 kHz.
+// applySilkTransitions applies the leading/trailing 2.5 ms cross-laps from
+// RFC 6716 Section 4.5.1.4 after SILK output has been resampled. Transitions
+// whose channel domain differs from the SILK working buffer are applied after
+// the final API channel mapping, so CELT keeps independent per-output state.
 //
 //nolint:cyclop
-func (d *Decoder) applySilkRedundancyFades(channelCount int) {
+func (d *Decoder) applySilkTransitions(out []float32, channelCount int) {
 	fades := d.silkRedundancyFades
 	additions := d.silkCeltAdditions
-	d.clearSilkRedundancyTransitions()
 	fadeSampleCount := celtFadeSampleCount(d.sampleRate)
 	for _, addition := range additions {
 		if addition.channelCount != channelCount {
 			continue
 		}
 		start := addition.startSample * channelCount
-		if start < 0 || start+len(addition.audio) > len(d.resampleBuffer) {
+		if start < 0 || start+len(addition.audio) > len(out) {
 			continue
 		}
 		for i, sample := range addition.audio {
-			d.resampleBuffer[start+i] += sample
+			out[start+i] += sample
 		}
 	}
 	for _, fade := range fades {
@@ -1478,14 +1522,14 @@ func (d *Decoder) applySilkRedundancyFades(channelCount int) {
 		frameStart := fade.startSample * channelCount
 		if fade.celtToSilk {
 			copyCount := fadeSampleCount * channelCount
-			if frameStart+2*copyCount > len(d.resampleBuffer) || copyCount > len(fade.audio) {
+			if frameStart+2*copyCount > len(out) || copyCount > len(fade.audio) {
 				continue
 			}
-			copy(d.resampleBuffer[frameStart:frameStart+copyCount], fade.audio[:copyCount])
+			copy(out[frameStart:frameStart+copyCount], fade.audio[:copyCount])
 			celt.SmoothFadeWithSampleRate(
 				fade.audio[copyCount:],
-				d.resampleBuffer[frameStart+copyCount:],
-				d.resampleBuffer[frameStart+copyCount:],
+				out[frameStart+copyCount:],
+				out[frameStart+copyCount:],
 				fadeSampleCount,
 				channelCount,
 				d.sampleRate,
@@ -1496,14 +1540,14 @@ func (d *Decoder) applySilkRedundancyFades(channelCount int) {
 
 		fadeStart := (fade.startSample + fade.frameSampleCount - fadeSampleCount) * channelCount
 		redundantStart := fadeSampleCount * channelCount
-		if fadeStart < 0 || fadeStart+fadeSampleCount*channelCount > len(d.resampleBuffer) ||
+		if fadeStart < 0 || fadeStart+fadeSampleCount*channelCount > len(out) ||
 			redundantStart+fadeSampleCount*channelCount > len(fade.audio) {
 			continue
 		}
 		celt.SmoothFadeWithSampleRate(
-			d.resampleBuffer[fadeStart:],
+			out[fadeStart:],
 			fade.audio[redundantStart:],
-			d.resampleBuffer[fadeStart:],
+			out[fadeStart:],
 			fadeSampleCount,
 			channelCount,
 			d.sampleRate,
@@ -1534,8 +1578,27 @@ func (d *Decoder) copyResampledSamples(out []float32, channelCount int) {
 
 func float32ToInt16(in []float32, out []int16, sampleCount int) {
 	for i := range sampleCount {
-		out[i] = bitdepth.Float32ToSigned16(in[i])
+		out[i] = decoderFloat32ToSigned16(in[i])
 	}
+}
+
+func float32ToInt16LittleEndian(in []float32, out []byte, sampleCount int) {
+	for i := range sampleCount {
+		quantized := uint16(decoderFloat32ToSigned16(in[i])) // #nosec G115 -- preserve the signed PCM bit pattern
+		out[2*i] = byte(quantized & 0xff)                    // #nosec G115 -- explicitly select the low byte
+		out[2*i+1] = byte(quantized >> 8)
+	}
+}
+
+func decoderFloat32ToSigned16(sample float32) int16 {
+	quantized := math.RoundToEven(float64(sample * 32768))
+	if quantized < -32768 {
+		quantized = -32768
+	} else if quantized > 32767 {
+		quantized = 32767
+	}
+
+	return int16(quantized)
 }
 
 func resizeFloat32Buffer(buffer *[]float32, sampleCount int) []float32 {
@@ -1564,12 +1627,7 @@ func (d *Decoder) Decode(in, out []byte) (bandwidth Bandwidth, isStereo bool, er
 	// hard-clipped one; DecodeFloat32 leaves that choice to the caller.
 	softClip(d.floatBuffer[:sampleCount*d.channels], d.channels, &d.softClipMem)
 
-	err = bitdepth.ConvertFloat32LittleEndianToSigned16LittleEndian(
-		d.floatBuffer[:sampleCount*d.channels],
-		out,
-		d.channels,
-		1,
-	)
+	float32ToInt16LittleEndian(d.floatBuffer, out, sampleCount*d.channels)
 
 	return
 }
@@ -1577,6 +1635,9 @@ func (d *Decoder) Decode(in, out []byte) (bandwidth Bandwidth, isStereo bool, er
 // DecodeFloat32 decodes the Opus bitstream into F32LE PCM.
 func (d *Decoder) DecodeFloat32(in []byte, out []float32) (bandwidth Bandwidth, isStereo bool, err error) {
 	_, bandwidth, isStereo, err = d.decodeToFloat32(in, out)
+	if err == nil {
+		d.softClipMem = softClipMemory{}
+	}
 
 	return
 }
@@ -1593,6 +1654,7 @@ func (d *Decoder) DecodeToInt16(in []byte, out []int16) (int, error) {
 		return 0, err
 	}
 
+	softClip(d.floatBuffer[:sampleCount*d.channels], d.channels, &d.softClipMem)
 	float32ToInt16(d.floatBuffer, out, sampleCount*d.channels)
 
 	return sampleCount, nil
@@ -1625,6 +1687,7 @@ func (d *Decoder) DecodeToFloat32(in []byte, out []float32) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	d.softClipMem = softClipMemory{}
 
 	return sampleCount, nil
 }
