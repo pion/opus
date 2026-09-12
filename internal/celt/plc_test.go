@@ -71,12 +71,7 @@ func TestPLCReferenceState(t *testing.T) {
 			// Exact received-frame reconstruction changes the history consumed
 			// by the approximate PLC from #246. Keep its selected pitch bounded;
 			// the public corpus independently gates the resulting PCM quality.
-			if ref.Pitch == 0 {
-				require.Zero(t, d.plc.pitch, label)
-			} else {
-				require.GreaterOrEqual(t, d.plc.pitch, plcPitchMin, label)
-				require.LessOrEqual(t, d.plc.pitch, plcPitchMax, label)
-			}
+			requireCompatiblePitch(t, ref.Pitch, d.plc.pitch, label)
 			for h, history := range [4][2][maxBands]float32{d.previousLogE, d.previousLogE1, d.previousLogE2, d.plc.background} {
 				for ch := range 2 {
 					for band := range maxBands {
@@ -89,6 +84,17 @@ func TestPLCReferenceState(t *testing.T) {
 			}
 		}
 	}
+}
+
+func requireCompatiblePitch(t *testing.T, reference, actual int, label string) {
+	t.Helper()
+	if reference == 0 {
+		require.Zero(t, actual, label)
+
+		return
+	}
+	require.GreaterOrEqual(t, actual, plcPitchMin, label)
+	require.LessOrEqual(t, actual, plcPitchMax, label)
 }
 
 func TestPLCNoiseDoesNotMirrorEnergy(t *testing.T) {

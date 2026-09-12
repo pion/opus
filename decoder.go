@@ -1234,6 +1234,7 @@ func (d *Decoder) decodeToFloat32(
 	if err != nil {
 		return 0, 0, false, err
 	}
+
 	return samplesPerChannel, bandwidth, isStereo, nil
 }
 
