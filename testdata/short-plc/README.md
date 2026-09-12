@@ -296,9 +296,10 @@ go mod verify
 go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.10.1 run
 ```
 
-The strict deterministic corpus is intentionally skipped in race builds; the
-PLC quality workflow runs it explicitly without `-race`, then runs the broad
-quality corpus and remaining PLC tests with race instrumentation.
+The strict deterministic corpus and broad quality corpus are skipped in the
+generic race+coverage job. The PLC quality workflow runs the strict corpus
+explicitly without `-race`, then runs the broad historical/current comparison
+with race instrumentation. The generic job still races all remaining PLC tests.
 
 The RFC 6716/8251 conformance test also passes all 120 combinations of 12
 published bitstreams, five output rates and mono/stereo output against

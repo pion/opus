@@ -68,6 +68,9 @@ func readPLCBaseline(t *testing.T) [][]plcMeasurement {
 }
 
 func TestPLCCorpus(t *testing.T) {
+	if plcBaselineRace && os.Getenv("PLC_BASELINE_PATH") == "" && os.Getenv("PLC_BASELINE_OUTPUT") == "" {
+		t.Skip("race-instrumented PLC quality corpus runs in the dedicated PLC quality workflow")
+	}
 	path := os.Getenv("PLC_CORPUS_PATH")
 	if path == "" {
 		path = "testdata/short-plc/corpus.json.gz"
