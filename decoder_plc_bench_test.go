@@ -1,9 +1,11 @@
 // SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
+//nolint:cyclop // Cross-product benchmark names remain explicit and searchable.
 package opus
 
 import (
+	"compress/gzip"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -12,6 +14,20 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
+
+func plcBenchmarkCorpus(tb testing.TB) plcCorpus {
+	tb.Helper()
+	file, err := os.Open("testdata/short-plc/corpus.json.gz")
+	require.NoError(tb, err)
+	defer file.Close() //nolint:errcheck
+	reader, err := gzip.NewReader(file)
+	require.NoError(tb, err)
+	defer reader.Close() //nolint:errcheck
+	var corpus plcCorpus
+	require.NoError(tb, json.NewDecoder(reader).Decode(&corpus))
+
+	return corpus
+}
 
 func plcBenchmarkPackets(tb testing.TB, channels int) [][]byte {
 	tb.Helper()
@@ -33,6 +49,9 @@ func plcBenchmarkPackets(tb testing.TB, channels int) [][]byte {
 }
 
 func BenchmarkCELTPLC(b *testing.B) {
+	if plcBaselineRace {
+		b.Skip("CPU benchmarks are not representative under race instrumentation")
+	}
 	for _, channels := range []int{1, 2} {
 		packets := plcBenchmarkPackets(b, channels)
 		for _, scenario := range []struct {
@@ -76,6 +95,74 @@ func BenchmarkCELTPLC(b *testing.B) {
 	}
 }
 
+func BenchmarkSILKAndHybridPLC(b *testing.B) {
+	if plcBaselineRace {
+		b.Skip("CPU benchmarks are not representative under race instrumentation")
+	}
+	corpus := plcBenchmarkCorpus(b)
+	for _, mode := range []int{2, 4} {
+		modeName := map[int]string{2: "hybrid", 4: "silk"}[mode]
+		for _, channels := range []int{1, 2} {
+			caseIndex := -1
+			for i := range corpus.Cases {
+				candidate := &corpus.Cases[i]
+				if candidate.Mode == mode && candidate.Signal == 0 && candidate.Channels == channels &&
+					candidate.OutputChannels == channels && candidate.Rate == 48000 && candidate.Sequence == 0 {
+					caseIndex = i
+
+					break
+				}
+			}
+			require.NotEqual(b, -1, caseIndex)
+			scenario := &corpus.Cases[caseIndex]
+			packets := make([][]byte, 4)
+			for i := range packets {
+				var err error
+				packets[i], err = hex.DecodeString(scenario.Steps[i].Packet)
+				require.NoError(b, err)
+			}
+			for _, operation := range []struct {
+				name        string
+				priorLosses int
+			}{
+				{"normal", -1}, {"first", 0}, {"series", 6},
+			} {
+				b.Run(fmt.Sprintf("%s/%dch/%s", modeName, channels, operation.name), func(b *testing.B) {
+					decoder, err := NewDecoderWithOutput(48000, channels)
+					require.NoError(b, err)
+					out := make([]int16, 960*channels)
+					setup := func() {
+						require.NoError(b, decoder.Init(48000, channels))
+						for _, packet := range packets[:3] {
+							_, err = decoder.DecodeToInt16(packet, out)
+							require.NoError(b, err)
+						}
+						for range max(0, operation.priorLosses) {
+							require.NoError(b, decoder.DecodePLC(out))
+						}
+					}
+					setup()
+					b.ReportAllocs()
+					b.ResetTimer()
+					for range b.N {
+						b.StopTimer()
+						setup()
+						b.StartTimer()
+						if operation.priorLosses < 0 {
+							_, err = decoder.DecodeToInt16(packets[3], out)
+						} else {
+							err = decoder.DecodePLC(out)
+						}
+						if err != nil {
+							b.Fatal(err)
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestCELTPLCWarmAllocations(t *testing.T) {
 	for _, channels := range []int{1, 2} {
 		packets := plcBenchmarkPackets(t, channels)
@@ -93,6 +180,40 @@ func TestCELTPLCWarmAllocations(t *testing.T) {
 		}
 		cycle()
 		require.Zero(t, testing.AllocsPerRun(100, cycle))
+	}
+}
+
+func TestSILKAndHybridPLCWarmAllocations(t *testing.T) {
+	corpus := plcBenchmarkCorpus(t)
+	for _, mode := range []int{2, 4} {
+		for _, channels := range []int{1, 2} {
+			t.Run(fmt.Sprintf("mode%d/%dch", mode, channels), func(t *testing.T) {
+				caseIndex := -1
+				for i := range corpus.Cases {
+					candidate := &corpus.Cases[i]
+					if candidate.Mode == mode && candidate.Signal == 0 && candidate.Channels == channels &&
+						candidate.OutputChannels == channels && candidate.Rate == 48000 && candidate.Sequence == 0 {
+						caseIndex = i
+
+						break
+					}
+				}
+				require.NotEqual(t, -1, caseIndex)
+				decoder, err := NewDecoderWithOutput(48000, channels)
+				require.NoError(t, err)
+				out := make([]int16, 960*channels)
+				for _, frame := range corpus.Cases[caseIndex].Steps[:4] {
+					packet, decodeErr := hex.DecodeString(frame.Packet)
+					require.NoError(t, decodeErr)
+					_, decodeErr = decoder.DecodeToInt16(packet, out)
+					require.NoError(t, decodeErr)
+				}
+				require.NoError(t, decoder.DecodePLC(out))
+				require.Zero(t, testing.AllocsPerRun(100, func() {
+					require.NoError(t, decoder.DecodePLC(out))
+				}))
+			})
+		}
 	}
 }
 
