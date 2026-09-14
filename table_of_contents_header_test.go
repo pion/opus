@@ -12,10 +12,10 @@ import (
 func TestConfigurationMode(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, configurationModeSilkOnly, Configuration(0).mode())
-	assert.Equal(t, configurationModeHybrid, Configuration(12).mode())
-	assert.Equal(t, configurationModeCELTOnly, Configuration(16).mode())
-	assert.Equal(t, configurationMode(0), Configuration(32).mode())
+	assert.Equal(t, configurationModeSilkOnly, configuration(0).mode())
+	assert.Equal(t, configurationModeHybrid, configuration(12).mode())
+	assert.Equal(t, configurationModeCELTOnly, configuration(16).mode())
+	assert.Equal(t, configurationMode(0), configuration(32).mode())
 }
 
 func TestConfigurationModeString(t *testing.T) {
@@ -30,13 +30,13 @@ func TestConfigurationModeString(t *testing.T) {
 func TestFrameDuration(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, frameDuration2500us, Configuration(16).frameDuration())
-	assert.Equal(t, frameDuration5ms, Configuration(17).frameDuration())
-	assert.Equal(t, frameDuration10ms, Configuration(0).frameDuration())
-	assert.Equal(t, frameDuration20ms, Configuration(1).frameDuration())
-	assert.Equal(t, frameDuration40ms, Configuration(10).frameDuration())
-	assert.Equal(t, frameDuration60ms, Configuration(11).frameDuration())
-	assert.Equal(t, frameDuration(0), Configuration(32).frameDuration())
+	assert.Equal(t, frameDuration2500us, configuration(16).frameDuration())
+	assert.Equal(t, frameDuration5ms, configuration(17).frameDuration())
+	assert.Equal(t, frameDuration10ms, configuration(0).frameDuration())
+	assert.Equal(t, frameDuration20ms, configuration(1).frameDuration())
+	assert.Equal(t, frameDuration40ms, configuration(10).frameDuration())
+	assert.Equal(t, frameDuration60ms, configuration(11).frameDuration())
+	assert.Equal(t, frameDuration(0), configuration(32).frameDuration())
 }
 
 func TestFrameDurationString(t *testing.T) {
@@ -66,16 +66,16 @@ func TestFrameDurationNanoseconds(t *testing.T) {
 func TestBandwidth(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, BandwidthNarrowband, Configuration(0).bandwidth())
-	assert.Equal(t, BandwidthMediumband, Configuration(4).bandwidth())
-	assert.Equal(t, BandwidthWideband, Configuration(8).bandwidth())
-	assert.Equal(t, BandwidthSuperwideband, Configuration(12).bandwidth())
-	assert.Equal(t, BandwidthFullband, Configuration(14).bandwidth())
-	assert.Equal(t, BandwidthNarrowband, Configuration(16).bandwidth())
-	assert.Equal(t, BandwidthWideband, Configuration(20).bandwidth())
-	assert.Equal(t, BandwidthSuperwideband, Configuration(24).bandwidth())
-	assert.Equal(t, BandwidthFullband, Configuration(28).bandwidth())
-	assert.Equal(t, Bandwidth(255), Configuration(32).bandwidth())
+	assert.Equal(t, BandwidthNarrowband, configuration(0).bandwidth())
+	assert.Equal(t, BandwidthMediumband, configuration(4).bandwidth())
+	assert.Equal(t, BandwidthWideband, configuration(8).bandwidth())
+	assert.Equal(t, BandwidthSuperwideband, configuration(12).bandwidth())
+	assert.Equal(t, BandwidthFullband, configuration(14).bandwidth())
+	assert.Equal(t, BandwidthNarrowband, configuration(16).bandwidth())
+	assert.Equal(t, BandwidthWideband, configuration(20).bandwidth())
+	assert.Equal(t, BandwidthSuperwideband, configuration(24).bandwidth())
+	assert.Equal(t, BandwidthFullband, configuration(28).bandwidth())
+	assert.Equal(t, Bandwidth(255), configuration(32).bandwidth())
 }
 
 func TestBandwidthString(t *testing.T) {

@@ -258,7 +258,7 @@ func (d *Decoder) copyHybridSilkResamplerToSilk() {
 	d.silkResamplerChannels = d.hybridSilkChannels
 }
 
-func (c Configuration) silkFrameSampleCount() int {
+func (c configuration) silkFrameSampleCount() int {
 	if c.mode() != configurationModeSilkOnly {
 		return 0
 	}
@@ -279,7 +279,7 @@ func (c Configuration) silkFrameSampleCount() int {
 	return 0
 }
 
-func (c Configuration) celtFrameSampleCount() int {
+func (c configuration) celtFrameSampleCount() int {
 	if c.mode() != configurationModeCELTOnly {
 		return 0
 	}
@@ -290,7 +290,7 @@ func (c Configuration) celtFrameSampleCount() int {
 	return int(int64(c.frameDuration().nanoseconds()) * int64(celtSampleRate) / 1000000000)
 }
 
-func (c Configuration) hybridFrameSampleCount() int {
+func (c configuration) hybridFrameSampleCount() int {
 	if c.mode() != configurationModeHybrid {
 		return 0
 	}
@@ -298,7 +298,7 @@ func (c Configuration) hybridFrameSampleCount() int {
 	return int(int64(c.frameDuration().nanoseconds()) * int64(celtSampleRate) / 1000000000)
 }
 
-func (c Configuration) decodedSampleRate() int {
+func (c configuration) decodedSampleRate() int {
 	switch c.mode() {
 	case configurationModeSilkOnly:
 		return c.bandwidth().SampleRate()
@@ -611,7 +611,7 @@ func (d *Decoder) decode(
 // decodeCeltFrames keeps CELT synthesis in the internal 48 kHz mode while
 // emitting PCM at the caller-requested Opus API output rate.
 func (d *Decoder) decodeCeltFrames(
-	cfg Configuration,
+	cfg configuration,
 	tocHeader tableOfContentsHeader,
 	encodedFrames [][]byte,
 	out []float32,
@@ -676,7 +676,7 @@ func (d *Decoder) decodeCeltFrames(
 
 // decodeHybridFrames combines the SILK and CELT layers for Hybrid packets.
 func (d *Decoder) decodeHybridFrames(
-	cfg Configuration,
+	cfg configuration,
 	tocHeader tableOfContentsHeader,
 	encodedFrames [][]byte,
 	out []float32,
@@ -1051,7 +1051,7 @@ func (d *Decoder) addHybridSilk(
 //
 //nolint:cyclop
 func (d *Decoder) decodeSilkFrames(
-	cfg Configuration,
+	cfg configuration,
 	tocHeader tableOfContentsHeader,
 	encodedFrames [][]byte,
 	out []float32,
