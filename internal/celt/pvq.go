@@ -35,8 +35,8 @@ func algUnquant(
 	decodePulses(iy, n, k, rangeDecoder, state.cwrsRows)
 
 	energy, collapseMask := pulseEnergyAndCollapseMask(iy, n, blocks)
-	normaliseResidual(iy, x, n, energy, gain)
-	expRotation(x, n, -1, blocks, k, spread)
+	decoderNormaliseResidual(iy, x, n, energy, gain)
+	decoderExpRotation(x, n, blocks, k, spread)
 
 	return collapseMask
 }
