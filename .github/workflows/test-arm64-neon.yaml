@@ -1,0 +1,43 @@
+# SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
+# SPDX-License-Identifier: MIT
+#
+# The SILK resampler has a NEON kernel guarded by `arm64 && go1.27 && !purego`,
+# because the assembler only learned those instructions in Go 1.27. The shared
+# test matrix in test.yaml tracks the supported release list, which is behind
+# that, so no job there assembles the file: the macOS runner is arm64 but on an
+# older Go, and the jobs on newer Go are amd64.
+#
+# This job exists to close that gap. It is kept here rather than in test.yaml
+# because that file is synced from pion/.goassets and raising its matrix would
+# move every pion repository onto a newer Go for one kernel in this one.
+name: Test ARM64 NEON
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  neon:
+    name: SILK resampler NEON kernel
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27'
+      - name: Confirm the kernel is actually built
+        # A build tag that stops matching would otherwise turn this job green
+        # by quietly compiling nothing.
+        run: |
+          files=$(go list -f '{{ join .GoFiles "\n" }}{{ "\n" }}{{ join .SFiles "\n" }}' ./internal/resample/silk)
+          echo "$files"
+          echo "$files" | grep -qx 'iir_fir_arm64.s' || {
+            echo "::error::iir_fir_arm64.s is not in the build for this configuration"
+            exit 1
+          }
+      - name: NEON parity against the generic implementation
+        run: go test -race -count=1 ./internal/resample/silk/...
+      - name: Generic path still passes with the kernel excluded
+        run: go test -race -count=1 -tags purego ./internal/resample/silk/...
