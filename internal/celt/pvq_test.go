@@ -60,7 +60,9 @@ func TestExpRotation1BlockOfFour(t *testing.T) {
 		expRotation1Scalar(want, test.length, test.stride, 0.9, 0.4)
 		expRotation1(got, test.length, test.stride, 0.9, 0.4)
 
-		assert.Equal(t, want, got)
+		// arm64 contracts the multiply-adds into FMA, so the unrolled path can
+		// differ from the scalar one in the last bit.
+		assert.InDeltaSlice(t, want, got, 0.00001)
 	}
 }
 
