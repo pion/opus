@@ -1691,7 +1691,8 @@ func (d *Decoder) DecodePLC(out []int16) error {
 	if err := d.decodePLCToFloat32(d.floatBuffer); err != nil {
 		return err
 	}
-	softClip(d.floatBuffer, d.channels, &d.softClipMem)
+	// libopus returns from its null-packet path before soft clipping. In
+	// particular, preserve the received-packet clipping memory across loss.
 	float32ToInt16(d.floatBuffer, out, len(out))
 
 	return nil

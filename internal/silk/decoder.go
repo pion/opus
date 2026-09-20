@@ -131,16 +131,14 @@ func (d *Decoder) resetPredictionState() {
 	d.previousLogGain = 10
 	d.previousFrameLPCValues = nil
 	clear(d.finalOutValues)
-	d.fixedPrevGainQ16 = 65536
 	clear(d.fixedSLPCQ14[:])
 	clear(d.fixedOutBuf[:])
-	clear(d.fixedExcQ14[:])
 	d.fixedStateValid = true
 	d.fixedFirstFrame = true
-	d.fixedPLC = fixedPLCState{}
-	d.fixedCNG = fixedCNGState{}
+	// Both silk_decoder_set_fs and the side-channel prediction reset retain
+	// loss count, previous gain, excitation, PLC glue and CNG history. Their
+	// rate-specific PLC/CNG resets run separately when the new rate is observed.
 	d.n0Q15 = nil
-	d.plcLossCount = 0
 	d.plcRandSeed = 0
 	d.plcConcealedEnergy = 0
 }
@@ -1369,6 +1367,8 @@ func (d *Decoder) limitLPCFilterPredictionGainInto(a32Q17 []int32, slot int) (aQ
 	//
 	// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.5.8
 	aQ12Int := slicetools.ResizeZero(&d.aQ12Int[slot], len(a32Q17))
+	// Recovery bandwidth expansion must see the active order after WB -> NB/MB.
+	d.aQ12Int[slot] = aQ12Int
 	for n := range a32Q17 {
 		aQ12Int[n] = int16((a32Q17[n] + 16) >> 5) //nolint:gosec // G115
 	}

@@ -35,14 +35,13 @@ type fixedPLCState struct {
 	subframeLength  int
 }
 
-func (d *Decoder) resetFixedPLC(frameLength, subframeCount, subframeLength, fsKHz int) {
-	d.fixedPLC = fixedPLCState{
-		pitchLQ8:        int32(frameLength << 7), //nolint:gosec // Bounded SILK frame length.
-		previousGainQ16: [2]int32{1 << 16, 1 << 16},
-		fsKHz:           fsKHz,
-		subframeCount:   subframeCount,
-		subframeLength:  subframeLength,
-	}
+func (d *Decoder) resetFixedPLC(frameLength, fsKHz int) {
+	// silk_PLC_Reset is partial: retain random and glue state across rate changes.
+	d.fixedPLC.pitchLQ8 = int32(frameLength << 7) //nolint:gosec // Bounded SILK frame length.
+	d.fixedPLC.previousGainQ16 = [2]int32{1 << 16, 1 << 16}
+	d.fixedPLC.fsKHz = fsKHz
+	d.fixedPLC.subframeCount = 2
+	d.fixedPLC.subframeLength = 20
 }
 
 // updateFixedPLC mirrors silk_PLC_update() after an accepted frame.
@@ -58,7 +57,7 @@ func (d *Decoder) updateFixedPLC(
 	frameLength := subframeCount * subframeLength
 	fsKHz := subframeLength / 5
 	if d.fixedPLC.fsKHz != fsKHz {
-		d.resetFixedPLC(frameLength, subframeCount, subframeLength, fsKHz)
+		d.resetFixedPLC(frameLength, fsKHz)
 	}
 
 	ltpGainQ14 := int32(0)
@@ -82,7 +81,9 @@ func (d *Decoder) updateFixedPLC(
 		if ltpGainQ14 < fixedPLCPitchGainMinQ14 {
 			scaleQ10 := (fixedPLCPitchGainMinQ14 << 10) / max(ltpGainQ14, 1)
 			for i, coefficient := range d.fixedPLC.ltpCoefficients {
-				d.fixedPLC.ltpCoefficients[i] = int16((int32(coefficient) * scaleQ10) >> 10) //nolint:gosec
+				// silk_SMULBB truncates both operands to signed 16 bits. The
+				// scale can exceed 32767 for valid low-gain voiced codebook entries.
+				d.fixedPLC.ltpCoefficients[i] = int16((int32(coefficient) * int32(int16(scaleQ10))) >> 10) //nolint:gosec
 			}
 		} else if ltpGainQ14 > fixedPLCPitchGainMaxQ14 {
 			scaleQ14 := (fixedPLCPitchGainMaxQ14 << 14) / max(ltpGainQ14, 1)
@@ -129,7 +130,7 @@ func (d *Decoder) concealFrameFixed(out []float32, bandwidth Bandwidth) bool {
 		return false
 	}
 	if d.fixedPLC.fsKHz != fsKHz {
-		d.resetFixedPLC(frameLength, subframeCount, subframeLength, fsKHz)
+		d.resetFixedPLC(frameLength, fsKHz)
 	}
 
 	plc := &d.fixedPLC
