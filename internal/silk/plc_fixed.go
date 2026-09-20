@@ -115,20 +115,16 @@ func (d *Decoder) updateFixedPLC(
 // concealFrameFixed mirrors the non-neural silk_PLC_conceal() path.
 //
 //nolint:cyclop,gocognit,maintidx
-func (d *Decoder) concealFrameFixed(out []float32, bandwidth Bandwidth) bool {
-	if !d.fixedStateValid || !d.haveDecoded {
-		return false
-	}
-
+func (d *Decoder) concealFrameFixed(out []float32, bandwidth Bandwidth) {
 	subframeLength := d.samplesInSubframe(bandwidth)
 	frameLength := len(out)
-	subframeCount := frameLength / subframeLength
 	ltpMemoryLength := 4 * subframeLength
 	fsKHz := subframeLength / 5
 	if subframeLength == 0 || frameLength == 0 || frameLength > maxFrameLength ||
 		frameLength%subframeLength != 0 || ltpMemoryLength > len(d.fixedSLTP) {
-		return false
+		panic("silk: invalid internal PLC frame geometry") //nolint:forbidigo // Public callers validate geometry.
 	}
+	subframeCount := frameLength / subframeLength
 	if d.fixedPLC.fsKHz != fsKHz {
 		d.resetFixedPLC(frameLength, fsKHz)
 	}
@@ -188,7 +184,7 @@ func (d *Decoder) concealFrameFixed(out []float32, bandwidth Bandwidth) bool {
 	dLPC := dLPCForBandwidth(bandwidth)
 	start := ltpMemoryLength - lag - dLPC - ltpOrder/2
 	if start <= 0 {
-		return false
+		panic("silk: invalid internal PLC rewhitening index") //nolint:forbidigo // Valid decoder state guarantees this bound.
 	}
 	lpcAnalysisFilterFixed(rewhitened[start:], d.fixedOutBuf[start:], plc.previousLPCQ12[:dLPC], ltpMemoryLength-start, dLPC)
 	inverseGainQ30 := inverse32VarQ(plc.previousGainQ16[1], 46)
@@ -245,9 +241,6 @@ func (d *Decoder) concealFrameFixed(out []float32, bandwidth Bandwidth) bool {
 	for i, sample := range pcm {
 		out[i] = float32(sample) / 32768
 	}
-	d.saveFinalOutValues(out)
-
-	return true
 }
 
 func fixedPLCEnergy(

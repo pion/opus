@@ -26,7 +26,7 @@ func TestDecodePLCReference(t *testing.T) {
 	decoder := NewDecoder()
 	initialPLC := make([]float32, 320)
 	require.NoError(t, decoder.DecodePLC(initialPLC, false, 1, nanoseconds20Ms, BandwidthWideband))
-	require.Zero(t, signalEnergy(initialPLC))
+	require.Equal(t, make([]float32, len(initialPLC)), initialPLC)
 
 	frames := [][]byte{
 		testSilkFrame(),
@@ -53,8 +53,27 @@ func TestDecodePLCValidation(t *testing.T) {
 	decoder := NewDecoder()
 	out := make([]float32, 320)
 
-	assert.Zero(t, signalEnergy(nil))
 	assert.ErrorIs(t, decoder.DecodePLC(out, false, 0, nanoseconds20Ms, BandwidthWideband), errOutBufferTooSmall)
 	assert.ErrorIs(t, decoder.DecodePLC(out, false, 1, 0, BandwidthWideband), errUnsupportedSilkFrameDuration)
 	assert.ErrorIs(t, decoder.DecodePLC(out[:319], false, 1, nanoseconds20Ms, BandwidthWideband), errOutBufferTooSmall)
+}
+
+func TestDecodePLCBeforeHistory(t *testing.T) {
+	for _, stereo := range []bool{false, true} {
+		for _, bandwidth := range []Bandwidth{BandwidthNarrowband, BandwidthMediumband, BandwidthWideband} {
+			decoder := NewDecoder()
+			channels := 1
+			if stereo {
+				channels = 2
+			}
+			out := make([]float32, channels*4*decoder.samplesInSubframe(bandwidth))
+			for i := range out {
+				out[i] = 0.5
+			}
+			require.NoError(t, decoder.DecodePLC(out, stereo, channels, nanoseconds20Ms, bandwidth))
+			require.Equal(t, make([]float32, len(out)), out)
+			require.False(t, decoder.haveDecoded)
+			require.False(t, decoder.sideDecoder.haveDecoded)
+		}
+	}
 }
