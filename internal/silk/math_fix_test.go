@@ -84,8 +84,10 @@ func TestAddLShift32(t *testing.T) {
 
 func TestLshiftSat32(t *testing.T) {
 	assert.Equal(t, int32(4), lshiftSat32(1, 2))
-	// Saturates instead of wrapping when the shift overflows int32.
-	assert.Equal(t, int32(math.MaxInt32), lshiftSat32(math.MaxInt32, 4))
+	// silk_LSHIFT_SAT32 clamps the operand before shifting, so positive
+	// saturation leaves the low shift bits clear.
+	assert.Equal(t, int32(2147483632), lshiftSat32(math.MaxInt32, 4))
+	assert.Equal(t, int32(2147483632), lshiftSat32(200000000, 4))
 	assert.Equal(t, int32(math.MinInt32), lshiftSat32(math.MinInt32, 4))
 }
 

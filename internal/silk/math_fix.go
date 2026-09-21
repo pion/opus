@@ -62,7 +62,7 @@ func addSat32(a, b int32) int32 {
 
 // lshiftSat32 saturates a << shift to int32.
 func lshiftSat32(a int32, shift uint) int32 {
-	return int32(clampI64(int64(a)<<shift, math.MinInt32, math.MaxInt32)) //nolint:gosec // G115
+	return clamp(math.MinInt32>>shift, a, math.MaxInt32>>shift) << shift
 }
 
 // lshiftOvflw is a two's-complement wrapping left shift.
