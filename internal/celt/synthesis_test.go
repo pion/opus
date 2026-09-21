@@ -4,7 +4,9 @@
 package celt
 
 import (
+	"encoding/json"
 	"math"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -38,8 +40,9 @@ func TestLog2AmpAndDenormaliseBands(t *testing.T) {
 
 	energy := decoder.log2Amp(&info)
 
-	assert.InDelta(t, math.Pow(2, float64(energyMeans[0])), energy[0][0], 0.000001)
-	assert.Equal(t, float32(math.Pow(2, 32)), energy[0][1])
+	// Pinned FLOAT_APPROX reference, not the mathematical exponential.
+	assert.Equal(t, uint32(1118656576), math.Float32bits(energy[0][0]))
+	assert.Equal(t, uint32(1333788671), math.Float32bits(energy[0][1]))
 
 	x := []float32{1, 2}
 	freq := make([]float32, len(x))
@@ -151,6 +154,16 @@ func TestDenormaliseAndSynthesizeLayouts(t *testing.T) {
 }
 
 func TestAntiCollapseFillsEmptyTransientBlocks(t *testing.T) {
+	var reference struct {
+		Pin  string
+		Bits []uint32
+	}
+	data, err := os.ReadFile("../../testdata/short-plc/anti-collapse.json")
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(data, &reference))
+	require.Equal(t, "22244de5a79bd1d6d623c32e72bf1954b56235be", reference.Pin)
+	require.Len(t, reference.Bits, 2)
+
 	decoder := NewDecoder()
 	info := frameSideInfo{
 		lm:           1,
@@ -163,7 +176,8 @@ func TestAntiCollapseFillsEmptyTransientBlocks(t *testing.T) {
 
 	decoder.antiCollapse(&info, x, nil, collapseMasks, 1)
 
-	assert.InDelta(t, 1, vectorEnergy(x[:2]), 0.000001)
+	assert.Equal(t, reference.Bits[0], math.Float32bits(x[0]))
+	assert.Equal(t, reference.Bits[1], math.Float32bits(x[1]))
 	assert.Equal(t, x[0], -x[1])
 }
 

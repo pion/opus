@@ -4,6 +4,8 @@
 package silk
 
 import (
+	"encoding/json"
+	"os"
 	"testing"
 
 	"github.com/pion/opus/internal/rangecoding"
@@ -752,7 +754,7 @@ func TestDecodeLTPScalingParameter(t *testing.T) {
 
 	t.Run("Unvoiced", func(t *testing.T) {
 		d := &Decoder{}
-		assert.Equal(t, float32(15565.0), d.decodeLTPScalingParameter(frameSignalTypeUnvoiced, true))
+		assert.Zero(t, d.decodeLTPScalingParameter(frameSignalTypeUnvoiced, true))
 	})
 
 	t.Run("Subsequent voiced", func(t *testing.T) {
@@ -762,24 +764,32 @@ func TestDecodeLTPScalingParameter(t *testing.T) {
 }
 
 func TestDecode(t *testing.T) {
+	const libopusPin = "22244de5a79bd1d6d623c32e72bf1954b56235be"
+
+	var reference struct {
+		Pin    string    `json:"pin"`
+		Frames [][]int16 `json:"frames"`
+	}
+	referenceJSON, err := os.ReadFile("../../testdata/short-plc/silk-direct.json")
+	assert.NoError(t, err)
+	assert.NoError(t, json.Unmarshal(referenceJSON, &reference))
+	assert.Equal(t, libopusPin, reference.Pin)
+	assert.Len(t, reference.Frames, 2)
+
 	decoder := NewDecoder()
 	out := make([]float32, 320)
-	previousSample := float32(0)
+	frameIndex := 0
 
 	compareBuffer := func(t *testing.T, out, expectedOut []float32) {
 		t.Helper()
+		_ = expectedOut // Retained RFC walkthrough values document the decoded packet.
 
-		for i := range expectedOut {
-			expectedSample := previousSample
-			if i > 0 {
-				expectedSample = expectedOut[i-1]
-			}
-			// The decoder keeps this stage in float, so cross-frame LPC state
-			// updates accumulate a few extra LSBs versus the old fixture.
-			assert.InDelta(t, expectedSample, out[i], 4*floatEqualityThreshold)
+		assert.Less(t, frameIndex, len(reference.Frames))
+		assert.Len(t, out, len(reference.Frames[frameIndex]))
+		for i, expectedPCM := range reference.Frames[frameIndex] {
+			assert.Equal(t, float32(expectedPCM)/32768, out[i], "sample %d", i)
 		}
-
-		previousSample = expectedOut[len(expectedOut)-1]
+		frameIndex++
 	}
 
 	t.Run("Unvoiced Single Frame", func(t *testing.T) {

@@ -124,9 +124,13 @@ func TestPLCCorpus(t *testing.T) {
 				results[ci][si] = m
 				if record == "" {
 					b := baseline[ci][si]
-					require.LessOrEqual(t, m.RMSE, b.RMSE+1, "step %d: RMSE %.6f vs baseline %.6f", si, m.RMSE, b.RMSE)
+					// Exact received-frame reconstruction changes the state consumed by
+					// the approximate PLC from #246. Bound individual drift while the
+					// aggregate gate below still requires the periodic PLC improvement.
+					limit := max(b.RMSE+1, b.RMSE*1.5)
+					require.LessOrEqual(t, m.RMSE, limit, "step %d: RMSE %.6f vs baseline %.6f", si, m.RMSE, b.RMSE)
 					if c.Sequence == 2 || si < 4 {
-						require.Equal(t, b.Hash, m.Hash, "no-loss PCM changed, step %d", si)
+						require.Zero(t, squared, "reference no-loss PCM mismatch, step %d", si)
 					}
 					if si >= 4 {
 						currentError += squared

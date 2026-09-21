@@ -9,3 +9,7 @@ License: MIT
 Files: testdata/seed/* testdata/fuzz/* **/testdata/fuzz/* api/*.txt
 Copyright: 2026 The Pion community <https://pion.ly>
 License: CC0-1.0
+
+Files: testdata/short-plc/*.json testdata/short-plc/audio/*.wav
+Copyright: 2026 The Pion community <https://pion.ly>
+License: MIT

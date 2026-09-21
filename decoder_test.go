@@ -640,7 +640,7 @@ func TestDecodeSilkFramesAddsHybridTransitionAudio(t *testing.T) {
 	assert.Len(t, decoder.silkCeltAdditions[0].audio, hybridFadeSampleCount)
 }
 
-func TestApplySilkRedundancyFades(t *testing.T) {
+func TestApplySilkTransitions(t *testing.T) {
 	decoder := NewDecoder()
 	decoder.resampleBuffer = make([]float32, 600)
 	for i := range decoder.resampleBuffer {
@@ -675,7 +675,8 @@ func TestApplySilkRedundancyFades(t *testing.T) {
 		},
 	)
 
-	decoder.applySilkRedundancyFades(1)
+	decoder.applySilkTransitions(decoder.resampleBuffer, 1)
+	decoder.clearSilkRedundancyTransitions()
 
 	assert.Equal(t, float32(0.375), decoder.resampleBuffer[0])
 	assert.Equal(t, float32(0.5), decoder.resampleBuffer[1])

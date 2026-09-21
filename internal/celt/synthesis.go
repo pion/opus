@@ -43,7 +43,6 @@ type decoderScratch struct {
 type channelScratch struct {
 	freq        [maxFrameSampleCount]float32
 	accumulated [maxFrameSampleCount + shortBlockSampleCount]float32
-	blockFreq   [maxFrameSampleCount]float32
 	time        [maxFrameSampleCount]float32
 	mdct        mdctScratch
 }
@@ -126,9 +125,11 @@ func SmoothFadeWithSampleRate(in1, in2, out []float32, overlap int, channels int
 	inc := sampleRate / outputSampleRate
 	for channel := range channels {
 		for i := range overlap {
-			w := celtWindow120[i*inc] * celtWindow120[i*inc]
+			w := decoderRoundedProduct(celtWindow120[i*inc], celtWindow120[i*inc])
 			index := i*channels + channel
-			out[index] = w*in2[index] + (1-w)*in1[index]
+			fromSecond := decoderRoundedProduct(w, in2[index])
+			fromFirst := decoderRoundedProduct(1-w, in1[index])
+			out[index] = fromSecond + fromFirst
 		}
 	}
 }
@@ -138,7 +139,7 @@ func (d *Decoder) log2Amp(info *frameSideInfo) [2][maxBands]float32 {
 	for channel := range info.channelCount {
 		for band := info.startBand; band < info.endBand; band++ {
 			lg := minFloat32(32, d.previousLogE[channel][band]+energyMeans[band])
-			energy[channel][band] = float32(math.Exp2(float64(lg)))
+			energy[channel][band] = decoderExp2(lg)
 		}
 	}
 
@@ -174,7 +175,7 @@ func (d *Decoder) denormaliseAndSynthesize(
 	}
 	if info.outputChannelCount == 1 && info.channelCount == 2 {
 		for i := range frameSampleCount {
-			freqX[i] = 0.5 * (freqX[i] + freqY[i])
+			freqX[i] = decoderRoundedProduct(0.5, freqX[i]) + decoderRoundedProduct(0.5, freqY[i])
 		}
 		freqY = nil
 	}
@@ -202,9 +203,9 @@ func (d *Decoder) antiCollapse(info *frameSideInfo, x []float32, y []float32, co
 	for band := info.startBand; band < info.endBand; band++ {
 		n0 := int(bandEdges[band+1] - bandEdges[band])
 		n := n0 << info.lm
-		depth := (1 + info.allocation.pulses[band]) / n
-		threshold := 0.5 * math.Pow(2, -0.125*float64(depth))
-		sqrtInv := 1 / math.Sqrt(float64(n))
+		depth := ((1 + info.allocation.pulses[band]) / n0) >> info.lm
+		threshold := float32(0.5) * decoderExp2(float32(-0.125)*float32(depth))
+		sqrtInv := float32(1) / float32(math.Sqrt(float64(float32(n))))
 		for channel := range info.channelCount {
 			spectrum := channels[channel]
 			prev1 := d.previousLogE1[channel][band]
@@ -214,11 +215,11 @@ func (d *Decoder) antiCollapse(info *frameSideInfo, x []float32, y []float32, co
 				prev2 = max(prev2, d.previousLogE2[1][band])
 			}
 			energyDiff := max(float32(0), d.previousLogE[channel][band]-minFloat32(prev1, prev2))
-			radius := 2 * math.Pow(2, -float64(energyDiff))
+			radius := float32(2) * decoderExp2(-energyDiff)
 			if info.lm == maxLM {
-				radius *= math.Sqrt2
+				radius = float32(radius * float32(1.41421356))
 			}
-			radius = math.Min(threshold, radius) * sqrtInv
+			radius = float32(minFloat32(threshold, radius) * sqrtInv)
 			bandStart := int(bandEdges[band]) << info.lm
 			mask := collapseMasks[band*info.channelCount+channel]
 			renormalize := false
@@ -228,7 +229,7 @@ func (d *Decoder) antiCollapse(info *frameSideInfo, x []float32, y []float32, co
 				}
 				for j := range n0 {
 					seed = lcgRand(seed)
-					value := float32(radius)
+					value := radius
 					if seed&0x8000 == 0 {
 						value = -value
 					}
@@ -237,7 +238,7 @@ func (d *Decoder) antiCollapse(info *frameSideInfo, x []float32, y []float32, co
 				renormalize = true
 			}
 			if renormalize {
-				renormaliseVector(spectrum[bandStart:], n, normScaling)
+				decoderRenormaliseVector(spectrum[bandStart:], n, normScaling)
 			}
 		}
 	}
@@ -295,7 +296,7 @@ func (d *Decoder) applyPostfilter(info *frameSideInfo, time []float32, channel i
 
 	period := max(d.postfilter.period, combFilterMinPeriod)
 	oldPeriod := max(d.postfilter.oldPeriod, combFilterMinPeriod)
-	combFilter(
+	decoderCombFilter(
 		buf, buf,
 		postfilterHistorySampleCount,
 		oldPeriod,
@@ -308,7 +309,7 @@ func (d *Decoder) applyPostfilter(info *frameSideInfo, time []float32, channel i
 	)
 	if info.lm != 0 && len(time) > shortBlockSampleCount {
 		current := currentPostfilter(info)
-		combFilter(
+		decoderCombFilter(
 			buf, buf,
 			postfilterHistorySampleCount+shortBlockSampleCount,
 			period,
@@ -458,29 +459,19 @@ func (d *Decoder) inverseTransformChannel(freq []float32, channel int, info *fra
 		blockSampleCount = shortBlockSampleCount
 		stride = blockCount
 	}
-	// Transient spectra are interleaved short MDCTs; non-transient frames are
-	// one long transform. Accumulate either form into a single time buffer.
+	copy(accumulated[:shortBlockSampleCount/2], d.overlap[channel][:shortBlockSampleCount/2])
+	// Preserve the reference's in-place overlap layout. Each short transform
+	// begins at its 120-sample boundary and consumes the prior 60-sample tail.
 	for block := range blockCount {
-		blockFreq := channelScratch.blockFreq[:blockSampleCount]
-		if info.transient {
-			for i := range blockSampleCount {
-				blockFreq[i] = freq[block+i*stride]
-			}
-		} else {
-			copy(blockFreq, freq)
-		}
-		blockTime := inverseMDCTWithScratch(blockFreq, &channelScratch.mdct)
-		for i := range blockSampleCount + shortBlockSampleCount {
-			accumulated[block*blockSampleCount+i] += blockTime[i]
-		}
+		decoderMDCTBackward(freq, block, stride, accumulated[block*blockSampleCount:],
+			decoderTransformPlanForFrameSampleCount(blockSampleCount), &channelScratch.mdct)
 	}
 
 	time := channelScratch.time[:frameSampleCount]
-	for i := range shortBlockSampleCount {
-		time[i] = accumulated[i] + d.overlap[channel][i]
-	}
-	copy(time[shortBlockSampleCount:], accumulated[shortBlockSampleCount:frameSampleCount])
-	copy(d.overlap[channel], accumulated[frameSampleCount:frameSampleCount+shortBlockSampleCount])
+	copy(time, accumulated[:frameSampleCount])
+	clear(d.overlap[channel])
+	copy(d.overlap[channel][:shortBlockSampleCount/2],
+		accumulated[frameSampleCount:frameSampleCount+shortBlockSampleCount/2])
 
 	return time
 }

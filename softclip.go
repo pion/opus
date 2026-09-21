@@ -38,7 +38,7 @@ func softClip(x []float32, channels int, mem *softClipMemory) {
 			if at(i)*curve >= 0 {
 				break
 			}
-			set(i, at(i)+curve*at(i)*at(i))
+			set(i, at(i)+float32(curve*at(i)*at(i)))
 		}
 
 		curr := 0
@@ -76,12 +76,14 @@ func softClip(x []float32, channels int, mem *softClipMemory) {
 			// Pick the curve so that maxVal + curve*maxVal² == 1, nudged just enough that
 			// rounding cannot leave a sample above 1.
 			curve = (maxVal - 1) / (maxVal * maxVal)
-			curve += curve * 2.4e-7
+			// Explicit conversions preserve libopus's separately rounded products
+			// when Go would otherwise fuse multiplication and addition on ARM64.
+			curve += float32(curve * 2.4e-7)
 			if at(i) > 0 {
 				curve = -curve
 			}
 			for j := start; j < end; j++ {
-				set(j, at(j)+curve*at(j)*at(j))
+				set(j, at(j)+float32(curve*at(j)*at(j)))
 			}
 
 			if special && peakPos >= 2 {

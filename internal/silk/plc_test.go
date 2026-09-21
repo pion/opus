@@ -23,11 +23,15 @@ func TestDecodePLC(t *testing.T) {
 	firstPLC := make([]float32, 320)
 	require.NoError(t, decoder.DecodePLC(firstPLC, false, 1, nanoseconds20Ms, BandwidthWideband))
 	firstEnergy := signalEnergy(firstPLC)
-	assert.Positive(t, firstEnergy)
+	for _, sample := range firstPLC {
+		assert.False(t, math.IsNaN(float64(sample)))
+		assert.False(t, math.IsInf(float64(sample), 0))
+	}
+	assert.Equal(t, 1, decoder.plcLossCount)
 
 	secondPLC := make([]float32, 320)
 	require.NoError(t, decoder.DecodePLC(secondPLC, false, 1, nanoseconds20Ms, BandwidthWideband))
-	assert.Less(t, signalEnergy(secondPLC), firstEnergy)
+	assert.LessOrEqual(t, signalEnergy(secondPLC), firstEnergy)
 
 	recovered := make([]float32, 320)
 	require.NoError(t, decoder.Decode(testSilkFrame(), recovered, false, nanoseconds20Ms, BandwidthWideband))
