@@ -5,7 +5,6 @@
 package celt
 
 import (
-	"compress/gzip"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -17,16 +16,7 @@ import (
 )
 
 func TestDecoderFirstSpectrumReference(t *testing.T) {
-	file, err := os.Open("../../testdata/short-plc/corpus.json.gz")
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, file.Close()) })
-	reader, err := gzip.NewReader(file)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, reader.Close()) })
-	var corpus struct {
-		Cases []struct{ Steps []struct{ Packet string } }
-	}
-	require.NoError(t, json.NewDecoder(reader).Decode(&corpus))
+	corpus := loadCELTPLCCorpus(t)
 	packet, err := hex.DecodeString(corpus.Cases[0].Steps[0].Packet)
 	require.NoError(t, err)
 	data, err := os.ReadFile("../../testdata/short-plc/first-spectrum.json")
@@ -65,16 +55,7 @@ func TestDecoderFirstSpectrumReference(t *testing.T) {
 }
 
 func TestDecoderStereoDownmixSpectrumReference(t *testing.T) {
-	file, err := os.Open("../../testdata/short-plc/corpus.json.gz")
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, file.Close()) })
-	reader, err := gzip.NewReader(file)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, reader.Close()) })
-	var corpus struct {
-		Cases []struct{ Steps []struct{ Packet string } }
-	}
-	require.NoError(t, json.NewDecoder(reader).Decode(&corpus))
+	corpus := loadCELTPLCCorpus(t)
 	packet, err := hex.DecodeString(corpus.Cases[52].Steps[0].Packet)
 	require.NoError(t, err)
 	data, err := os.ReadFile("../../testdata/short-plc/downmix-spectrum.json")
@@ -119,16 +100,7 @@ func TestDecoderStereoDownmixSpectrumReference(t *testing.T) {
 }
 
 func TestDecoderRandomStereoHistoryReference(t *testing.T) {
-	file, err := os.Open("../../testdata/short-plc/corpus.json.gz")
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, file.Close()) })
-	reader, err := gzip.NewReader(file)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, reader.Close()) })
-	var corpus struct {
-		Cases []struct{ Steps []struct{ Packet string } }
-	}
-	require.NoError(t, json.NewDecoder(reader).Decode(&corpus))
+	corpus := loadCELTPLCCorpus(t)
 	d := NewDecoder()
 	for step := 0; step <= 18; step++ {
 		packet, decodeErr := hex.DecodeString(corpus.Cases[298].Steps[step].Packet)

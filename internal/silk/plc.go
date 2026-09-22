@@ -50,6 +50,9 @@ func (d *Decoder) DecodePLC(
 			d.concealFrame(frameOut, bandwidth)
 		}
 		d.delayMono(out[:frameSampleCount*frameCount])
+		// dec_API.c removes independent-gain clamping after every lost packet
+		// so a falling signal does not bounce back on recovery.
+		d.previousLogGain = 10
 
 		return nil
 	}
@@ -78,11 +81,17 @@ func (d *Decoder) DecodePLC(
 		)
 	}
 	d.finishStereoOutput(out, frameSampleCount, frameCount, outputChannelCount == 2)
+	d.previousLogGain = 10
+	d.sideDecoder.previousLogGain = 10
 
 	return nil
 }
 
 func (d *Decoder) concealFrame(out []float32, bandwidth Bandwidth) {
+	if d.concealFrameFixed(out, bandwidth) {
+		return
+	}
+
 	clear(out)
 	if !d.haveDecoded {
 		return

@@ -32,13 +32,17 @@ jobs:
       - name: Require exact soft clipping without race instrumentation
         working-directory: current
         run: go test -run '^TestSoftClipLibopusReference$' -count=1 .
+      - name: Require exact PLC and review regression corpora
+        working-directory: current
+        run: go test -run '^(TestPLCBitExactCorpus|TestDecoderReviewReference)$' -count=1 .
       - name: Measure unchanged base with the same compiler and race mode
         working-directory: baseline
         env:
           PLC_CORPUS_PATH: ${{ github.workspace }}/current/testdata/short-plc/corpus.json.gz
           PLC_BASELINE_OUTPUT: ${{ runner.temp }}/plc-baseline.json
         run: |
-          cp ../current/decoder_plc_corpus_test.go ../current/decoder_plc_race_test.go ../current/decoder_plc_norace_test.go .
+          cp ../current/decoder_plc_corpus_test.go ../current/decoder_plc_race_test.go \
+            ../current/decoder_plc_norace_test.go ../current/plc_corpus_fixture_test.go .
           go test -race -run '^TestPLCCorpus$' -count=1 .
       - name: Require exact no-loss PCM and loss/recovery improvement
         working-directory: current

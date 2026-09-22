@@ -9,9 +9,8 @@ package silk
 // inverse-NSQ path from the pinned libopus silk/decode_core.c. SILK uses this
 // arithmetic even when the surrounding libopus build is floating point.
 //
-// The current Go PLC still owns a floating-point continuation state. Once a
-// loss has invalidated this fixed history, callers fall back to the legacy
-// reconstruction until the fixed-point PLC state is ported as well.
+// Fixed-point PLC and recovery advance the same history, so received and lost
+// frames preserve one continuous reference-compatible decoder state.
 //
 //nolint:cyclop,gocognit,maintidx
 func (d *Decoder) silkFrameReconstructionFixed(
@@ -26,10 +25,6 @@ func (d *Decoder) silkFrameReconstructionFixed(
 	wQ2 int16,
 	out []float32,
 ) bool {
-	if d.plcLossCount > 0 {
-		// The legacy floating-point PLC path cannot advance fixed-point history.
-		d.fixedStateValid = false
-	}
 	if !d.fixedStateValid {
 		return false
 	}
@@ -72,8 +67,12 @@ func (d *Decoder) silkFrameReconstructionFixed(
 		d.fixedPrevGainQ16 = gainQ16
 
 		effectiveVoiced := signalType == frameSignalTypeVoiced
+		transitionFromPLC := d.plcLossCount > 0 && d.isPreviousFrameVoiced && !effectiveVoiced && subframe < maxSubframeCount/2
 		var lag int
-		if effectiveVoiced {
+		if transitionFromPLC {
+			effectiveVoiced = true
+			lag = d.previousLag
+		} else if effectiveVoiced {
 			lag = pitchLags[subframe]
 		}
 		if effectiveVoiced {
@@ -111,7 +110,14 @@ func (d *Decoder) silkFrameReconstructionFixed(
 			for i := range subframeLength {
 				predictionQ13 := int32(2)
 				for tap := range ltpOrder {
-					coefficientQ14 := int32(bQ7[subframe][tap]) * 128
+					coefficientQ14 := int32(0)
+					if transitionFromPLC {
+						if tap == ltpOrder/2 {
+							coefficientQ14 = 4096
+						}
+					} else {
+						coefficientQ14 = int32(bQ7[subframe][tap]) * 128
+					}
 					predictionQ13 = smlawb(
 						predictionQ13,
 						sLTPQ15[predictionIndex-tap],

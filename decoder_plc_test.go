@@ -93,6 +93,31 @@ func TestDecodePLCShortCELT(t *testing.T) {
 	}
 }
 
+func TestDecodePLCSplitsAtLastCELTFrameDuration(t *testing.T) {
+	corpus := loadPLCCorpus(t)
+	packet, err := hex.DecodeString(corpus.Cases[3].Steps[14].Packet)
+	require.NoError(t, err)
+
+	aggregated, err := NewDecoderWithOutput(8000, 1)
+	require.NoError(t, err)
+	segmented, err := NewDecoderWithOutput(8000, 1)
+	require.NoError(t, err)
+	for _, decoder := range []*Decoder{&aggregated, &segmented} {
+		count, decodeErr := decoder.DecodeToInt16(packet, make([]int16, 80))
+		require.NoError(t, decodeErr)
+		require.Equal(t, 80, count)
+		require.Equal(t, 80, decoder.lastPacketFrameSamples)
+	}
+
+	actual := make([]int16, 160)
+	require.NoError(t, aggregated.DecodePLC(actual))
+	expected := make([]int16, 160)
+	require.NoError(t, segmented.DecodePLC(expected[:80]))
+	require.NoError(t, segmented.DecodePLC(expected[80:]))
+	require.Equal(t, expected, actual)
+	require.True(t, reflect.DeepEqual(segmented.celtDecoder, aggregated.celtDecoder))
+}
+
 func TestDecodePLCShortCELTInvalidLengthPreservesState(t *testing.T) {
 	packets := shortPLCPackets(t, 2)
 	for _, rate := range []int{8000, 12000, 16000, 24000, 48000} {

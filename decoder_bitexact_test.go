@@ -5,7 +5,6 @@
 package opus
 
 import (
-	"compress/gzip"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -20,14 +19,7 @@ import (
 // The reference generator verifies that float decoding followed by lrintf
 // matches its int16 API for this unclipped first frame only.
 func TestDecoderFirstFrameFloatReference(t *testing.T) {
-	file, err := os.Open("testdata/short-plc/corpus.json.gz")
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, file.Close()) })
-	reader, err := gzip.NewReader(file)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, reader.Close()) })
-	var corpus plcCorpus
-	require.NoError(t, json.NewDecoder(reader).Decode(&corpus))
+	corpus := loadPLCCorpus(t)
 	data, err := os.ReadFile("testdata/short-plc/first-float.json")
 	require.NoError(t, err)
 	var reference struct {
@@ -64,14 +56,7 @@ func TestDecoderFirstFrameFloatReference(t *testing.T) {
 }
 
 func TestDecoderNoLossFloatSequenceReference(t *testing.T) {
-	file, err := os.Open("testdata/short-plc/corpus.json.gz")
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, file.Close()) })
-	reader, err := gzip.NewReader(file)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, reader.Close()) })
-	var corpus plcCorpus
-	require.NoError(t, json.NewDecoder(reader).Decode(&corpus))
+	corpus := loadPLCCorpus(t)
 	data, err := os.ReadFile("testdata/short-plc/no-loss-float.json")
 	require.NoError(t, err)
 	var reference struct {
@@ -155,14 +140,7 @@ func TestDecoderReferenceInt16Rounding(t *testing.T) {
 }
 
 func TestSILKFirstFrameStagesReference(t *testing.T) {
-	file, err := os.Open("testdata/short-plc/corpus.json.gz")
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, file.Close()) })
-	reader, err := gzip.NewReader(file)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, reader.Close()) })
-	var corpus plcCorpus
-	require.NoError(t, json.NewDecoder(reader).Decode(&corpus))
+	corpus := loadPLCCorpus(t)
 	data, err := os.ReadFile("testdata/short-plc/silk-stage.json")
 	require.NoError(t, err)
 	var reference struct {
