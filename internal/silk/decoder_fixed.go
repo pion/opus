@@ -24,16 +24,15 @@ func (d *Decoder) silkFrameReconstructionFixed(
 	ltpScaleQ14 float32,
 	wQ2 int16,
 	out []float32,
-) bool {
-	if !d.fixedStateValid {
-		return false
-	}
-
+) {
 	subframeLength := d.samplesInSubframe(bandwidth)
 	frameLength := subframeLength * subframeCount
 	ltpMemoryLength := 4 * subframeLength
-	if frameLength > len(d.fixedPCM) || ltpMemoryLength > len(d.fixedSLTP) || len(out) < frameLength {
-		return false
+	// Decode validates the packet duration and output buffer before entering
+	// the core. These bounds describe an internal caller invariant.
+	if subframeLength == 0 || (subframeCount != 2 && subframeCount != 4) ||
+		frameLength > len(d.fixedPCM) || ltpMemoryLength > len(d.fixedSLTP) || len(out) < frameLength {
+		panic("silk: invalid reconstruction dimensions") //nolint:forbidigo // Internal invariant, not a packet error.
 	}
 
 	pcm := d.fixedPCM[:frameLength]
@@ -163,20 +162,18 @@ func (d *Decoder) silkFrameReconstructionFixed(
 	for i, sample := range pcm {
 		out[i] = float32(sample) / 32768
 	}
-
-	return true
 }
 
-// stereoUnmixFixed reproduces silk_stereo_MS_to_LR() for decoder output that
-// is still backed by valid fixed-point channel state.
+// stereoUnmixFixed reproduces silk_stereo_MS_to_LR() for decoder output.
 func (d *Decoder) stereoUnmixFixed(
 	mid, side, out []float32,
 	prediction0Q13, prediction1Q13 int32,
 	bandwidth Bandwidth,
-) bool {
+) {
 	frameLength := len(mid)
-	if len(side) != frameLength || len(out) < 2*frameLength || frameLength > maxFrameLength {
-		return false
+	if d.samplesInSubframe(bandwidth) == 0 || frameLength < d.stereoPhaseOneSampleCount(bandwidth) ||
+		len(side) != frameLength || len(out) < 2*frameLength || frameLength > maxFrameLength {
+		panic("silk: invalid stereo dimensions") //nolint:forbidigo // Internal invariant, not a packet error.
 	}
 
 	var midPCM, sidePCM [maxFrameLength + 2]int16
@@ -216,10 +213,7 @@ func (d *Decoder) stereoUnmixFixed(
 	d.previousStereoWeights = d.fixedStereoPredQ13
 	d.previousMidValues[0] = float32(d.fixedStereoMid[0]) / 32768
 	d.previousMidValues[1] = float32(d.fixedStereoMid[1]) / 32768
-	d.previousSideValue = float32(d.fixedStereoSide[1]) / 32768
 	d.wasStereo = true
-
-	return true
 }
 
 func stereoPredictFixed(mid, side []int16, sample int, prediction0Q13, prediction1Q13 int32) {

@@ -118,16 +118,6 @@ func clamp(low, in, high int32) int32 {
 	return in
 }
 
-func clampNegativeOneToOne(v float32) float32 {
-	if v <= -1 {
-		return -1
-	} else if v >= 1 {
-		return 1
-	}
-
-	return v
-}
-
 // The sign of x, i.e.,
 //
 //	          ( -1,  x < 0
