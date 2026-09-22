@@ -208,6 +208,41 @@ func TestSILKAndHybridPLCWarmAllocations(t *testing.T) {
 	}
 }
 
+func TestSILKAndHybridDecodeWarmAllocations(t *testing.T) {
+	corpus := plcBenchmarkCorpus(t)
+	for _, mode := range []int{2, 4} {
+		for _, channels := range []int{1, 2} {
+			t.Run(fmt.Sprintf("mode%d/%dch", mode, channels), func(t *testing.T) {
+				caseIndex := -1
+				for i := range corpus.Cases {
+					candidate := &corpus.Cases[i]
+					if candidate.Mode == mode && candidate.Signal == 0 && candidate.Channels == channels &&
+						candidate.OutputChannels == channels && candidate.Rate == 48000 && candidate.Sequence == 0 {
+						caseIndex = i
+
+						break
+					}
+				}
+				require.NotEqual(t, -1, caseIndex)
+				decoder, err := NewDecoderWithOutput(48000, channels)
+				require.NoError(t, err)
+				out := make([]int16, 960*channels)
+				packets := make([][]byte, 4)
+				for i, frame := range corpus.Cases[caseIndex].Steps[:4] {
+					packets[i], err = hex.DecodeString(frame.Packet)
+					require.NoError(t, err)
+					_, err = decoder.DecodeToInt16(packets[i], out)
+					require.NoError(t, err)
+				}
+				require.Zero(t, testing.AllocsPerRun(100, func() {
+					_, decodeErr := decoder.DecodeToInt16(packets[3], out)
+					require.NoError(t, decodeErr)
+				}))
+			})
+		}
+	}
+}
+
 func TestCELTPLCResetAndDecoderIsolation(t *testing.T) {
 	for _, channels := range []int{1, 2} {
 		packets := plcBenchmarkPackets(t, channels)
