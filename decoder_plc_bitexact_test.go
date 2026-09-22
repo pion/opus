@@ -5,7 +5,6 @@
 package opus
 
 import (
-	"compress/gzip"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -17,14 +16,7 @@ import (
 )
 
 func TestSILKStereoRecoveryStagesReference(t *testing.T) {
-	file, err := os.Open("testdata/short-plc/corpus.json.gz")
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, file.Close()) })
-	reader, err := gzip.NewReader(file)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, reader.Close()) })
-	var corpus plcCorpus
-	require.NoError(t, json.NewDecoder(reader).Decode(&corpus))
+	corpus := loadPLCCorpus(t)
 	data, err := os.ReadFile("testdata/short-plc/silk-stereo-recovery-stage.json")
 	require.NoError(t, err)
 	var reference struct {
@@ -66,14 +58,7 @@ func TestPLCBitExactCorpus(t *testing.T) {
 		t.Skip("strict deterministic corpus is covered by non-race jobs")
 	}
 
-	file, err := os.Open("testdata/short-plc/corpus.json.gz")
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, file.Close()) })
-	reader, err := gzip.NewReader(file)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, reader.Close()) })
-	var corpus plcCorpus
-	require.NoError(t, json.NewDecoder(reader).Decode(&corpus))
+	corpus := loadPLCCorpus(t)
 	require.Equal(t, "22244de5a79bd1d6d623c32e72bf1954b56235be", corpus.Pin)
 	require.Len(t, corpus.Cases, 1300)
 	totalSteps, totalLosses := 0, 0
@@ -135,14 +120,7 @@ func TestPLCBitExactCorpus(t *testing.T) {
 }
 
 func TestPLCBitExactRFC8251ClippedRecovery(t *testing.T) {
-	file, err := os.Open("testdata/short-plc/corpus.json.gz")
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, file.Close()) })
-	reader, err := gzip.NewReader(file)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, reader.Close()) })
-	var corpus plcCorpus
-	require.NoError(t, json.NewDecoder(reader).Decode(&corpus))
+	corpus := loadPLCCorpus(t)
 
 	scenarioIndex := -1
 	for i := range corpus.Cases {

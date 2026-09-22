@@ -4,7 +4,6 @@
 package opus
 
 import (
-	"compress/gzip"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -95,14 +94,7 @@ func TestDecodePLCShortCELT(t *testing.T) {
 }
 
 func TestDecodePLCSplitsAtLastCELTFrameDuration(t *testing.T) {
-	file, err := os.Open("testdata/short-plc/corpus.json.gz")
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, file.Close()) })
-	reader, err := gzip.NewReader(file)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, reader.Close()) })
-	var corpus plcCorpus
-	require.NoError(t, json.NewDecoder(reader).Decode(&corpus))
+	corpus := loadPLCCorpus(t)
 	packet, err := hex.DecodeString(corpus.Cases[3].Steps[14].Packet)
 	require.NoError(t, err)
 

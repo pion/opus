@@ -22,17 +22,22 @@ import (
 
 type plcCorpus struct {
 	Pin   string
-	Cases []struct {
-		Signal, Channels, Rate, Mode, Sequence int
-		OutputChannels                         int `json:"output_channels"`
-		Steps                                  []struct {
-			Packet  string
-			Samples int
-			Range   uint32
-			PCM     []int16
-		}
-	}
+	Cases []plcCorpusCase
 }
+
+type plcCorpusCase struct {
+	Signal, Channels, Rate, Mode, Sequence int
+	OutputChannels                         int `json:"output_channels"`
+	Steps                                  []plcCorpusStep
+}
+
+type plcCorpusStep struct {
+	Packet  string
+	Samples int
+	Range   uint32
+	PCM     []int16
+}
+
 type plcMeasurement struct {
 	RMSE float64
 	Peak int
@@ -72,17 +77,14 @@ func TestPLCCorpus(t *testing.T) {
 		t.Skip("race-instrumented PLC quality corpus runs in the dedicated PLC quality workflow")
 	}
 	path := os.Getenv("PLC_CORPUS_PATH")
+	var corpus *plcCorpus
 	if path == "" {
-		path = "testdata/short-plc/corpus.json.gz"
+		corpus = loadPLCCorpus(t)
+	} else {
+		var err error
+		corpus, err = readPLCCorpus(path)
+		require.NoError(t, err)
 	}
-	f, err := os.Open(path) //nolint:gosec // Operator-supplied offline fixture path for baseline generation.
-	require.NoError(t, err)
-	defer f.Close() //nolint:errcheck
-	z, err := gzip.NewReader(f)
-	require.NoError(t, err)
-	defer z.Close() //nolint:errcheck
-	var corpus plcCorpus
-	require.NoError(t, json.NewDecoder(z).Decode(&corpus))
 	require.Equal(t, "22244de5a79bd1d6d623c32e72bf1954b56235be", corpus.Pin)
 	require.Len(t, corpus.Cases, 1300)
 	totalSteps, totalLosses := 0, 0

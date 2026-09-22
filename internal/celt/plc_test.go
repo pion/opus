@@ -18,16 +18,7 @@ import (
 )
 
 func TestPLCReferenceState(t *testing.T) {
-	var fixture struct {
-		Cases []struct {
-			Mode, Rate, Channels int
-			OutputChannels       int `json:"output_channels"`
-			Steps                []struct {
-				Packet  string
-				Samples int
-			}
-		}
-	}
+	fixture := loadCELTPLCCorpus(t)
 	open := func(name string) *json.Decoder {
 		f, err := os.Open("../../testdata/short-plc/" + name) //nolint:gosec // Constant test fixture names only.
 		require.NoError(t, err)
@@ -38,7 +29,6 @@ func TestPLCReferenceState(t *testing.T) {
 
 		return json.NewDecoder(z)
 	}
-	require.NoError(t, open("corpus.json.gz").Decode(&fixture))
 	require.Len(t, fixture.Cases, 1300)
 	states := open("corpus-state.jsonl.gz")
 	recordCount, lossCount := 0, 0
@@ -95,23 +85,7 @@ func TestPLCReferenceState(t *testing.T) {
 }
 
 func TestCELTPeriodicPLCStagesReference(t *testing.T) {
-	var corpus struct {
-		Cases []struct {
-			Rate, Channels int
-			OutputChannels int `json:"output_channels"`
-			Steps          []struct {
-				Packet  string
-				Samples int
-			}
-		}
-	}
-	file, err := os.Open("../../testdata/short-plc/corpus.json.gz")
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, file.Close()) })
-	reader, err := gzip.NewReader(file)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, reader.Close()) })
-	require.NoError(t, json.NewDecoder(reader).Decode(&corpus))
+	corpus := loadCELTPLCCorpus(t)
 
 	data, err := os.ReadFile("../../testdata/short-plc/celt-stage.json")
 	require.NoError(t, err)
@@ -240,23 +214,7 @@ func TestCELTPeriodicPLCStagesReference(t *testing.T) {
 }
 
 func TestCELTMixedRecoveryStagesReference(t *testing.T) {
-	var corpus struct {
-		Cases []struct {
-			Rate, Channels int
-			OutputChannels int `json:"output_channels"`
-			Steps          []struct {
-				Packet  string
-				Samples int
-			}
-		}
-	}
-	file, err := os.Open("../../testdata/short-plc/corpus.json.gz")
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, file.Close()) })
-	reader, err := gzip.NewReader(file)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, reader.Close()) })
-	require.NoError(t, json.NewDecoder(reader).Decode(&corpus))
+	corpus := loadCELTPLCCorpus(t)
 	data, err := os.ReadFile("../../testdata/short-plc/celt-mixed-stage.json")
 	require.NoError(t, err)
 	var reference []struct {

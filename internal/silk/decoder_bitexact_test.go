@@ -5,7 +5,6 @@
 package silk
 
 import (
-	"compress/gzip"
 	"encoding/hex"
 	"encoding/json"
 	"os"
@@ -15,22 +14,15 @@ import (
 )
 
 func TestFirstFrameParametersReference(t *testing.T) {
-	file, err := os.Open("../../testdata/short-plc/corpus.json.gz")
+	data, err := os.ReadFile("../../testdata/short-plc/silk-first-frame.json")
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, file.Close()) })
-	reader, err := gzip.NewReader(file)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, reader.Close()) })
-	var corpus struct {
-		Cases []struct {
-			Steps []struct {
-				Packet string
-				Range  uint32
-			}
-		}
+	var input struct {
+		Pin, Packet string
+		Range       uint32
 	}
-	require.NoError(t, json.NewDecoder(reader).Decode(&corpus))
-	packet, err := hex.DecodeString(corpus.Cases[490].Steps[0].Packet)
+	require.NoError(t, json.Unmarshal(data, &input))
+	require.Equal(t, "22244de5a79bd1d6d623c32e72bf1954b56235be", input.Pin)
+	packet, err := hex.DecodeString(input.Packet)
 	require.NoError(t, err)
 	// The pinned encoder emits this one-frame sample as a padded Code 3
 	// packet: TOC, count byte, one-byte padding length, frame, padding.
@@ -40,7 +32,7 @@ func TestFirstFrameParametersReference(t *testing.T) {
 	require.Equal(t, byte(0x41), packet[1])
 	require.Equal(t, byte(1), packet[2])
 	packet = packet[3 : len(packet)-1]
-	data, err := os.ReadFile("../../testdata/short-plc/silk-stage.json")
+	data, err = os.ReadFile("../../testdata/short-plc/silk-stage.json")
 	require.NoError(t, err)
 	var reference struct {
 		Pulses        []int16
@@ -56,7 +48,7 @@ func TestFirstFrameParametersReference(t *testing.T) {
 	d := NewDecoder()
 	out := make([]float32, 320)
 	require.NoError(t, d.Decode(packet, out, false, 20_000_000, BandwidthWideband))
-	require.Equal(t, corpus.Cases[490].Steps[0].Range, d.rangeDecoder.FinalRange())
+	require.Equal(t, input.Range, d.rangeDecoder.FinalRange())
 	t.Run("pulses", func(t *testing.T) {
 		require.Equal(t, reference.Pulses, int32SliceToInt16(d.eRaw))
 	})

@@ -6,11 +6,9 @@
 package opus
 
 import (
-	"compress/gzip"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -31,17 +29,14 @@ func TestWritePLCAudioExamples(t *testing.T) {
 		label = "current"
 	}
 	corpusPath := os.Getenv("PLC_CORPUS_PATH")
+	var corpus *plcCorpus
 	if corpusPath == "" {
-		corpusPath = "testdata/short-plc/corpus.json.gz"
+		corpus = loadPLCCorpus(t)
+	} else {
+		var err error
+		corpus, err = readPLCCorpus(corpusPath)
+		require.NoError(t, err)
 	}
-	file, err := os.Open(corpusPath) //nolint:gosec // Explicit offline fixture path.
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, file.Close()) })
-	reader, err := gzip.NewReader(file)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, reader.Close()) })
-	var corpus plcAudioCorpus
-	require.NoError(t, json.NewDecoder(reader).Decode(&corpus))
 	require.NoError(t, os.MkdirAll(outputDir, 0o755))
 
 	selections := []struct {
@@ -54,7 +49,7 @@ func TestWritePLCAudioExamples(t *testing.T) {
 	}
 	for _, selection := range selections {
 		t.Run(selection.name, func(t *testing.T) {
-			scenario := findPLCAudioCase(t, &corpus, selection.signal, selection.channels,
+			scenario := findPLCAudioCase(t, corpus, selection.signal, selection.channels,
 				selection.outputChannels, selection.rate, selection.mode, selection.seq)
 			decoder, decoderErr := NewDecoderWithOutput(scenario.Rate, scenario.OutputChannels)
 			require.NoError(t, decoderErr)
@@ -83,25 +78,11 @@ func TestWritePLCAudioExamples(t *testing.T) {
 	}
 }
 
-type plcAudioCorpus struct {
-	Cases []plcAudioCase
-}
-
-type plcAudioCase struct {
-	Signal, Channels, Rate, Mode, Sequence int
-	OutputChannels                         int `json:"output_channels"`
-	Steps                                  []struct {
-		Packet  string
-		Samples int
-		PCM     []int16
-	}
-}
-
 func findPLCAudioCase(
 	t *testing.T,
-	corpus *plcAudioCorpus,
+	corpus *plcCorpus,
 	signal, channels, outputChannels, rate, mode, sequence int,
-) *plcAudioCase {
+) *plcCorpusCase {
 	t.Helper()
 	for i := range corpus.Cases {
 		candidate := &corpus.Cases[i]

@@ -5,7 +5,6 @@
 package opus
 
 import (
-	"compress/gzip"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -15,18 +14,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func plcBenchmarkCorpus(tb testing.TB) plcCorpus {
+func plcBenchmarkCorpus(tb testing.TB) *plcCorpus {
 	tb.Helper()
-	file, err := os.Open("testdata/short-plc/corpus.json.gz")
-	require.NoError(tb, err)
-	defer file.Close() //nolint:errcheck
-	reader, err := gzip.NewReader(file)
-	require.NoError(tb, err)
-	defer reader.Close() //nolint:errcheck
-	var corpus plcCorpus
-	require.NoError(tb, json.NewDecoder(reader).Decode(&corpus))
 
-	return corpus
+	return loadPLCCorpus(tb)
 }
 
 func plcBenchmarkPackets(tb testing.TB, channels int) [][]byte {
