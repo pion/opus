@@ -326,7 +326,7 @@ func quantBand(
 		}
 	}
 
-	if !stereo && lm != -1 && shouldSplitBand(band, lm, bandBits) && n > 2 {
+	if !stereo && n > 2 && lm != -1 && shouldSplitBand(band, lm, bandBits) {
 		// Section 4.3.4.4 splits oversized codebooks recursively so PVQ
 		// indices stay within the range coder's bounded integer coding.
 		n >>= 1
