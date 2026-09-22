@@ -5,6 +5,7 @@ package silk
 
 import (
 	"math"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -142,6 +143,12 @@ func TestSqrtApprox(t *testing.T) {
 }
 
 func TestRor32(t *testing.T) {
+	if runtime.GOARCH == "386" {
+		t.Skip("https://github.com/golang/go/issues/81687")
+
+		return
+	}
+
 	assert.Equal(t, int32(1), ror32(1, 0))
 	// Rotating a single set bit by 1 moves it to the top bit.
 	assert.Equal(t, int32(math.MinInt32), ror32(1, 1))
