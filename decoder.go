@@ -608,11 +608,11 @@ func (d *Decoder) decode(
 		encodedFrames = singleFrame[:]
 	} else {
 		var err error
+		defer clear(d.packetFrames[:])
 		encodedFrames, err = parsePacketFramesInto(in, tocHeader, d.packetFrames[:0])
 		if err != nil {
 			return 0, 0, false, 0, 0, err
 		}
-		defer clear(d.packetFrames[:len(encodedFrames)])
 	}
 
 	switch cfg.mode() {
