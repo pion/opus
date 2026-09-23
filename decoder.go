@@ -16,6 +16,7 @@ import (
 
 const (
 	maxOpusFrameSize                = 1275
+	maxOpusFramesPerPacket          = 48
 	maxOpusPacketDurationNanosecond = 120000000
 	maxSilkFrameSampleCount         = 320
 	maxCeltFrameSampleCount         = 960
@@ -57,6 +58,7 @@ type Decoder struct {
 	lastPacketBandwidth    Bandwidth
 	lastPacketIsStereo     bool
 	lastPacketFrameSamples int
+	packetFrames           [maxOpusFramesPerPacket][]byte
 }
 
 type silkRedundancyFade struct {
@@ -348,17 +350,17 @@ func parseFrameLength(in []byte) (frameLength int, bytesRead int, err error) {
 	return int(in[0]) + 4*int(in[1]), 2, nil
 }
 
-func parsePacketFramesCode0(in []byte) ([][]byte, error) {
+func parsePacketFramesCode0(in []byte, frames [][]byte) ([][]byte, error) {
 	// [R2] Code 0 uses an implicit frame length for the whole payload, so it
 	// must not exceed the 1275-byte maximum.
 	if len(in[1:]) > maxOpusFrameSize {
 		return nil, fmt.Errorf("%w: frame size %d exceeds %d", errMalformedPacket, len(in[1:]), maxOpusFrameSize)
 	}
 
-	return [][]byte{in[1:]}, nil
+	return append(frames, in[1:]), nil
 }
 
-func parsePacketFramesCode1(in []byte) ([][]byte, error) {
+func parsePacketFramesCode1(in []byte, frames [][]byte) ([][]byte, error) {
 	payload := in[1:]
 	// [R3] Code 1 packets have an odd total length so (N-1)/2 is integral.
 	if len(payload)%2 != 0 {
@@ -371,10 +373,12 @@ func parsePacketFramesCode1(in []byte) ([][]byte, error) {
 		return nil, fmt.Errorf("%w: frame size %d exceeds %d", errMalformedPacket, frameSize, maxOpusFrameSize)
 	}
 
-	return [][]byte{payload[:frameSize], payload[frameSize:]}, nil
+	frames = append(frames, payload[:frameSize], payload[frameSize:])
+
+	return frames, nil
 }
 
-func parsePacketFramesCode2(in []byte) ([][]byte, error) {
+func parsePacketFramesCode2(in []byte, frames [][]byte) ([][]byte, error) {
 	// [R4] Code 2 must have enough bytes after the TOC to decode a valid
 	// first-frame length.
 	frameSize, bytesRead, err := parseFrameLength(in[1:])
@@ -395,7 +399,9 @@ func parsePacketFramesCode2(in []byte) ([][]byte, error) {
 		return nil, fmt.Errorf("%w: frame size %d exceeds %d", errMalformedPacket, secondFrameSize, maxOpusFrameSize)
 	}
 
-	return [][]byte{in[firstFrameStart:firstFrameEnd], in[firstFrameEnd:]}, nil
+	frames = append(frames, in[firstFrameStart:firstFrameEnd], in[firstFrameEnd:])
+
+	return frames, nil
 }
 
 func parsePacketPadding(in []byte, offset int) (newOffset int, payloadEnd int, err error) {
@@ -431,7 +437,7 @@ func parsePacketPadding(in []byte, offset int) (newOffset int, payloadEnd int, e
 	return offset, offset + remaining, nil
 }
 
-func parsePacketFramesCode3(in []byte, tocHeader tableOfContentsHeader) ([][]byte, error) {
+func parsePacketFramesCode3(in []byte, tocHeader tableOfContentsHeader, frames [][]byte) ([][]byte, error) {
 	// [R6][R7] Code 3 packets need at least TOC + frame count bytes.
 	if len(in) < 2 {
 		return nil, fmt.Errorf("%w: code 3 packet missing frame count byte", errMalformedPacket)
@@ -466,13 +472,18 @@ func parsePacketFramesCode3(in []byte, tocHeader tableOfContentsHeader) ([][]byt
 	}
 
 	if !isVBR {
-		return parsePacketFramesCode3CBR(in, offset, payloadEnd, frameCount)
+		return parsePacketFramesCode3CBR(in, offset, payloadEnd, frameCount, frames)
 	}
 
-	return parsePacketFramesCode3VBR(in, offset, payloadEnd, frameCount)
+	return parsePacketFramesCode3VBR(in, offset, payloadEnd, frameCount, frames)
 }
 
-func parsePacketFramesCode3CBR(in []byte, offset, payloadEnd int, frameCount byte) ([][]byte, error) {
+func parsePacketFramesCode3CBR(
+	in []byte,
+	offset, payloadEnd int,
+	frameCount byte,
+	frames [][]byte,
+) ([][]byte, error) {
 	payloadSize := payloadEnd - offset
 	// [R6] CBR payload size must be an integer multiple of M frames.
 	if payloadSize%int(frameCount) != 0 {
@@ -485,7 +496,6 @@ func parsePacketFramesCode3CBR(in []byte, offset, payloadEnd int, frameCount byt
 		return nil, fmt.Errorf("%w: frame size %d exceeds %d", errMalformedPacket, frameSize, maxOpusFrameSize)
 	}
 
-	frames := make([][]byte, 0, frameCount)
 	for range int(frameCount) {
 		frames = append(frames, in[offset:offset+frameSize])
 		offset += frameSize
@@ -494,8 +504,14 @@ func parsePacketFramesCode3CBR(in []byte, offset, payloadEnd int, frameCount byt
 	return frames, nil
 }
 
-func parsePacketFramesCode3VBR(in []byte, offset, payloadEnd int, frameCount byte) ([][]byte, error) {
-	frameSizes := make([]int, 0, frameCount)
+func parsePacketFramesCode3VBR(
+	in []byte,
+	offset, payloadEnd int,
+	frameCount byte,
+	frames [][]byte,
+) ([][]byte, error) {
+	var frameSizeStorage [maxOpusFramesPerPacket - 1]int
+	frameSizes := frameSizeStorage[:0]
 	for range int(frameCount) - 1 {
 		// [R7] VBR Code 3 must have enough header bytes to decode each of the
 		// first M-1 frame lengths.
@@ -508,7 +524,6 @@ func parsePacketFramesCode3VBR(in []byte, offset, payloadEnd int, frameCount byt
 		frameSizes = append(frameSizes, frameSize)
 	}
 
-	frames := make([][]byte, 0, frameCount)
 	for _, frameSize := range frameSizes {
 		// [R7] The first M-1 VBR frames must fit before the final implicit
 		// frame and any trailing padding.
@@ -535,6 +550,10 @@ func parsePacketFramesCode3VBR(in []byte, offset, payloadEnd int, frameCount byt
 }
 
 func parsePacketFrames(in []byte, tocHeader tableOfContentsHeader) ([][]byte, error) {
+	return parsePacketFramesInto(in, tocHeader, nil)
+}
+
+func parsePacketFramesInto(in []byte, tocHeader tableOfContentsHeader, frames [][]byte) ([][]byte, error) {
 	// [R1] A well-formed Opus packet contains at least one byte for the TOC.
 	if len(in) < 1 {
 		return nil, fmt.Errorf("%w: %w", errMalformedPacket, errTooShortForTableOfContentsHeader)
@@ -542,13 +561,13 @@ func parsePacketFrames(in []byte, tocHeader tableOfContentsHeader) ([][]byte, er
 
 	switch tocHeader.frameCode() {
 	case frameCodeOneFrame:
-		return parsePacketFramesCode0(in)
+		return parsePacketFramesCode0(in, frames)
 	case frameCodeTwoEqualFrames:
-		return parsePacketFramesCode1(in)
+		return parsePacketFramesCode1(in, frames)
 	case frameCodeTwoDifferentFrames:
-		return parsePacketFramesCode2(in)
+		return parsePacketFramesCode2(in, frames)
 	case frameCodeArbitraryFrames:
-		return parsePacketFramesCode3(in, tocHeader)
+		return parsePacketFramesCode3(in, tocHeader, frames)
 	default:
 		return nil, fmt.Errorf("%w: %d", errUnsupportedFrameCode, tocHeader.frameCode())
 	}
@@ -589,7 +608,8 @@ func (d *Decoder) decode(
 		encodedFrames = singleFrame[:]
 	} else {
 		var err error
-		encodedFrames, err = parsePacketFrames(in, tocHeader)
+		defer clear(d.packetFrames[:])
+		encodedFrames, err = parsePacketFramesInto(in, tocHeader, d.packetFrames[:0])
 		if err != nil {
 			return 0, 0, false, 0, 0, err
 		}
