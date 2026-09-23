@@ -877,6 +877,24 @@ func (d *Decoder) deemphasisAndInterleave(
 
 		return
 	}
+	// Full-rate stereo needs neither downsampling nor a divisibility check.
+	// Keep the feedback values local so the hot loop only touches PCM slices.
+	if channelCount == 2 && outputSampleRate == sampleRate {
+		leftMemory := d.preemphasisMem[0]
+		rightMemory := d.preemphasisMem[1]
+		for sample := range frameSampleCount {
+			left := float32(timeX[sample] + leftMemory)
+			leftMemory = float32(0.85000610 * left)
+			right := float32(timeY[sample] + rightMemory)
+			rightMemory = float32(0.85000610 * right)
+			out[2*sample] = left / 32768
+			out[2*sample+1] = right / 32768
+		}
+		d.preemphasisMem[0] = leftMemory
+		d.preemphasisMem[1] = rightMemory
+
+		return
+	}
 	downsample := sampleRate / outputSampleRate
 	outputSample := 0
 	for sample := range frameSampleCount {
