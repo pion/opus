@@ -273,6 +273,34 @@ func TestInverseMDCTAndDeemphasisHelpers(t *testing.T) {
 	assert.NotZero(t, decoder.preemphasisMem[1])
 }
 
+func TestDeemphasisStereoFullRateMatchesReference(t *testing.T) {
+	timeX := make([]float32, shortBlockSampleCount)
+	timeY := make([]float32, shortBlockSampleCount)
+	for i := range timeX {
+		timeX[i] = float32((i%17)-8) * 123.25
+		timeY[i] = float32((i%23)-11) * 97.75
+	}
+
+	expected := make([]float32, 2*shortBlockSampleCount)
+	expectedMemory := [2]float32{0.125, -0.25}
+	for sample := range shortBlockSampleCount {
+		left := timeX[sample] + expectedMemory[0]
+		expectedMemory[0] = 0.85000610 * left
+		right := timeY[sample] + expectedMemory[1]
+		expectedMemory[1] = 0.85000610 * right
+		expected[2*sample] = left / 32768
+		expected[2*sample+1] = right / 32768
+	}
+
+	decoder := NewDecoder()
+	decoder.preemphasisMem = [2]float32{0.125, -0.25}
+	actual := make([]float32, len(expected))
+	decoder.deemphasisAndInterleave(timeX, timeY, actual, shortBlockSampleCount, 2, sampleRate)
+
+	assert.Equal(t, expected, actual)
+	assert.Equal(t, expectedMemory, decoder.preemphasisMem)
+}
+
 func TestDecodeLostFrameSynthesizesAndPreservesHistory(t *testing.T) {
 	decoder := NewDecoder()
 	decoder.previousLogE[0][0] = 4
