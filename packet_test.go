@@ -130,6 +130,22 @@ func TestDecodeRejectsEmptyPacket(t *testing.T) {
 	assert.ErrorIs(t, err, errTooShortForTableOfContentsHeader)
 }
 
+func TestDecodeMalformedPacketClearsFrameScratch(t *testing.T) {
+	t.Parallel()
+
+	backing := make([]byte, 8<<20)
+	packet := backing[:6]
+	copy(packet, []byte{0x83, 0x83, 1, 10, 0xAA, 0xBB})
+
+	decoder := NewDecoder()
+	_, err := decoder.DecodeToInt16(packet, make([]int16, 120))
+
+	require.ErrorIs(t, err, errMalformedPacket)
+	for i, frame := range decoder.packetFrames {
+		assert.Nil(t, frame, "scratch frame %d retained the caller's packet buffer", i)
+	}
+}
+
 func TestParsePacketFramesValidEdgeCases(t *testing.T) {
 	t.Parallel()
 
