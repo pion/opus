@@ -721,6 +721,18 @@ func (e *Encoder) frameCeiling(dst []byte, frameBytes int) int {
 	return min(len(dst), maxCELTFrameBytes)
 }
 
+// frameBits returns the frame ceiling in bits, limited by the reservoir in CVBR.
+// Using the nominal size can omit dynalloc flags the decoder expects to read.
+func (e *Encoder) frameBits(dst []byte, frameBytes, frameSamples int) uint {
+	ceiling := e.frameCeiling(dst, frameBytes)
+	if e.vbr && e.constrainedVBR {
+		vbrRate := e.rateBytes(frameBytes, frameSamples) << 6
+		ceiling = min(ceiling, max(2, (2*vbrRate-int(e.vbrReservoir))>>6))
+	}
+
+	return uint(ceiling) * 8
+}
+
 func (e *Encoder) applyVBR(
 	info *frameSideInfo, logBandAmp [2][maxBands]float32, dr dynallocResult,
 	frameBytes, maxBytes, tellFrac int, tfEstimate float32, intensity int,
@@ -751,10 +763,13 @@ func (e *Encoder) applyVBR(
 		equivRate, temporalVBR,
 	) + tellFrac
 
-	// The frame still has to fit what has already been written plus the
-	// dynalloc boosts, or the range coder runs out of room (libopus
-	// min_allowed).
-	minAllowed := ((tellFrac + dr.totBoostBits + (1 << 6) - 1) >> 6) + 2
+	// Size min_allowed from the signaled boosts; dynalloc's estimate can be
+	// too small when its 2/3 cap is reached.
+	codedBoost := 0
+	for band := info.startBand; band < info.endBand; band++ {
+		codedBoost += info.bandBoost[band]
+	}
+	minAllowed := ((tellFrac + codedBoost + (1 << 6) - 1) >> 6) + 2
 
 	// The ceiling is how much room the caller left, not the nominal rate:
 	// unconstrained VBR is allowed to spend over the average on a hard frame
@@ -896,7 +911,7 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 	}
 
 	info := analysis.info
-	info.totalBits = uint(frameBytes) * 8
+	info.totalBits = e.frameBits(dst, frameBytes, frameSamples)
 
 	e.updatePrefilterState(&info, prefilterEnabled, pitchPeriod, prefilterGain, prefilterQq, prefilterTapset)
 
