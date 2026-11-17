@@ -13,6 +13,38 @@ import (
 // The static CELT pulse cache tops out at getPulses(40) == 128.
 const cwrsMaxPulseCount = 128
 
+// cwrsEncodeScratch caches recurrence rows for codebooks outside the table.
+// Encoding rewinds a row in place, so it works on a copy in work.
+type cwrsEncodeScratch struct {
+	work []uint32
+	rows [64]cwrsCachedEncodeRow
+}
+
+type cwrsCachedEncodeRow struct {
+	key   cwrsRowKey
+	valid bool
+	row   [cwrsMaxPulseCount + 2]uint32
+}
+
+func (scratch *cwrsEncodeScratch) cachedRow(n, k int) []uint32 {
+	if k > cwrsMaxPulseCount {
+		row := make([]uint32, k+2)
+		cwrsUrowInto(row, n)
+
+		return row
+	}
+	key := cwrsRowKey(cwrsCodebookUint32(n)<<8 | cwrsCodebookUint32(k))
+	slot := &scratch.rows[(n*131+k)&(len(scratch.rows)-1)]
+	row := slot.row[:k+2]
+	if !slot.valid || slot.key != key {
+		cwrsUrowInto(row, n)
+		slot.key = key
+		slot.valid = true
+	}
+
+	return row
+}
+
 type cwrsRowKey uint32
 
 // decodePulses implements the RFC 6716 Section 4.3.4.2 CWRS index decode for
@@ -48,6 +80,12 @@ func decodePulses(
 		return
 	}
 
+	if cwrsTableSupports(n, k) && k <= int(cwrsTableDecodeMaxK[n]) {
+		index, _ := rangeDecoder.DecodeUniform(cwrsTableCount(n, k) + cwrsTableCount(n, k+1))
+		cwrsDecodeTable(y, n, k, index)
+
+		return
+	}
 	var row [cwrsMaxPulseCount + 2]uint32
 	var u []uint32
 	if k > cwrsMaxPulseCount {
@@ -303,12 +341,18 @@ func cwrsRowFromScratch(scratch []uint32, k int) []uint32 {
 
 // encodePulses writes the CWRS index for PVQ vector y to the range encoder.
 // It is the inverse of decodePulses.
-func encodePulses(y []int, n, k int, rangeEncoder *rangecoding.Encoder, scratch []uint32) {
+func encodePulses(y []int, n, k int, rangeEncoder *rangecoding.Encoder, scratch *cwrsEncodeScratch) {
 	if k <= 0 {
 		return
 	}
-	u := cwrsRowFromScratch(scratch, k)
-	cwrsUrowInto(u, n)
+	if cwrsTableSupports(n, k) {
+		total := cwrsTableCount(n, k) + cwrsTableCount(n, k+1)
+		rangeEncoder.EncodeUniform(total, cwrsEncodeTable(y, n, k))
+
+		return
+	}
+	u := cwrsRowFromScratch(scratch.work, k)
+	copy(u, scratch.cachedRow(n, k))
 	total := u[k] + u[k+1]
 	index := cwrsEncodeRow(y, n, k, u)
 	rangeEncoder.EncodeUniform(total, index)

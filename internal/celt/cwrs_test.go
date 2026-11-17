@@ -6,6 +6,7 @@ package celt
 import (
 	"testing"
 
+	"github.com/pion/opus/internal/rangecoding"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -18,6 +19,32 @@ func TestCWRSRows(t *testing.T) {
 
 	cwrsPreviousRow(row, 4, 1)
 	assert.Equal(t, []uint32{1, 3, 5, 7}, row)
+}
+
+func TestCWRSEncoderCachePreservesCodewords(t *testing.T) {
+	const dimension, pulsesCount = cwrsTableMaxIndex + 1, 4
+	assert.False(t, cwrsTableSupports(dimension, pulsesCount))
+
+	cache := cwrsEncodeScratch{
+		work: make([]uint32, cwrsMaxPulseCount+2),
+	}
+	initialRow := cwrsUrow(dimension, pulsesCount)
+	for _, coefficients := range [][]int{
+		{2, -1, 0, 1},
+		{0, 0, 1, -1, 1, 0, -1},
+	} {
+		pulses := make([]int, dimension)
+		copy(pulses, coefficients)
+
+		var got, want rangecoding.Encoder
+		got.Init()
+		want.Init()
+		encodePulses(pulses, dimension, pulsesCount, &got, &cache)
+		index := cwrsEncode(pulses, dimension, pulsesCount, make([]uint32, pulsesCount+2))
+		want.EncodeUniform(initialRow[pulsesCount]+initialRow[pulsesCount+1], index)
+		assert.Equal(t, want.Done(), got.Done())
+		assert.Equal(t, initialRow, cache.cachedRow(dimension, pulsesCount))
+	}
 }
 
 func TestCWRSDecode(t *testing.T) {

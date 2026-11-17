@@ -154,7 +154,7 @@ func TestAlgQuantRoundTrip(t *testing.T) {
 	yFloat := make([]float32, n)
 	absX := make([]float32, n)
 	sign := make([]float32, n)
-	cwrsScratch := make([]uint32, cwrsMaxPulseCount+2)
+	cwrsScratch := &cwrsEncodeScratch{work: make([]uint32, cwrsMaxPulseCount+2)}
 	mask := algQuant(xEnc, n, pulseCount, spread, 1, &enc, gain, yScratch, yFloat, absX, sign, cwrsScratch)
 	assert.NotZero(t, mask)
 
