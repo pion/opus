@@ -220,7 +220,7 @@ func TestQuantBandStereoN1(t *testing.T) {
 		[2][]float32{make([]float32, 1), make([]float32, 1)},
 		[2][]float32{make([]float32, 1), make([]float32, 1)},
 		[2][]float32{make([]float32, 1), make([]float32, 1)},
-		make([]uint32, cwrsMaxPulseCount+2),
+		&cwrsEncodeScratch{work: make([]uint32, cwrsMaxPulseCount+2)},
 		0,
 	)
 	assert.Equal(t, uint(1), mask)
@@ -243,7 +243,7 @@ func TestQuantBandStereoN2(t *testing.T) {
 		[2][]float32{make([]float32, 2), make([]float32, 2)},
 		[2][]float32{make([]float32, 2), make([]float32, 2)},
 		[2][]float32{make([]float32, 2), make([]float32, 2)},
-		make([]uint32, cwrsMaxPulseCount+2),
+		&cwrsEncodeScratch{work: make([]uint32, cwrsMaxPulseCount+2)},
 		0,
 	)
 	assert.Greater(t, enc.rangeEncoder.FinalRange(), uint32(0))

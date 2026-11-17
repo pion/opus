@@ -217,7 +217,7 @@ func algQuant(
 	gain float32,
 	yScratch []int,
 	yFloatScratch, absXScratch, signScratch []float32,
-	cwrsScratch []uint32,
+	cwrsScratch *cwrsEncodeScratch,
 ) uint {
 	expRotation(x, n, 1, blocks, k, spread)
 

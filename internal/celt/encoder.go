@@ -44,7 +44,7 @@ type Encoder struct {
 	pvqAbsX           [2][]float32
 	pvqSign           [2][]float32
 	pvqYFloat         [2][]float32
-	cwrsScratch       []uint32
+	cwrsScratch       cwrsEncodeScratch
 	normalizedBands   [2][]float32
 	pitchBuf          []float32
 	pitchChannels     [2][]float32
@@ -141,7 +141,9 @@ func (e *Encoder) Reset() {
 		e.pvqSign[ch] = make([]float32, 0, maxBandSize<<maxLM)
 		e.normalizedBands[ch] = make([]float32, 0, maxFrameSampleCount)
 	}
-	e.cwrsScratch = make([]uint32, 0, cwrsMaxPulseCount+2)
+	e.cwrsScratch = cwrsEncodeScratch{
+		work: make([]uint32, 0, cwrsMaxPulseCount+2),
+	}
 	e.bandTmpScratch = make([]float32, 0, maxFrameSampleCount)
 	e.pitchBuf = make([]float32, 0, (combFilterMaxPeriod+maxFrameSampleCount)>>1)
 
@@ -990,12 +992,12 @@ func (e *Encoder) EncodeFrame(pcm [][]float32, dst []byte, frameBytes, startBand
 		shape1 := normalized[1]
 		_ = quantAllBandsStereo(
 			&info, shape0, shape1, totalBits, &bandState,
-			e.pvqY, e.pvqYFloat, e.pvqAbsX, e.pvqSign, e.cwrsScratch,
+			e.pvqY, e.pvqYFloat, e.pvqAbsX, e.pvqSign, &e.cwrsScratch,
 		)
 	} else {
 		_ = quantAllBandsMono(
 			&info, shape0, totalBits, &bandState,
-			e.pvqY[0], e.pvqYFloat[0], e.pvqAbsX[0], e.pvqSign[0], e.cwrsScratch,
+			e.pvqY[0], e.pvqYFloat[0], e.pvqAbsX[0], e.pvqSign[0], &e.cwrsScratch,
 		)
 	}
 

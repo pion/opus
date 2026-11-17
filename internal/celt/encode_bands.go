@@ -105,7 +105,7 @@ func quantAllBandsMono(
 	state *bandEncodeState,
 	yScratch []int,
 	yFloatScratch, absXScratch, signScratch []float32,
-	cwrsScratch []uint32,
+	cwrsScratch *cwrsEncodeScratch,
 ) []byte {
 	blocks := 1
 	if info.transient {
@@ -226,7 +226,7 @@ func quantBandMono(
 	state *bandEncodeState,
 	yScratch []int,
 	yFloatScratch, absXScratch, signScratch []float32,
-	cwrsScratch []uint32,
+	cwrsScratch *cwrsEncodeScratch,
 ) uint {
 	fullBand := x
 	originalN := n
@@ -584,7 +584,7 @@ func quantBandStereo(
 	state *bandEncodeState,
 	yScratch [2][]int,
 	yFloatScratch, absXScratch, signScratch [2][]float32,
-	cwrsScratch []uint32,
+	cwrsScratch *cwrsEncodeScratch,
 	thetaRound int,
 ) uint {
 	if n == 1 {
@@ -849,7 +849,7 @@ func quantAllBandsStereo(
 	state *bandEncodeState,
 	yScratch [2][]int,
 	yFloatScratch, absXScratch, signScratch [2][]float32,
-	cwrsScratch []uint32,
+	cwrsScratch *cwrsEncodeScratch,
 ) []byte {
 	channelCount := 2
 	blocks := 1
