@@ -508,11 +508,20 @@ func bitsToPulses(band, lm, bits int) int {
 		return 0
 	}
 	lm++
-	cacheStart := int(pulseCacheIndex[lm*maxBands+band])
+	cacheIndex := lm*maxBands + band
+	cacheStart := int(pulseCacheIndex[cacheIndex])
 	if cacheStart < 0 {
 		return 0
 	}
-	cache := pulseCacheBits[cacheStart:]
+	if bits <= pulseInverseBudgetCount {
+		return int(pulseInverseCosts.values[pulseInverseCosts.rowIndex[cacheIndex]][bits-1])
+	}
+
+	return bitsToPulsesFromCache(pulseCacheBits[cacheStart:], bits)
+}
+
+// bitsToPulsesFromCache is the original search. It also builds pulseInverseCosts.
+func bitsToPulsesFromCache(cache []uint8, bits int) int {
 	lo := 0
 	hi := int(cache[0])
 	bits--
